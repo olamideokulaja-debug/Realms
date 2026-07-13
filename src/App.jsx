@@ -4,6 +4,8 @@ import 'leaflet/dist/leaflet.css'
 import { supabase, MODE } from './supabaseClient.js'
 import { facilities as FAC, assignments as ASG, visits as VIS, facilitiesFromCSV, orderRoute, googleMapsDirUrl, geocode, uploadEvidence, sendNotify, seedSampleData, clearAllData } from './data.js'
 
+const BUILD = 'field-2026-07-13c'
+
 /*
   REALMS FIELD — Stages 1 to 3 (single-file App.jsx + supabaseClient.js + data.js)
   Stage 1: tabbed public site. Stage 2: auth, role picker, dashboard.
@@ -224,7 +226,7 @@ function Dashboard({ identity, role, onOpen, facilities, onSeed, onClear, dbErro
     {dbError ? (<div className="db-error anim">
       <strong>The sample data could not load.</strong>
       <span className="db-msg">{dbError}</span>
-      <span>This usually means the database tables are missing. In Supabase, open the SQL Editor and run the setup file (realms-setup.sql), then tap Try again.</span>
+      <span>If you just updated the app, make sure the new version finished deploying, then tap Try again. Running build: {BUILD}.</span>
       <button className="btn small primary" onClick={onSeed}>Try again</button>
     </div>) : (!hasData && onSeed && (<div className="seed-card anim"><div><strong>No data yet.</strong><span>Loading sample facilities and visits so you can see the maps, charts and reports.</span></div><button className="btn small primary" onClick={onSeed}>Load sample data</button></div>))}
     <div className="dash-quick anim">{quick.map(q => (<div className="dq" key={q.l}><span className="dq-v">{q.v}</span><span className="dq-l">{q.l}</span></div>))}</div>

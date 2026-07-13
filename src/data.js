@@ -89,6 +89,9 @@ function lsGet(k) { try { return JSON.parse(localStorage.getItem(k) || '[]') } c
 function lsSet(k, v) { try { localStorage.setItem(k, JSON.stringify(v)) } catch (e) { /* ignore */ } }
 function uid() { return 'loc_' + Math.random().toString(36).slice(2, 10) }
 
+function nullEmpty(v) { return (v === '' || v === undefined) ? null : v }
+function cleanRow(obj) { const o = { ...obj }; Object.keys(o).forEach(k => { if (o[k] === '') o[k] = null }); return o }
+
 export const facilities = {
   async list() {
     if (MODE === 'supabase') {
@@ -100,7 +103,7 @@ export const facilities = {
   },
   async addMany(items, userId) {
     if (MODE === 'supabase') {
-      const rows = items.map(f => ({ ...f, created_by: userId || null }))
+      const rows = items.map(f => ({ ...cleanRow(f), created_by: userId || null }))
       const { data, error } = await supabase.from('facilities').insert(rows).select()
       if (error) throw error
       return data || []
@@ -113,7 +116,7 @@ export const facilities = {
     lsSet(LS_FAC, lsGet(LS_FAC).filter(f => f.id !== id))
   },
   async update(id, patch) {
-    if (MODE === 'supabase') { const { error } = await supabase.from('facilities').update(patch).eq('id', id); if (error) throw error; return }
+    if (MODE === 'supabase') { const { error } = await supabase.from('facilities').update(cleanRow(patch)).eq('id', id); if (error) throw error; return }
     lsSet(LS_FAC, lsGet(LS_FAC).map(f => f.id === id ? { ...f, ...patch } : f))
   }
 }
@@ -129,7 +132,7 @@ export const assignments = {
   },
   async add(a, userId) {
     if (MODE === 'supabase') {
-      const { data, error } = await supabase.from('assignments').insert([{ ...a, created_by: userId || null }]).select()
+      const { data, error } = await supabase.from('assignments').insert([{ ...cleanRow(a), created_by: userId || null }]).select()
       if (error) throw error
       return (data && data[0]) || a
     }
@@ -151,7 +154,7 @@ export const visits = {
   },
   async add(v, userId) {
     if (MODE === 'supabase') {
-      const { data, error } = await supabase.from('visits').insert([{ ...v, created_by: userId || null }]).select()
+      const { data, error } = await supabase.from('visits').insert([{ ...cleanRow(v), created_by: userId || null }]).select()
       if (error) throw error
       return (data && data[0]) || v
     }
@@ -159,7 +162,7 @@ export const visits = {
     lsSet(LS_VIS, [rec].concat(cur)); return rec
   },
   async update(id, patch) {
-    if (MODE === 'supabase') { const { error } = await supabase.from('visits').update(patch).eq('id', id); if (error) throw error; return }
+    if (MODE === 'supabase') { const { error } = await supabase.from('visits').update(cleanRow(patch)).eq('id', id); if (error) throw error; return }
     lsSet(LS_VIS, lsGet(LS_VIS).map(v => v.id === id ? { ...v, ...patch } : v))
   }
 }
