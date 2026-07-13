@@ -208,7 +208,7 @@ function RolePicker({ identity, onPick, onSignOut }) {
 }
 
 /* ---------- dashboard ---------- */
-function Dashboard({ identity, role, onOpen, facilities, onSeed, onClear }) {
+function Dashboard({ identity, role, onOpen, facilities, onSeed, onClear, dbError }) {
   const r = roleById(role); const Icon = r ? r.icon : IconMonitor
   const areas = Array.from(new Set((facilities || []).map(f => f.area || 'Unassigned')))
   const quick = [{ v: (facilities || []).length, l: 'Facilities' }, { v: areas.length, l: 'Areas' }, { v: (r ? r.tools.filter(t => t[2]).length : 0), l: 'Live tools' }]
@@ -221,7 +221,12 @@ function Dashboard({ identity, role, onOpen, facilities, onSeed, onClear }) {
         <div><p className="eyebrow light">{r ? r.label : 'Realms Field'}</p><h2>Welcome, {identity.first}</h2><p className="dash-sub">Professional. Educational. Enforcement-driven.</p></div>
       </div>
     </div>
-    {(facilities || []).length === 0 && onSeed && (<div className="seed-card anim"><div><strong>No data yet.</strong><span>Load sample facilities and visits to see the maps, charts and reports in action.</span></div><button className="btn small primary" onClick={onSeed}>Load sample data</button></div>)}
+    {dbError ? (<div className="db-error anim">
+      <strong>The sample data could not load.</strong>
+      <span className="db-msg">{dbError}</span>
+      <span>This usually means the database tables are missing. In Supabase, open the SQL Editor and run the setup file (realms-setup.sql), then tap Try again.</span>
+      <button className="btn small primary" onClick={onSeed}>Try again</button>
+    </div>) : (!hasData && onSeed && (<div className="seed-card anim"><div><strong>No data yet.</strong><span>Loading sample facilities and visits so you can see the maps, charts and reports.</span></div><button className="btn small primary" onClick={onSeed}>Load sample data</button></div>))}
     <div className="dash-quick anim">{quick.map(q => (<div className="dq" key={q.l}><span className="dq-v">{q.v}</span><span className="dq-l">{q.l}</span></div>))}</div>
     <p className="dash-intro anim">Your tools are on the left. The ones marked ready are live now; the rest unlock as the build grows.</p>
     {hasData && onClear && (<div className="clear-row anim"><span>Demo data is loaded. Clear it all before going live.</span><button className="mini danger" onClick={onClear}>Clear all data</button></div>)}
@@ -1151,6 +1156,7 @@ export default function App() {
   const [navCollapsed, setNavCollapsed] = useState(false)
   const [navOpen, setNavOpen] = useState(false)
   const [viewAs, setViewAs] = useState(null)
+  const [dbError, setDbError] = useState('')
   const seedTriedRef = useRef(false)
 
   useEffect(() => {
@@ -1180,25 +1186,29 @@ export default function App() {
   useEffect(() => { if (view === 'app' && user && role) reloadFacs() }, [view, role])
 
   async function reloadFacs() {
-    try {
-      let list = await FAC.list()
-      let already = false
-      try { already = !!(localStorage.getItem('realms_seeded_v2') || localStorage.getItem('realms_no_seed')) } catch (e) {}
-      if (list.length === 0 && !seedTriedRef.current && !already) {
-        seedTriedRef.current = true
-        try { localStorage.setItem('realms_seeded_v2', '1') } catch (e) {}
-        await seedSampleData(user && user.id)
-        list = await FAC.list()
-      }
-      setFacs(list)
-    } catch (e) { setFacs([]) }
+    setDbError('')
+    let list = []
+    try { list = await FAC.list() } catch (e) { setDbError((e && e.message) || 'Could not read the database.'); setFacs([]); return }
+    let noSeed = false; try { noSeed = !!localStorage.getItem('realms_no_seed') } catch (e) {}
+    if (list.length === 0 && !seedTriedRef.current && !noSeed) {
+      seedTriedRef.current = true
+      const res = await seedSampleData(user && user.id)
+      try { list = await FAC.list() } catch (e) {}
+      if (list.length === 0 && res && res.error) setDbError(res.error)
+    }
+    setFacs(list)
   }
-  async function loadSample() { try { seedTriedRef.current = true; try { localStorage.setItem('realms_seeded_v2', '1') } catch (e) {}; await seedSampleData(user && user.id) } catch (e) {} finally { try { setFacs(await FAC.list()) } catch (e) {} } }
+  async function loadSample() {
+    setDbError(''); seedTriedRef.current = true
+    const res = await seedSampleData(user && user.id)
+    try { const list = await FAC.list(); setFacs(list); if (list.length === 0 && res && res.error) setDbError(res.error) }
+    catch (e) { setDbError((e && e.message) || 'Could not read the database.') }
+  }
   async function clearAll() {
     if (!window.confirm('Remove ALL facilities, visits and assignments? This cannot be undone.')) return
     try { await clearAllData() } catch (e) {}
-    try { localStorage.setItem('realms_no_seed', '1'); localStorage.removeItem('realms_seeded_v2') } catch (e) {}
-    seedTriedRef.current = true; setFacs([])
+    try { localStorage.setItem('realms_no_seed', '1') } catch (e) {}
+    seedTriedRef.current = true; setFacs([]); setDbError('')
   }
   function editName() {
     const n = window.prompt('Your name (only your first name is used to greet you)', (user && user.name) || '')
@@ -1246,7 +1256,7 @@ export default function App() {
     else if (appTab === 'reports') body = <ReportsPage facilities={facs} userId={user.id} />
     else if (appTab === 'analytics') body = <AnalyticsPage facilities={facs} />
     else if (appTab === 'assign') body = <AssignPage list={facs} userId={user.id} />
-    else body = <Dashboard identity={effId} role={effRole} onOpen={setAppTab} facilities={facs} onSeed={loadSample} onClear={clearAll} />
+    else body = <Dashboard identity={effId} role={effRole} onOpen={setAppTab} facilities={facs} onSeed={loadSample} onClear={clearAll} dbError={dbError} />
   } else {
     body = tab === 'home' ? <HomePage onSignIn={() => setView('auth')} go={setTab} />
       : tab === 'process' ? <ProcessPage /> : tab === 'services' ? <ServicesPage /> : tab === 'about' ? <AboutPage /> : <ContactPage />
@@ -1737,4 +1747,8 @@ const css = `
 .realms .seed-card strong { color:var(--p-deep); display:block; margin-bottom:2px; }
 .realms .seed-card span { color:#5A4C74; font-size:13.5px; }
 .realms .clear-row { display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; background:#FBF3E6; border:1px solid #F0D9B5; border-radius:12px; padding:12px 16px; margin:0 0 20px; font-size:13.5px; color:#9A5B12; }
+.realms .db-error { display:flex; flex-direction:column; gap:8px; align-items:flex-start; background:#FBE9E6; border:1px solid #F0C9BF; border-radius:14px; padding:16px 18px; margin-bottom:18px; color:#B4442E; }
+.realms .db-error strong { font-size:15px; }
+.realms .db-error span { font-size:13.5px; color:#8a4433; }
+.realms .db-error .db-msg { font-family:monospace; background:#fff; border:1px solid #F0C9BF; border-radius:8px; padding:6px 10px; color:#B4442E; word-break:break-word; max-width:100%; }
 `

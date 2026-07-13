@@ -234,13 +234,13 @@ function sampleVisitFor(f, profile, ageDays) {
   return { ...base, status: 'monitored', monitoring: { items, score: sc.pct, overallRating: sc.rag, updatedAt: arrival }, score: sc.pct, overall_rating: sc.rag }
 }
 export async function seedSampleData(userId) {
-  let facs = []
-  try { facs = await facilities.addMany(SAMPLE_FACILITIES, userId) } catch (e) { facs = [] }
+  let facs = [], error = null
+  try { facs = await facilities.addMany(SAMPLE_FACILITIES, userId) } catch (e) { error = (e && e.message) || String(e) }
   const plan = [['green', 3], ['amber', 6], ['red', 9], ['green', 12], ['amber', 15], ['red', 18], ['engaged', 1]]
   for (let i = 0; i < Math.min(facs.length, plan.length); i++) {
-    try { await visits.add(sampleVisitFor(facs[i], plan[i][0], plan[i][1]), userId) } catch (e) { /* skip this visit, keep going */ }
+    try { await visits.add(sampleVisitFor(facs[i], plan[i][0], plan[i][1]), userId) } catch (e) { if (!error) error = (e && e.message) || String(e) }
   }
-  return facs.length
+  return { count: facs.length, error }
 }
 
 /* ---------- clear everything (before going live) ---------- */
