@@ -167,6 +167,30 @@ export const visits = {
   }
 }
 
+/* ---------- notifications + call logs (customer service follow-ups) ---------- */
+const LS_NOTIF = 'realms_notifications'
+export const notifications = {
+  async list() {
+    if (MODE === 'supabase') { const { data, error } = await supabase.from('notifications').select('*').order('created_at', { ascending: false }); if (error) throw error; return data || [] }
+    return lsGet(LS_NOTIF)
+  },
+  async add(n, userId) {
+    if (MODE === 'supabase') { const { data, error } = await supabase.from('notifications').insert([{ ...cleanRow(n), created_by: userId || null }]).select(); if (error) throw error; return (data && data[0]) || n }
+    const cur = lsGet(LS_NOTIF); const rec = { ...n, id: uid(), created_at: new Date().toISOString() }; lsSet(LS_NOTIF, [rec].concat(cur)); return rec
+  }
+}
+const LS_CALL = 'realms_calls'
+export const calls = {
+  async list() {
+    if (MODE === 'supabase') { const { data, error } = await supabase.from('calls').select('*').order('created_at', { ascending: false }); if (error) throw error; return data || [] }
+    return lsGet(LS_CALL)
+  },
+  async add(c, userId) {
+    if (MODE === 'supabase') { const { data, error } = await supabase.from('calls').insert([{ ...cleanRow(c), created_by: userId || null }]).select(); if (error) throw error; return (data && data[0]) || c }
+    const cur = lsGet(LS_CALL); const rec = { ...c, id: uid(), created_at: new Date().toISOString() }; lsSet(LS_CALL, [rec].concat(cur)); return rec
+  }
+}
+
 /* ---------- evidence storage (Supabase Storage; falls back to inline data URL) ---------- */
 function dataUrlToBlob(dataUrl) {
   const parts = dataUrl.split(','); const meta = parts[0] || ''; const b64 = parts[1] || ''

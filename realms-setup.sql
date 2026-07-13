@@ -72,3 +72,23 @@ alter table visits add column if not exists debrief jsonb;
 alter table visits enable row level security;
 drop policy if exists "auth visits" on visits;
 create policy "auth visits" on visits for all using (auth.uid() is not null) with check (auth.uid() is not null);
+
+-- 5. Notifications log (auto customer-service alerts + manual notifications)
+create table if not exists notifications (
+  id uuid primary key default gen_random_uuid(),
+  type text, visit_id text, facility_name text, area text, channel text, status text, message text,
+  created_by uuid references auth.users(id), created_at timestamptz default now()
+);
+alter table notifications enable row level security;
+drop policy if exists "auth notifications" on notifications;
+create policy "auth notifications" on notifications for all using (auth.uid() is not null) with check (auth.uid() is not null);
+
+-- 6. Call log (customer-service follow-up calls)
+create table if not exists calls (
+  id uuid primary key default gen_random_uuid(),
+  visit_id text, facility_name text, area text, outcome text, notes text, caller text,
+  created_by uuid references auth.users(id), created_at timestamptz default now()
+);
+alter table calls enable row level security;
+drop policy if exists "auth calls" on calls;
+create policy "auth calls" on calls for all using (auth.uid() is not null) with check (auth.uid() is not null);
