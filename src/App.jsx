@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from 'react'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
 import { supabase, MODE } from './supabaseClient.js'
-import { facilities as FAC, assignments as ASG, visits as VIS, facilitiesFromCSV, orderRoute, googleMapsDirUrl, geocode, uploadEvidence, sendNotify } from './data.js'
+import { facilities as FAC, assignments as ASG, visits as VIS, facilitiesFromCSV, orderRoute, googleMapsDirUrl, geocode, uploadEvidence, sendNotify, seedSampleData } from './data.js'
 
 /*
   REALMS FIELD — Stages 1 to 3 (single-file App.jsx + supabaseClient.js + data.js)
@@ -66,13 +66,20 @@ const AREA_COLORS = ['#7A34A8', '#3E86C9', '#C7549C', '#5FA35A', '#D08A2E', '#8E
 const IDENTITY = {
   // 'solomon@realms.ng': { name: 'Dr Solomon', title: 'Team Leader', photo: '' },
 }
-function identityFor(email) {
+function identityFor(email, name) {
   const found = IDENTITY[(email || '').toLowerCase()]
-  if (found) return { photo: '', title: '', ...found, first: (found.name || 'Staff').split(' ')[0] }
+  const chosen = name || (found && found.name)
+  if (chosen) return { photo: '', title: '', ...(found || {}), name: chosen, first: chosen.split(' ')[0] }
   const base = (email || 'staff').split('@')[0].replace(/[._-]+/g, ' ')
-  const name = base.split(' ').map(w => w ? w[0].toUpperCase() + w.slice(1) : w).join(' ') || 'Staff'
-  return { name, first: name.split(' ')[0], title: '', photo: '' }
+  const n = base.split(' ').map(w => w ? w[0].toUpperCase() + w.slice(1) : w).join(' ') || 'Staff'
+  return { name: n, first: n.split(' ')[0], title: '', photo: '' }
 }
+const VIEW_USERS = [
+  { name: 'Amaka Obi', role: 'team_leader' },
+  { name: 'Chidi Eze', role: 'field_monitor' },
+  { name: 'Ngozi Okoro', role: 'hefamaa_reviewer' },
+  { name: 'Bola Adeyemi', role: 'facility_proprietor' }
+]
 function roleById(id) { return ROLES.find(r => r.id === id) || null }
 function hasCoords(f) { return typeof f.lat === 'number' && typeof f.lng === 'number' && !isNaN(f.lat) && !isNaN(f.lng) }
 
@@ -161,21 +168,23 @@ function ContactPage() {
 
 /* ---------- auth ---------- */
 function AuthPanel({ onDone, onCancel }) {
-  const [mode, setMode] = useState('signin'); const [email, setEmail] = useState(''); const [password, setPassword] = useState('')
+  const [mode, setMode] = useState('signin'); const [email, setEmail] = useState(''); const [password, setPassword] = useState(''); const [name, setName] = useState('')
   const [busy, setBusy] = useState(false); const [msg, setMsg] = useState('')
   async function submit() {
     setMsg(''); setBusy(true)
     try {
       if (MODE === 'supabase') {
-        if (mode === 'signup') { const { error } = await supabase.auth.signUp({ email, password }); if (error) throw error; setMsg('Account created. If confirmation is required, check your email, then sign in.'); setMode('signin') }
+        if (mode === 'signup') { const { error } = await supabase.auth.signUp({ email, password, options: { data: { full_name: name.trim() } } }); if (error) throw error; setMsg('Account created. If confirmation is required, check your email, then sign in.'); setMode('signin') }
         else { const { error } = await supabase.auth.signInWithPassword({ email, password }); if (error) throw error }
-      } else { if (!email) throw new Error('Enter an email to continue.'); localStorage.setItem('realms_demo_user', JSON.stringify({ email })); onDone({ email }) }
+      } else { if (!email) throw new Error('Enter an email to continue.'); const u = { email, name: name.trim() }; localStorage.setItem('realms_demo_user', JSON.stringify(u)); onDone(u) }
     } catch (e) { setMsg(e.message || 'Something went wrong. Please try again.') } finally { setBusy(false) }
   }
+  const showName = mode === 'signup' || MODE === 'demo'
   return (<div className="auth-shell"><div className="auth-card anim">
     <img className="auth-mark" src="/rhsc-mark.png" alt="RHSC" />
     <h2>{mode === 'signup' ? 'Create your Realms Field account' : 'Sign in to Realms Field'}</h2>
     <p className="auth-sub">For RHSC staff and authorised HEFAMAA reviewers.</p>
+    {showName && <label className="field"><span>Your name</span><input type="text" value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Olamide Okulaja" /></label>}
     <label className="field"><span>Email</span><input type="email" value={email} autoComplete="email" onChange={e => setEmail(e.target.value)} placeholder="you@realms.ng" /></label>
     <label className="field"><span>Password</span><input type="password" value={password} autoComplete="current-password" onChange={e => setPassword(e.target.value)} placeholder={MODE === 'demo' ? 'Not required in demo' : 'Your password'} /></label>
     {msg && <p className="auth-msg">{msg}</p>}
@@ -199,7 +208,7 @@ function RolePicker({ identity, onPick, onSignOut }) {
 }
 
 /* ---------- dashboard ---------- */
-function Dashboard({ identity, role, onOpen, facilities }) {
+function Dashboard({ identity, role, onOpen, facilities, onSeed }) {
   const r = roleById(role); const Icon = r ? r.icon : IconMonitor
   const areas = Array.from(new Set((facilities || []).map(f => f.area || 'Unassigned')))
   const quick = [{ v: (facilities || []).length, l: 'Facilities' }, { v: areas.length, l: 'Areas' }, { v: (r ? r.tools.filter(t => t[2]).length : 0), l: 'Live tools' }]
@@ -211,6 +220,7 @@ function Dashboard({ identity, role, onOpen, facilities }) {
         <div><p className="eyebrow light">{r ? r.label : 'Realms Field'}</p><h2>Welcome, {identity.first}</h2><p className="dash-sub">Professional. Educational. Enforcement-driven.</p></div>
       </div>
     </div>
+    {(facilities || []).length === 0 && onSeed && (<div className="seed-card anim"><div><strong>No data yet.</strong><span>Load sample facilities and visits to see the maps, charts and reports in action.</span></div><button className="btn small primary" onClick={onSeed}>Load sample data</button></div>)}
     <div className="dash-quick anim">{quick.map(q => (<div className="dq" key={q.l}><span className="dq-v">{q.v}</span><span className="dq-l">{q.l}</span></div>))}</div>
     <p className="dash-intro anim">Your tools are on the left. The ones marked ready are live now; the rest unlock as the build grows.</p>
     <div className="tool-grid">{(r ? r.tools : []).map(([name, stage, tab], i) => {
@@ -986,7 +996,7 @@ function HeatMap({ points }) {
   }, [])
   useEffect(() => {
     const m = obj.current, lg = layer.current; if (!m || !lg) return
-    lg.clearLayers(); const col = { green: '#2E7D46', amber: '#C77D0A', red: '#B4442E', none: '#9C86B8' }
+    m.invalidateSize(); lg.clearLayers(); const col = { green: '#2E7D46', amber: '#C77D0A', red: '#B4442E', none: '#9C86B8' }
     points.forEach(p => { L.circleMarker([p.lat, p.lng], { radius: 9, color: '#fff', weight: 2, fillColor: col[p.rag || 'none'], fillOpacity: .9 }).bindPopup('<strong>' + p.name + '</strong><br>' + (p.rag ? ragText(p.rag) : 'Not assessed')).addTo(lg) })
     if (points.length) { try { m.fitBounds(points.map(p => [p.lat, p.lng]), { padding: [40, 40], maxZoom: 13 }) } catch (e) {} }
   }, [points])
@@ -1093,18 +1103,21 @@ function SiteBar({ tab, setTab, onSignIn }) {
     <nav className="nav"><div className="tabs">{SITE_TABS.map(t => (<button key={t.id} className={'tab' + (tab === t.id ? ' active' : '')} onClick={() => setTab(t.id)}>{t.label}</button>))}</div><button className="signin" onClick={onSignIn}>Staff sign-in</button></nav>
   </header>)
 }
-function TopBarApp({ identity, role, workspace, setWorkspace, workspaces, onSignOut, onToggleNav }) {
-  const isHQ = role === 'rhsc_hq'
+function TopBarApp({ identity, realRole, viewAsName, onViewAs, onEditName, onSignOut, onToggleNav }) {
+  const isHQ = realRole === 'rhsc_hq'
   return (<header className="topbar">
     <div className="tb-left">
       <button className="navtoggle" onClick={onToggleNav} aria-label="Menu"><svg viewBox="0 0 24 24" stroke="currentColor" fill="none" strokeWidth="2"><path d="M4 7h16M4 12h16M4 17h16" /></svg></button>
       <img className="mark" src="/rhsc-mark.png" alt="RHSC" />
       <span className="tb-name">REALMS FIELD</span>
-      {isHQ && (<div className="ws"><label>Workspace</label>
-        <select value={workspace} onChange={e => setWorkspace(e.target.value)}><option value="all">All Lagos</option>{workspaces.map(w => <option key={w} value={w}>{w}</option>)}</select>
+      {isHQ && (<div className="ws"><label>View as</label>
+        <select value={viewAsName} onChange={e => onViewAs(e.target.value)}>
+          <option value="">My view (HQ)</option>
+          {VIEW_USERS.map(u => <option key={u.name} value={u.name}>{u.name + ' \u00b7 ' + ((roleById(u.role) || {}).label || '')}</option>)}
+        </select>
       </div>)}
     </div>
-    <div className="tb-right"><span className="who">{identity.first}</span><button className="signin" onClick={onSignOut}>Sign out</button></div>
+    <div className="tb-right"><button className="who" onClick={onEditName} title="Edit your name">{identity.first}</button><button className="signin" onClick={onSignOut}>Sign out</button></div>
   </header>)
 }
 function Sidebar({ role, appTab, setAppTab, collapsed, setCollapsed, open, setOpen }) {
@@ -1135,15 +1148,15 @@ export default function App() {
   const [facs, setFacs] = useState([])
   const [navCollapsed, setNavCollapsed] = useState(false)
   const [navOpen, setNavOpen] = useState(false)
-  const [workspace, setWorkspace] = useState('all')
+  const [viewAs, setViewAs] = useState(null)
 
   useEffect(() => {
     if (MODE === 'supabase') {
       let subscription
       try {
         const res = supabase.auth.onAuthStateChange((_e, s) => {
-          if (s && s.user) { setUser({ email: s.user.email, id: s.user.id }); loadRole(s.user.id); setView('app') }
-          else { setUser(null); setRole(null); setView(prev => (prev === 'app' ? 'site' : prev)) }
+          if (s && s.user) { setUser({ email: s.user.email, id: s.user.id, name: (s.user.user_metadata && s.user.user_metadata.full_name) || '' }); loadRole(s.user.id); setView('app') }
+          else { setUser(null); setRole(null); setViewAs(null); setView(prev => (prev === 'app' ? 'site' : prev)) }
         })
         subscription = res.data.subscription
       } catch (e) { /* site still renders */ }
@@ -1159,7 +1172,27 @@ export default function App() {
   // load facilities whenever we enter the app with a role
   useEffect(() => { if (view === 'app' && user && role) reloadFacs() }, [view, role])
 
-  async function reloadFacs() { try { setFacs(await FAC.list()) } catch (e) { setFacs([]) } }
+  async function reloadFacs() {
+    try {
+      let list = await FAC.list()
+      if (list.length === 0 && MODE === 'demo' && !localStorage.getItem('realms_seeded')) {
+        localStorage.setItem('realms_seeded', '1'); await seedSampleData(user && user.id); list = await FAC.list()
+      }
+      setFacs(list)
+    } catch (e) { setFacs([]) }
+  }
+  async function loadSample() { try { await seedSampleData(user && user.id); await reloadFacs() } catch (e) {} }
+  function editName() {
+    const n = window.prompt('Your name (only your first name is used to greet you)', (user && user.name) || '')
+    if (n == null) return; const nm = n.trim(); if (!nm) return
+    setUser(u => ({ ...(u || {}), name: nm }))
+    if (MODE === 'supabase') { try { supabase.auth.updateUser({ data: { full_name: nm } }) } catch (e) {} }
+    else { try { const raw = JSON.parse(localStorage.getItem('realms_demo_user') || '{}'); localStorage.setItem('realms_demo_user', JSON.stringify({ ...raw, name: nm })) } catch (e) {} }
+  }
+  function doViewAs(name) {
+    if (!name) { setViewAs(null); setAppTab('dashboard'); return }
+    const u = VIEW_USERS.find(x => x.name === name); if (u) { setViewAs(u); setAppTab('dashboard') }
+  }
 
   async function loadRole(uid) {
     if (MODE !== 'supabase') return
@@ -1175,28 +1208,27 @@ export default function App() {
   async function signOut() {
     if (MODE === 'supabase') { try { await supabase.auth.signOut() } catch (e) {} }
     else { localStorage.removeItem('realms_demo_user'); localStorage.removeItem('realms_demo_role') }
-    setUser(null); setRole(null); setView('site'); setTab('home'); setAppTab('dashboard')
+    setUser(null); setRole(null); setViewAs(null); setView('site'); setTab('home'); setAppTab('dashboard')
   }
 
-  const identity = user ? identityFor(user.email) : { name: 'Staff', first: 'Staff', title: '' }
-  const canEdit = CAN_EDIT.includes(role)
-  const scope = role === 'rhsc_hq' ? workspace : 'all'
-  const scoped = scope === 'all' ? facs : facs.filter(f => (f.area || 'Unassigned') === scope)
-  const workspaces = Array.from(new Set(facs.map(f => f.area || 'Unassigned'))).sort()
+  const identity = user ? identityFor(user.email, user.name) : { name: 'Staff', first: 'Staff', title: '' }
+  const effRole = viewAs ? viewAs.role : role
+  const effId = viewAs ? { name: viewAs.name, first: viewAs.name.split(' ')[0], title: '', photo: '' } : identity
+  const canEdit = CAN_EDIT.includes(effRole)
 
   let body
   if (view === 'auth') body = <AuthPanel onDone={afterAuth} onCancel={() => setView('site')} />
   else if (view === 'app' && user) {
     if (!role) body = <RolePicker identity={identity} onPick={pickRole} onSignOut={signOut} />
-    else if (appTab === 'facilities') body = <FacilitiesPage list={scoped} canEdit={canEdit} userId={user.id} reload={reloadFacs} />
-    else if (appTab === 'map') body = <MapRoutePage list={scoped} />
-    else if (appTab === 'engage') body = <EngagePage list={facs} identity={identity} role={role} userId={user.id} />
+    else if (appTab === 'facilities') body = <FacilitiesPage list={facs} canEdit={canEdit} userId={user.id} reload={reloadFacs} />
+    else if (appTab === 'map') body = <MapRoutePage list={facs} />
+    else if (appTab === 'engage') body = <EngagePage list={facs} identity={effId} role={effRole} userId={user.id} />
     else if (appTab === 'monitor') body = <MonitorPage userId={user.id} />
     else if (appTab === 'debrief') body = <DebriefPage userId={user.id} />
-    else if (appTab === 'reports') body = <ReportsPage facilities={scoped} userId={user.id} scope={scope} />
-    else if (appTab === 'analytics') body = <AnalyticsPage facilities={scoped} scope={scope} />
+    else if (appTab === 'reports') body = <ReportsPage facilities={facs} userId={user.id} />
+    else if (appTab === 'analytics') body = <AnalyticsPage facilities={facs} />
     else if (appTab === 'assign') body = <AssignPage list={facs} userId={user.id} />
-    else body = <Dashboard identity={identity} role={role} onOpen={setAppTab} facilities={facs} />
+    else body = <Dashboard identity={effId} role={effRole} onOpen={setAppTab} facilities={facs} onSeed={loadSample} />
   } else {
     body = tab === 'home' ? <HomePage onSignIn={() => setView('auth')} go={setTab} />
       : tab === 'process' ? <ProcessPage /> : tab === 'services' ? <ServicesPage /> : tab === 'about' ? <AboutPage /> : <ContactPage />
@@ -1208,9 +1240,10 @@ export default function App() {
   if (showAppShell) {
     return (<div className="realms app-mode">
       <style>{css}</style>
-      <TopBarApp identity={identity} role={role} workspace={workspace} setWorkspace={setWorkspace} workspaces={workspaces} onSignOut={signOut} onToggleNav={() => setNavOpen(o => !o)} />
+      <TopBarApp identity={effId} realRole={role} viewAsName={viewAs ? viewAs.name : ''} onViewAs={doViewAs} onEditName={editName} onSignOut={signOut} onToggleNav={() => setNavOpen(o => !o)} />
+      {viewAs && (<div className="viewas-bar">Viewing as {viewAs.name} &middot; {(roleById(viewAs.role) || {}).label}<button onClick={() => doViewAs('')}>Return to my view</button></div>)}
       <div className="shell">
-        <Sidebar role={role} appTab={appTab} setAppTab={setAppTab} collapsed={navCollapsed} setCollapsed={setNavCollapsed} open={navOpen} setOpen={setNavOpen} />
+        <Sidebar role={effRole} appTab={appTab} setAppTab={setAppTab} collapsed={navCollapsed} setCollapsed={setNavCollapsed} open={navOpen} setOpen={setNavOpen} />
         <main className="app-main">{body}</main>
       </div>
     </div>)
@@ -1677,4 +1710,12 @@ const css = `
   .realms .impact-art { border-radius:0 0 20px 20px; min-height:200px; }
   .realms .dash-quick { grid-template-columns:1fr 1fr 1fr; }
 }
+
+.realms .topbar .who { background:none; border:0; cursor:pointer; }
+.realms .topbar .who:hover { text-decoration:underline; }
+.realms .viewas-bar { display:flex; align-items:center; justify-content:center; gap:12px; flex-wrap:wrap; background:#FBF3E6; color:#9A5B12; border-bottom:1px solid #F0D9B5; padding:8px 16px; font-size:13.5px; }
+.realms .viewas-bar button { background:#9A5B12; color:#fff; border:0; border-radius:16px; padding:5px 12px; font-size:12.5px; cursor:pointer; }
+.realms .seed-card { display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--lav1); border:1px solid var(--line); border-radius:14px; padding:16px 18px; margin-bottom:16px; }
+.realms .seed-card strong { color:var(--p-deep); display:block; margin-bottom:2px; }
+.realms .seed-card span { color:#5A4C74; font-size:13.5px; }
 `

@@ -194,3 +194,50 @@ export async function sendNotify(payload) {
     return j
   } catch (e) { return { ok: false, reason: 'network' } }
 }
+
+/* ---------- sample/demo data (for previewing the app) ---------- */
+const SAMPLE_FACILITIES = [
+  { name: 'Ikeja General Hospital', category: 'General hospital', area: 'Ikeja', address: 'Oba Akinjobi Way', lat: 6.6018, lng: 3.3515, last_visit: '' },
+  { name: 'St. Raphael Clinic', category: 'Private clinic', area: 'Ikeja', address: 'Allen Avenue', lat: 6.5921, lng: 3.3373, last_visit: '' },
+  { name: 'Ayobo Primary Health Centre', category: 'Primary health centre', area: 'Ayobo', address: 'Ayobo Road', lat: 6.6274, lng: 3.2560, last_visit: '' },
+  { name: 'Ipaja Medical Centre', category: 'Medical centre', area: 'Ipaja', address: 'Ipaja Road', lat: 6.6136, lng: 3.2876, last_visit: '' },
+  { name: 'Command Cottage Hospital', category: 'Cottage hospital', area: 'Ipaja', address: 'Command Road', lat: 6.6300, lng: 3.2700, last_visit: '' },
+  { name: 'Surulere Family Clinic', category: 'Private clinic', area: 'Surulere', address: 'Adeniran Ogunsanya Street', lat: 6.4969, lng: 3.3481, last_visit: '' },
+  { name: 'Yaba Health Centre', category: 'Primary health centre', area: 'Yaba', address: 'Herbert Macaulay Way', lat: 6.5095, lng: 3.3711, last_visit: '' },
+  { name: 'Lekki Primary Care', category: 'Private clinic', area: 'Lekki', address: 'Admiralty Way', lat: 6.4433, lng: 3.4711, last_visit: '' },
+  { name: 'Oshodi Clinic', category: 'Clinic', area: 'Oshodi', address: 'Oshodi-Apapa Expressway', lat: 6.5540, lng: 3.3080, last_visit: '' },
+  { name: 'Mushin Health Post', category: 'Health post', area: 'Mushin', address: 'Ojuwoye Market Road', lat: 6.5333, lng: 3.3500, last_visit: '' }
+]
+const SAMPLE_CATS = { infrastructure: 5, personnel: 3, equipment: 2, records: 3, compliance: 3, services: 1 }
+function sampleItems(profile) {
+  const cycle = profile === 'green' ? ['green', 'green', 'green', 'amber'] : profile === 'amber' ? ['green', 'amber', 'amber', 'red'] : ['red', 'amber', 'red', 'green']
+  let idx = 0; const items = {}
+  Object.keys(SAMPLE_CATS).forEach(cat => { for (let i = 0; i < SAMPLE_CATS[cat]; i++) { items[cat + '_' + i] = { rating: cycle[idx % cycle.length], note: '', evidence: [] }; idx++ } })
+  return items
+}
+function scoreFromItems(items) {
+  let sum = 0, max = 0
+  Object.values(items).forEach(it => { if (it.rating) { max += 2; sum += it.rating === 'green' ? 2 : it.rating === 'amber' ? 1 : 0 } })
+  const pct = max ? Math.round(sum / max * 100) : null
+  return { pct, rag: pct == null ? null : pct >= 80 ? 'green' : pct >= 50 ? 'amber' : 'red' }
+}
+function sampleVisitFor(f, profile, ageDays) {
+  const arrival = new Date(Date.now() - ageDays * 86400000).toISOString()
+  const base = {
+    facility_id: f.id, facility_name: f.name, area: f.area, lat: f.lat, lng: f.lng, arrival_time: arrival,
+    team: [{ name: 'Amaka Obi', role: 'Team Leader' }, { name: 'Chidi Eze', role: 'Field Monitor' }],
+    person_in_charge: { name: 'Matron ' + (f.name.split(' ')[0]), role: 'Matron', phone: '0803' + Math.floor(1000000 + Math.random() * 8999999) },
+    greeting_confirmed: true
+  }
+  if (profile === 'engaged') return { ...base, status: 'engaged' }
+  const items = sampleItems(profile); const sc = scoreFromItems(items)
+  return { ...base, status: 'monitored', monitoring: { items, score: sc.pct, overallRating: sc.rag, updatedAt: arrival }, score: sc.pct, overall_rating: sc.rag }
+}
+export async function seedSampleData(userId) {
+  const facs = await facilities.addMany(SAMPLE_FACILITIES, userId)
+  const plan = [['green', 3], ['amber', 6], ['red', 9], ['green', 12], ['amber', 15], ['red', 18], ['engaged', 1]]
+  for (let i = 0; i < Math.min(facs.length, plan.length); i++) {
+    await visits.add(sampleVisitFor(facs[i], plan[i][0], plan[i][1]), userId)
+  }
+  return facs.length
+}
