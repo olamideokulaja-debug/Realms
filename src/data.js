@@ -234,10 +234,22 @@ function sampleVisitFor(f, profile, ageDays) {
   return { ...base, status: 'monitored', monitoring: { items, score: sc.pct, overallRating: sc.rag, updatedAt: arrival }, score: sc.pct, overall_rating: sc.rag }
 }
 export async function seedSampleData(userId) {
-  const facs = await facilities.addMany(SAMPLE_FACILITIES, userId)
+  let facs = []
+  try { facs = await facilities.addMany(SAMPLE_FACILITIES, userId) } catch (e) { facs = [] }
   const plan = [['green', 3], ['amber', 6], ['red', 9], ['green', 12], ['amber', 15], ['red', 18], ['engaged', 1]]
   for (let i = 0; i < Math.min(facs.length, plan.length); i++) {
-    await visits.add(sampleVisitFor(facs[i], plan[i][0], plan[i][1]), userId)
+    try { await visits.add(sampleVisitFor(facs[i], plan[i][0], plan[i][1]), userId) } catch (e) { /* skip this visit, keep going */ }
   }
   return facs.length
+}
+
+/* ---------- clear everything (before going live) ---------- */
+export async function clearAllData() {
+  if (MODE === 'supabase' && supabase) {
+    try { await supabase.from('visits').delete().not('id', 'is', null) } catch (e) {}
+    try { await supabase.from('assignments').delete().not('id', 'is', null) } catch (e) {}
+    try { await supabase.from('facilities').delete().not('id', 'is', null) } catch (e) {}
+  } else {
+    try { localStorage.removeItem(LS_FAC); localStorage.removeItem(LS_ASG); localStorage.removeItem(LS_VIS) } catch (e) {}
+  }
 }

@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from 'react'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
 import { supabase, MODE } from './supabaseClient.js'
-import { facilities as FAC, assignments as ASG, visits as VIS, facilitiesFromCSV, orderRoute, googleMapsDirUrl, geocode, uploadEvidence, sendNotify, seedSampleData } from './data.js'
+import { facilities as FAC, assignments as ASG, visits as VIS, facilitiesFromCSV, orderRoute, googleMapsDirUrl, geocode, uploadEvidence, sendNotify, seedSampleData, clearAllData } from './data.js'
 
 /*
   REALMS FIELD — Stages 1 to 3 (single-file App.jsx + supabaseClient.js + data.js)
@@ -175,11 +175,11 @@ function AuthPanel({ onDone, onCancel }) {
     try {
       if (MODE === 'supabase') {
         if (mode === 'signup') { const { error } = await supabase.auth.signUp({ email, password, options: { data: { full_name: name.trim() } } }); if (error) throw error; setMsg('Account created. If confirmation is required, check your email, then sign in.'); setMode('signin') }
-        else { const { error } = await supabase.auth.signInWithPassword({ email, password }); if (error) throw error }
+        else { const { error } = await supabase.auth.signInWithPassword({ email, password }); if (error) throw error; if (name.trim()) { try { await supabase.auth.updateUser({ data: { full_name: name.trim() } }) } catch (e) {} } }
       } else { if (!email) throw new Error('Enter an email to continue.'); const u = { email, name: name.trim() }; localStorage.setItem('realms_demo_user', JSON.stringify(u)); onDone(u) }
     } catch (e) { setMsg(e.message || 'Something went wrong. Please try again.') } finally { setBusy(false) }
   }
-  const showName = mode === 'signup' || MODE === 'demo'
+  const showName = true
   return (<div className="auth-shell"><div className="auth-card anim">
     <img className="auth-mark" src="/rhsc-mark.png" alt="RHSC" />
     <h2>{mode === 'signup' ? 'Create your Realms Field account' : 'Sign in to Realms Field'}</h2>
@@ -208,10 +208,11 @@ function RolePicker({ identity, onPick, onSignOut }) {
 }
 
 /* ---------- dashboard ---------- */
-function Dashboard({ identity, role, onOpen, facilities, onSeed }) {
+function Dashboard({ identity, role, onOpen, facilities, onSeed, onClear }) {
   const r = roleById(role); const Icon = r ? r.icon : IconMonitor
   const areas = Array.from(new Set((facilities || []).map(f => f.area || 'Unassigned')))
   const quick = [{ v: (facilities || []).length, l: 'Facilities' }, { v: areas.length, l: 'Areas' }, { v: (r ? r.tools.filter(t => t[2]).length : 0), l: 'Live tools' }]
+  const hasData = (facilities || []).length > 0
   return (<div className="page dash">
     <div className="dash-banner anim">
       <img src="/photos/team.jpg" alt="RHSC field team" />
@@ -223,6 +224,7 @@ function Dashboard({ identity, role, onOpen, facilities, onSeed }) {
     {(facilities || []).length === 0 && onSeed && (<div className="seed-card anim"><div><strong>No data yet.</strong><span>Load sample facilities and visits to see the maps, charts and reports in action.</span></div><button className="btn small primary" onClick={onSeed}>Load sample data</button></div>)}
     <div className="dash-quick anim">{quick.map(q => (<div className="dq" key={q.l}><span className="dq-v">{q.v}</span><span className="dq-l">{q.l}</span></div>))}</div>
     <p className="dash-intro anim">Your tools are on the left. The ones marked ready are live now; the rest unlock as the build grows.</p>
+    {hasData && onClear && (<div className="clear-row anim"><span>Demo data is loaded. Clear it all before going live.</span><button className="mini danger" onClick={onClear}>Clear all data</button></div>)}
     <div className="tool-grid">{(r ? r.tools : []).map(([name, stage, tab], i) => {
       const live = !!tab
       return (<button className={'tool-card' + (live ? ' live' : '')} key={name} style={{ animationDelay: (i * 60) + 'ms' }} disabled={!live} onClick={() => live && onOpen(tab)}>
@@ -1149,11 +1151,15 @@ export default function App() {
   const [navCollapsed, setNavCollapsed] = useState(false)
   const [navOpen, setNavOpen] = useState(false)
   const [viewAs, setViewAs] = useState(null)
+  const seedTriedRef = useRef(false)
 
   useEffect(() => {
+    let forceOut = false
+    try { if (!localStorage.getItem('realms_reauth_v3')) { localStorage.setItem('realms_reauth_v3', '1'); localStorage.removeItem('realms_demo_user'); localStorage.removeItem('realms_demo_role'); forceOut = true } } catch (e) {}
     if (MODE === 'supabase') {
       let subscription
       try {
+        if (forceOut) { try { supabase.auth.signOut() } catch (e) {} }
         const res = supabase.auth.onAuthStateChange((_e, s) => {
           if (s && s.user) { setUser({ email: s.user.email, id: s.user.id, name: (s.user.user_metadata && s.user.user_metadata.full_name) || '' }); loadRole(s.user.id); setView('app') }
           else { setUser(null); setRole(null); setViewAs(null); setView(prev => (prev === 'app' ? 'site' : prev)) }
@@ -1162,6 +1168,7 @@ export default function App() {
       } catch (e) { /* site still renders */ }
       return () => { if (subscription) subscription.unsubscribe() }
     } else {
+      if (forceOut) return
       try {
         const raw = localStorage.getItem('realms_demo_user'); const dr = localStorage.getItem('realms_demo_role')
         if (raw) { setUser(JSON.parse(raw)); if (dr) setRole(dr); setView('app') }
@@ -1175,13 +1182,24 @@ export default function App() {
   async function reloadFacs() {
     try {
       let list = await FAC.list()
-      if (list.length === 0 && MODE === 'demo' && !localStorage.getItem('realms_seeded')) {
-        localStorage.setItem('realms_seeded', '1'); await seedSampleData(user && user.id); list = await FAC.list()
+      let already = false
+      try { already = !!(localStorage.getItem('realms_seeded_v2') || localStorage.getItem('realms_no_seed')) } catch (e) {}
+      if (list.length === 0 && !seedTriedRef.current && !already) {
+        seedTriedRef.current = true
+        try { localStorage.setItem('realms_seeded_v2', '1') } catch (e) {}
+        await seedSampleData(user && user.id)
+        list = await FAC.list()
       }
       setFacs(list)
     } catch (e) { setFacs([]) }
   }
-  async function loadSample() { try { await seedSampleData(user && user.id); await reloadFacs() } catch (e) {} }
+  async function loadSample() { try { seedTriedRef.current = true; try { localStorage.setItem('realms_seeded_v2', '1') } catch (e) {}; await seedSampleData(user && user.id) } catch (e) {} finally { try { setFacs(await FAC.list()) } catch (e) {} } }
+  async function clearAll() {
+    if (!window.confirm('Remove ALL facilities, visits and assignments? This cannot be undone.')) return
+    try { await clearAllData() } catch (e) {}
+    try { localStorage.setItem('realms_no_seed', '1'); localStorage.removeItem('realms_seeded_v2') } catch (e) {}
+    seedTriedRef.current = true; setFacs([])
+  }
   function editName() {
     const n = window.prompt('Your name (only your first name is used to greet you)', (user && user.name) || '')
     if (n == null) return; const nm = n.trim(); if (!nm) return
@@ -1228,7 +1246,7 @@ export default function App() {
     else if (appTab === 'reports') body = <ReportsPage facilities={facs} userId={user.id} />
     else if (appTab === 'analytics') body = <AnalyticsPage facilities={facs} />
     else if (appTab === 'assign') body = <AssignPage list={facs} userId={user.id} />
-    else body = <Dashboard identity={effId} role={effRole} onOpen={setAppTab} facilities={facs} onSeed={loadSample} />
+    else body = <Dashboard identity={effId} role={effRole} onOpen={setAppTab} facilities={facs} onSeed={loadSample} onClear={clearAll} />
   } else {
     body = tab === 'home' ? <HomePage onSignIn={() => setView('auth')} go={setTab} />
       : tab === 'process' ? <ProcessPage /> : tab === 'services' ? <ServicesPage /> : tab === 'about' ? <AboutPage /> : <ContactPage />
@@ -1718,4 +1736,5 @@ const css = `
 .realms .seed-card { display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--lav1); border:1px solid var(--line); border-radius:14px; padding:16px 18px; margin-bottom:16px; }
 .realms .seed-card strong { color:var(--p-deep); display:block; margin-bottom:2px; }
 .realms .seed-card span { color:#5A4C74; font-size:13.5px; }
+.realms .clear-row { display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; background:#FBF3E6; border:1px solid #F0D9B5; border-radius:12px; padding:12px 16px; margin:0 0 20px; font-size:13.5px; color:#9A5B12; }
 `
