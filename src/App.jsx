@@ -4,7 +4,7 @@ import 'leaflet/dist/leaflet.css'
 import { supabase, MODE } from './supabaseClient.js'
 import { facilities as FAC, assignments as ASG, visits as VIS, notifications as NOTIF, calls as CALLS, facilitiesFromCSV, orderRoute, googleMapsDirUrl, geocode, uploadEvidence, sendNotify, seedSampleData, clearAllData } from './data.js'
 
-const BUILD = 'field-2026-07-14c'
+const BUILD = 'field-2026-07-14d'
 
 /*
   REALMS FIELD — Stages 1 to 3 (single-file App.jsx + supabaseClient.js + data.js)
@@ -56,6 +56,51 @@ const SERVICES = [
 
 const IMPACT_STATS = [ { v: '25+', l: 'Years of experience' }, { v: '1000+', l: 'Facilities monitored' }, { v: '20+', l: 'Projects delivered' } ]
 const PARTNERS = ['Vatebra Limited', 'Lagos State Ministry of Health', 'HEFAMAA']
+const CONTACT = {
+  email: '[Imade Forte email]', phone: '[Imade Forte phone]', whatsapp: '',
+  address: '21 Fatai Arobieke Street, off Admiralty Way, Lekki Phase 1, Lagos',
+  hours: 'Monday to Friday, 9am to 5pm'
+}
+function isPlaceholder(v) { return !v || /^\[/.test(v) }
+function getSettings() { try { return JSON.parse(localStorage.getItem('realms_settings') || '{}') } catch (e) { return {} } }
+function saveSettings(s) { try { localStorage.setItem('realms_settings', JSON.stringify(s)) } catch (e) {} }
+const ICONS = {
+  mail: 'M3 5h18v14H3zM3 6l9 7 9-7',
+  phone: 'M4 4h5l2 5-3 2a12 12 0 006 6l2-3 5 2v5a2 2 0 01-2 2A16 16 0 014 6a2 2 0 012-2',
+  chat: 'M4 4h16v11H8l-4 4z',
+  pin: 'M12 22s7-6.2 7-12a7 7 0 10-14 0c0 5.8 7 12 7 12zM12 10a2.5 2.5 0 100-5 2.5 2.5 0 000 5z',
+  clock: 'M12 22a10 10 0 100-20 10 10 0 000 20zM12 7v5l3 2'
+}
+function Ico({ name, size = 18 }) { return (<svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={ICONS[name]} /></svg>) }
+
+/* ---------- global toasts + confirm ---------- */
+const uiListeners = new Set()
+function toast(message, kind = 'ok') { uiListeners.forEach(l => l({ t: 'toast', message, kind })) }
+function confirmAction(message, opts = {}) { return new Promise(res => { let done = false; const resolve = v => { if (!done) { done = true; res(v) } }; uiListeners.forEach(l => l({ t: 'confirm', message, opts, resolve })) }) }
+function Overlays() {
+  const [toasts, setToasts] = useState([])
+  const [confirm, setConfirm] = useState(null)
+  useEffect(() => {
+    const l = (e) => {
+      if (e.t === 'toast') { const id = Math.random().toString(36).slice(2); setToasts(ts => ts.concat([{ id, message: e.message, kind: e.kind }])); setTimeout(() => setToasts(ts => ts.filter(x => x.id !== id)), 3400) }
+      else if (e.t === 'confirm') setConfirm(e)
+    }
+    uiListeners.add(l); return () => { uiListeners.delete(l) }
+  }, [])
+  return (<>
+    <div className="toaster" aria-live="polite">{toasts.map(t => (<div key={t.id} className={'toast ' + t.kind}>{t.message}</div>))}</div>
+    {confirm && (<div className="modal-scrim" onClick={() => { confirm.resolve(false); setConfirm(null) }}>
+      <div className="modal anim" onClick={e => e.stopPropagation()} role="dialog" aria-modal="true">
+        <h3>{confirm.opts.title || 'Please confirm'}</h3>
+        <p>{confirm.message}</p>
+        <div className="modal-actions">
+          <button className="btn ghost" onClick={() => { confirm.resolve(false); setConfirm(null) }}>{confirm.opts.cancel || 'Cancel'}</button>
+          <button className={'btn ' + (confirm.opts.danger ? 'danger' : 'primary')} onClick={() => { confirm.resolve(true); setConfirm(null) }}>{confirm.opts.ok || 'Confirm'}</button>
+        </div>
+      </div>
+    </div>)}
+  </>)
+}
 const LEADERS = [
   { name: 'Dr. Olamide Okulaja', role: 'Founder & Executive Chairman', photo: '/photos/olamide.jpg', bio: 'A healthcare systems leader whose expertise in systems reform, policy and strategic leadership guides RHSC. His career spans healthcare financing, policy and advocacy, with senior roles at PharmAccess Foundation, the International Finance Corporation (World Bank Group) and the Lagos State Ministry of Health, where he led major universal health coverage and diagnostics initiatives.' },
   { name: 'Ms. Jennifer Kaja', role: 'Managing Director', photo: '/photos/jennifer.jpg', bio: 'A distinguished Nigerian lawyer with first-class honours from the University of Wales and a decade of practice across corporate, commercial and real estate law. As Chief Legal Officer of Periwinkle Empire she oversaw landmark transactions, governance and compliance.' }
@@ -134,11 +179,11 @@ const ROLES = [
 const ROLE_TABS = {
   team_leader: ['dashboard', 'facilities', 'map', 'engage', 'monitor', 'debrief', 'assign', 'reports'],
   field_monitor: ['dashboard', 'facilities', 'map', 'engage', 'monitor', 'debrief'],
-  rhsc_hq: ['dashboard', 'facilities', 'map', 'reports', 'followups'],
+  rhsc_hq: ['dashboard', 'facilities', 'map', 'reports', 'followups', 'settings'],
   hefamaa_reviewer: ['dashboard', 'facilities', 'reports'],
   facility_proprietor: ['dashboard', 'myfacility']
 }
-const TAB_LABEL = { dashboard: 'Dashboard', facilities: 'Facilities', map: 'Map & Route', engage: 'Engage', monitor: 'Monitor', debrief: 'Debrief', assign: 'Assign', reports: 'Reports', analytics: 'Analytics', myfacility: 'My Facility', followups: 'Follow-ups' }
+const TAB_LABEL = { dashboard: 'Dashboard', facilities: 'Facilities', map: 'Map & Route', engage: 'Engage', monitor: 'Monitor', debrief: 'Debrief', assign: 'Assign', reports: 'Reports', analytics: 'Analytics', myfacility: 'My Facility', followups: 'Follow-ups', settings: 'Settings' }
 const CAN_EDIT = ['team_leader', 'field_monitor', 'rhsc_hq']
 const AREA_COLORS = ['#6D4B8E', '#3E86C9', '#C7549C', '#5FA35A', '#D08A2E', '#7E63A0', '#4AA3A3', '#B0562E', '#6C6FD0', '#C0603C']
 
@@ -310,30 +355,66 @@ function InsightsPage() {
 }
 
 function ContactPage() {
-  return (<div className="page"><SectionHead eyebrow="Get in touch" title="Work with RHSC" />
-    <div className="contact-grid">
-      <div className="enquiry-card anim">
-        <h2>Tell us about your need</h2>
-        <div className="fgrid two">
-          <label className="field sm"><span>Name</span><input placeholder="Your name" /></label>
-          <label className="field sm"><span>Organisation</span><input placeholder="Organisation" /></label>
-          <label className="field sm"><span>Email</span><input type="email" placeholder="you@example.com" /></label>
-          <label className="field sm"><span>Interest</span><select><option>Book a consultation</option><option>Request a proposal</option><option>Facility monitoring</option><option>Training</option><option>Digital health (Genesys)</option><option>Other</option></select></label>
-        </div>
-        <label className="field sm"><span>Message</span><textarea rows="3" placeholder="How can we help?" /></label>
-        <button className="btn primary" onClick={() => window.alert('Thank you. Connect this form to your email or CRM to receive enquiries.')}>Send enquiry</button>
-        <p className="hintline">This form is ready to connect to your email or CRM.</p>
-      </div>
-      <div className="contact-side anim">
-        <h3>Reach us directly</h3>
-        <ul className="contacts">
-          <li><span>Email</span><em>[Imade Forte email]</em></li>
-          <li><span>Phone</span><em>[Imade Forte phone]</em></li>
-          <li><span>WhatsApp</span><em>[Imade Forte WhatsApp]</em></li>
-          <li><span>Office</span><em>21 Fatai Arobieke Street, off Admiralty Way, Lekki Phase 1, Lagos</em></li>
+  const [f, setF] = useState({ name: '', org: '', email: '', phone: '', interest: 'Book a consultation', message: '' })
+  const [sent, setSent] = useState(false)
+  const set = (k, v) => setF(s => ({ ...s, [k]: v }))
+  const valid = f.name.trim() && f.email.trim() && f.message.trim()
+  const to = isPlaceholder(CONTACT.email) ? '' : CONTACT.email
+  function submit() {
+    if (!valid) { toast('Add your name, email and a short message.', 'warn'); return }
+    const subject = 'RHSC enquiry: ' + f.interest
+    const body = ['Name: ' + f.name, f.org ? 'Organisation: ' + f.org : '', 'Email: ' + f.email, f.phone ? 'Phone: ' + f.phone : '', 'Interest: ' + f.interest, '', f.message].filter(Boolean).join('\n')
+    window.location.href = mailtoLink(subject, body, to)
+    setSent(true)
+  }
+  const waHref = CONTACT.whatsapp ? waLink(CONTACT.whatsapp, 'Hello RHSC, I would like to enquire about your services.') : ''
+  return (<div className="page contact-page">
+    <div className="contact-hero anim">
+      <p className="eyebrow">Get in touch</p>
+      <h1>Let&rsquo;s raise the standard, together.</h1>
+      <p className="contact-lede">Tell us what you are working on. Whether it is strategy, quality, monitoring or digital health, we will point you to the right team.</p>
+    </div>
+    <div className="contact-split">
+      <aside className="contact-panel anim">
+        <div className="panel-glow" aria-hidden="true" />
+        <h2>Reach RHSC</h2>
+        <ul className="reach">
+          <li><span className="reach-ic"><Ico name="mail" /></span><div><span className="reach-k">Email</span><em>{CONTACT.email}</em></div></li>
+          <li><span className="reach-ic"><Ico name="phone" /></span><div><span className="reach-k">Phone</span><em>{CONTACT.phone}</em></div></li>
+          <li><span className="reach-ic"><Ico name="chat" /></span><div><span className="reach-k">WhatsApp</span><em>{CONTACT.whatsapp || '[Imade Forte WhatsApp]'}</em></div></li>
+          <li><span className="reach-ic"><Ico name="pin" /></span><div><span className="reach-k">Office</span><em>{CONTACT.address}</em></div></li>
+          <li><span className="reach-ic"><Ico name="clock" /></span><div><span className="reach-k">Hours</span><em>{CONTACT.hours}</em></div></li>
         </ul>
-        <div className="cta-row"><a className="btn primary" href="#" onClick={e => { e.preventDefault(); window.alert('Add your WhatsApp link (https://wa.me/234...)') }}>WhatsApp us</a></div>
-      </div>
+        <div className="panel-cta">
+          {waHref ? <a className="btn light" href={waHref} target="_blank" rel="noreferrer">Message on WhatsApp</a> : <button className="btn light" onClick={() => toast('Add your WhatsApp number in the contact settings.', 'warn')}>Message on WhatsApp</button>}
+          {!isPlaceholder(CONTACT.phone) && <a className="btn ghost onlight" href={'tel:' + CONTACT.phone.replace(/[^0-9+]/g, '')}>Call us</a>}
+        </div>
+      </aside>
+
+      {sent ? (
+        <div className="enquiry sent anim">
+          <div className="sent-badge" aria-hidden="true"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6L9 17l-5-5" /></svg></div>
+          <h2>Your enquiry is ready to send</h2>
+          <p>We have opened your email app with the details filled in. Send it and our team will respond, usually within a working day.</p>
+          <button className="btn primary" onClick={() => { setSent(false); setF({ name: '', org: '', email: '', phone: '', interest: 'Book a consultation', message: '' }) }}>Start a new enquiry</button>
+        </div>
+      ) : (
+        <div className="enquiry anim">
+          <h2>Send an enquiry</h2>
+          <div className="fgrid two">
+            <label className="field sm"><span>Name</span><input value={f.name} onChange={e => set('name', e.target.value)} placeholder="Your name" /></label>
+            <label className="field sm"><span>Organisation</span><input value={f.org} onChange={e => set('org', e.target.value)} placeholder="Optional" /></label>
+            <label className="field sm"><span>Email</span><input type="email" value={f.email} onChange={e => set('email', e.target.value)} placeholder="you@example.com" /></label>
+            <label className="field sm"><span>Phone</span><input value={f.phone} onChange={e => set('phone', e.target.value)} placeholder="Optional" /></label>
+          </div>
+          <label className="field sm"><span>How can we help?</span>
+            <select value={f.interest} onChange={e => set('interest', e.target.value)}>{['Book a consultation', 'Request a proposal', 'Facility monitoring & accreditation', 'Quality & accreditation', 'Training', 'Health financing', 'Digital health (Genesys)', 'Other'].map(o => <option key={o}>{o}</option>)}</select>
+          </label>
+          <label className="field sm"><span>Message</span><textarea rows="4" value={f.message} onChange={e => set('message', e.target.value)} placeholder="A sentence or two about what you need." /></label>
+          <button className="btn primary wide" onClick={submit}>Send enquiry</button>
+          <p className="hintline">Prefer to write directly? Use the details on the left.</p>
+        </div>
+      )}
     </div>
   </div>)
 }
@@ -419,6 +500,11 @@ function FacilitiesPage({ list, canEdit, userId, reload }) {
   const [adding, setAdding] = useState(false); const [busy, setBusy] = useState(false); const [msg, setMsg] = useState('')
   const [form, setForm] = useState({ name: '', category: '', area: '', address: '', lat: '', lng: '' })
   const [q, setQ] = useState('')
+  const [visits, setVisits] = useState([])
+  const [drawer, setDrawer] = useState(null)
+  useEffect(() => { VIS.list().then(setVisits).catch(() => {}) }, [])
+  const origin = (typeof window !== 'undefined' && window.location) ? window.location.origin : ''
+  function facVisits(f) { return visits.filter(v => (v.facility_id && v.facility_id === f.id) || v.facility_name === f.name) }
   const fileRef = useRef(null)
 
   const groups = {}
@@ -482,7 +568,7 @@ function FacilitiesPage({ list, canEdit, userId, reload }) {
     try { const g = await geocode(f.address || f.name + ' ' + (f.area || '')); if (g) { await FAC.update(f.id, g); await reload() } else setMsg('No match found. Add coordinates manually.') }
     catch (e) { setMsg('Location lookup failed. Add coordinates manually.') } finally { setBusy(false) }
   }
-  async function del(f) { if (!window.confirm('Remove ' + f.name + '?')) return; await FAC.remove(f.id); await reload() }
+  async function del(f) { if (!(await confirmAction('Remove ' + f.name + ' from the facility list?', { title: 'Remove facility', ok: 'Remove', danger: true }))) return; await FAC.remove(f.id); await reload(); toast('Facility removed.') }
 
   return (<div className="page">
     <div className="ptitle"><div><p className="eyebrow">Facilities</p><h2>{list.length} in {areas.length} area{areas.length === 1 ? '' : 's'}</h2></div>
@@ -519,15 +605,27 @@ function FacilitiesPage({ list, canEdit, userId, reload }) {
         <div className="frows">{groups[a].map(f => (<div className="frow" key={f.id}>
           <div className="fmain"><span className="fname">{f.name}</span><span className="fmeta">{[f.category, f.address].filter(Boolean).join(' \u00b7 ') || 'No details'}</span></div>
           <div className="factions">
+            <button className="mini" onClick={() => setDrawer(f)}>History</button>
             {hasCoords(f) ? <span className="pin ok" title="Mapped">&#9679;</span> : (canEdit ? <button className="mini" onClick={() => locate(f)} disabled={busy}>Locate</button> : <span className="pin no">no coords</span>)}
             {canEdit && <button className="mini danger" onClick={() => del(f)}>Remove</button>}
           </div>
         </div>))}</div>
       </div>))}
+    {drawer && (<div className="drawer-scrim" onClick={() => setDrawer(null)}>
+      <div className="drawer anim-right" onClick={e => e.stopPropagation()}>
+        <div className="drawer-head"><div><h3>{drawer.name}</h3><p className="fmeta">{[drawer.category, drawer.area, drawer.address].filter(Boolean).join(' \u00b7 ') || 'No details'}</p></div><button className="mini" onClick={() => setDrawer(null)}>Close</button></div>
+        <h4 className="drawer-sub">Visit history</h4>
+        {facVisits(drawer).length === 0 ? <p className="empty sm">No visits recorded for this facility yet.</p> :
+          <ul className="drawer-visits">{facVisits(drawer).map(v => (
+            <li key={v.id}>
+              <div className="dv-main"><span className="fname">{(v.arrival_time || v.created_at || '').slice(0, 10)}</span><span className="fmeta">{ragText(v.overall_rating)}{v.score != null ? ' \u00b7 ' + v.score + '%' : ''} \u00b7 {v.status}</span></div>
+              {(v.status === 'monitored' || v.status === 'debriefed') && <button className="mini" onClick={() => printDoc('Monitoring Report', buildReport(v, v.debrief || deriveDebrief(v), origin))}>Report</button>}
+            </li>
+          ))}</ul>}
+      </div>
+    </div>)}
   </div>)
 }
-
-/* ---------- map + route ---------- */
 function pinIcon(color, num) {
   const label = num ? '<span style="position:absolute;inset:0;display:grid;place-items:center;transform:rotate(45deg);color:#fff;font:700 11px Lora,serif">' + num + '</span>' : ''
   return L.divIcon({ className: 'rf-pin', html: '<div style="position:relative;width:24px;height:24px"><div style="width:24px;height:24px;background:' + color + ';border:2px solid #fff;border-radius:50% 50% 50% 0;transform:rotate(-45deg);box-shadow:0 2px 5px rgba(0,0,0,.35)"></div>' + label + '</div>', iconSize: [24, 24], iconAnchor: [12, 22], popupAnchor: [0, -20] })
@@ -632,7 +730,7 @@ function AssignPage({ list, userId }) {
     setBusy(true); setMsg('')
     try {
       const rec = await ASG.add({ visit_date: date, area, facility_ids: ids, note: note.trim() }, userId)
-      setSaved(s => [rec].concat(s)); setPicked({}); setNote(''); setMsg('Assignment saved.')
+      setSaved(s => [rec].concat(s)); setPicked({}); setNote(''); setMsg('Assignment saved.'); toast('Assignment saved.')
     } catch (e) { setMsg(e.message || 'Could not save the assignment.') } finally { setBusy(false) }
   }
 
@@ -725,7 +823,7 @@ function EngagePage({ list, identity, role, userId }) {
         lat: coords ? coords.lat : null, lng: coords ? coords.lng : null,
         team, person_in_charge: pic, greeting_confirmed: true
       }, userId)
-      setDone(true)
+      setDone(true); toast('Check-in saved.')
     } catch (e) { setMsg(e.message || 'Could not save the check-in.') } finally { setBusy(false) }
   }
   function reset() { setStep(0); setFacility(null); setArrival(null); setCoords(null); setGeoMsg(''); setTeam([{ name: identity.name, role: roleLabel }]); setPic({ name: '', role: '', phone: '' }); setGreeted(false); setDone(false); setMsg('') }
@@ -980,6 +1078,7 @@ function MonitorPage({ userId }) {
   const [profile, setProfile] = useState({})
   const [hef, setHef] = useState({})
   const [q, setQ] = useState('')
+  const [lightbox, setLightbox] = useState(null)
 
   useEffect(() => { VIS.list().then(setVisits).catch(() => {}) }, [])
   useEffect(() => { const on = () => setOnline(true), off = () => setOnline(false); window.addEventListener('online', on); window.addEventListener('offline', off); return () => { window.removeEventListener('online', on); window.removeEventListener('offline', off) } }, [])
@@ -1032,7 +1131,7 @@ function MonitorPage({ userId }) {
     try {
       await VIS.update(active.id, { monitoring: payload, score: score.pct, overall_rating: score.rag, status: 'monitored' })
       try { localStorage.removeItem(draftKey) } catch (e) {}
-      setSaveState('saved'); setMsg('Assessment saved.')
+      setSaveState('saved'); setMsg('Assessment saved.'); toast('Assessment saved.')
       setVisits(vs => vs.map(v => v.id === active.id ? { ...v, monitoring: payload, score: score.pct, overall_rating: score.rag, status: 'monitored' } : v))
     } catch (e) { setSaveState('pending'); setMsg('Saved locally. It will sync when you are back online; use Sync now to retry.') }
     finally { setBusy(false) }
@@ -1067,6 +1166,11 @@ function MonitorPage({ userId }) {
         <span className="rated">{score.rated}/{totalItems} rated</span>
       </div>
     </div>
+    {(() => { const hefTotal = HEFAMAA_FORM.reduce((n, s) => n + s.fields.length, 0); const hefDone = HEFAMAA_FORM.reduce((n, s) => n + hefAnswered(s, hef), 0); const ragPct = Math.round((score.rated / totalItems) * 100); const hefPct = Math.round((hefDone / hefTotal) * 100); return (
+      <div className="mon-meter">
+        <div className="meter-row"><span className="meter-lab">Ratings</span><div className="meter-track"><div className="meter-fill" style={{ width: ragPct + '%' }} /></div><span className="meter-val">{score.rated}/{totalItems}</span></div>
+        <div className="meter-row"><span className="meter-lab">HEFAMAA form</span><div className="meter-track"><div className="meter-fill alt" style={{ width: hefPct + '%' }} /></div><span className="meter-val">{hefDone}/{hefTotal}</span></div>
+      </div>) })()}
     {msg && <p className="auth-msg block">{msg}</p>}
     <p className="mon-rules">Evidence rules: a photo on every red item, a voice note per category, and GPS captured at check-in.</p>
 
@@ -1099,7 +1203,7 @@ function MonitorPage({ userId }) {
             </div>
             {it.evidence && it.evidence.length > 0 && (<div className="evstrip">{it.evidence.map((ev, ei) => (
               <div className="evthumb" key={ei}>
-                {ev.type === 'voice' ? <audio controls src={ev.data} /> : <img src={ev.data} alt={ev.type} />}
+                {ev.type === 'voice' ? <audio controls src={ev.data} /> : <img src={ev.data} alt={ev.type} onClick={() => setLightbox(ev.data)} style={{ cursor: 'zoom-in' }} />}
                 <button className="evx" onClick={() => removeEvidence(key, ei)}>&times;</button>
               </div>
             ))}</div>)}
@@ -1114,6 +1218,7 @@ function MonitorPage({ userId }) {
       <span className="save-note">{saveState === 'saved' ? 'Saved' : saveState === 'pending' ? 'Pending sync' : 'Draft saved on this device'}</span>
     </div>
     <p className="hintline">The debrief, e-signature and report generation follow in Stage 6.</p>
+    {lightbox && <div className="lightbox" onClick={() => setLightbox(null)}><img src={lightbox} alt="Evidence" /><button className="lightbox-x" onClick={() => setLightbox(null)} aria-label="Close">&times;</button></div>}
   </div>)
 }
 
@@ -1205,6 +1310,15 @@ function buildLetter(v, d, origin) {
     '<p class="muted">Issued in support of the HEFAMAA regulatory mandate. This letter is not legal advice.</p>'
 }
 
+function buildHefamaaDoc(v, origin) {
+  const date = (v.arrival_time || v.created_at || '').slice(0, 10)
+  const hef = (v.monitoring && v.monitoring.hefamaa) || {}
+  const body = HEFAMAA_FORM.map(sec => {
+    const rows = sec.fields.filter(f => { const val = hef[f[0]]; return Array.isArray(val) ? val.length : (val != null && val !== '') }).map(f => '<tr><td>' + f[1] + '</td><td>' + (Array.isArray(hef[f[0]]) ? hef[f[0]].join(', ') : String(hef[f[0]])) + '</td></tr>').join('')
+    return '<h3>' + sec.title + '</h3>' + (rows ? '<table>' + rows + '</table>' : '<p class="muted">Not completed.</p>')
+  }).join('')
+  return docHead(origin) + '<h1>HEFAMAA Facility Inspection Form</h1><p><strong>Facility:</strong> ' + v.facility_name + ' &middot; <strong>Area:</strong> ' + (v.area || '') + ' &middot; <strong>Date:</strong> ' + date + '</p>' + body + '<p class="muted">Digitised Lagos HEFAMAA Facility Inspection Tool (Primary Health Care). Prepared by REALMS Healthcare Services Consulting Limited.</p>'
+}
 function SignaturePad({ value, onChange }) {
   const ref = useRef(null); const drawing = useRef(false); const last = useRef(null)
   useEffect(() => { const c = ref.current; if (!c) return; const ctx = c.getContext('2d'); ctx.lineWidth = 2.2; ctx.lineCap = 'round'; ctx.strokeStyle = '#241536' }, [])
@@ -1247,7 +1361,7 @@ function DebriefPage({ userId }) {
       setPropName(existing.proprietor_name || (v.person_in_charge && v.person_in_charge.name) || ''); setAck(!!existing.proprietor_ack); setSignature(existing.signature || '')
       setGenesys(!!existing.genesys_interest); setGenesysNote(existing.genesys_note || ''); setClosure(!!existing.closure_recommended); setEscalate(!!existing.escalated)
     } else {
-      const d = deriveDebrief(v); setStrengths(d.strengths); setGaps(d.gaps); setDeadline(''); setReinspection('2 weeks'); setLetterIssued(true)
+      const d = deriveDebrief(v); setStrengths(d.strengths); setGaps(d.gaps); setDeadline(''); setReinspection(getSettings().default_reinspection || '2 weeks'); setLetterIssued(true)
       setPropName((v.person_in_charge && v.person_in_charge.name) || ''); setAck(false); setSignature('')
       setGenesys(false); setGenesysNote(''); setClosure(false); setEscalate(false)
     }
@@ -1263,12 +1377,16 @@ function DebriefPage({ userId }) {
     const d = payload(); const firstClose = active.status !== 'debriefed'
     try {
       await VIS.update(active.id, { debrief: d, status: 'debriefed' })
-      setSaveState('saved'); setMsg('Debrief saved.')
+      setSaveState('saved'); setMsg('Debrief saved.'); toast('Debrief saved.')
       setVisits(vs => vs.map(v => v.id === active.id ? { ...v, debrief: d, status: 'debriefed' } : v))
       if (firstClose) {
         try {
           await NOTIF.add({ type: 'visit_completed', visit_id: active.id, facility_name: active.facility_name, area: active.area, channel: 'customer_service', status: 'pending', message: 'Visit completed at ' + active.facility_name + ' (' + (active.area || '') + '). Customer service to call the facility to hear how the visit went.' }, userId)
         } catch (e) {}
+        const cs = getSettings(); const csMsg = 'RHSC: monitoring completed at ' + active.facility_name + '. Please call the facility to follow up.'
+        if (cs.cs_email) { try { sendNotify({ channel: 'email', to: cs.cs_email, subject: 'Visit completed: ' + active.facility_name, message: csMsg }) } catch (e) {} }
+        if (cs.cs_phone) { try { sendNotify({ channel: 'sms', to: cs.cs_phone, message: csMsg }) } catch (e) {} }
+        if (cs.cs_whatsapp) { try { sendNotify({ channel: 'whatsapp', to: cs.cs_whatsapp, message: csMsg }) } catch (e) {} }
       }
     } catch (e) { setSaveState('pending'); setMsg('Saved locally. It will sync when you are back online; use Sync now to retry.') }
     finally { setBusy(false) }
@@ -1348,6 +1466,7 @@ function DebriefPage({ userId }) {
       <button className="btn primary" onClick={save} disabled={busy}>{busy ? 'Saving\u2026' : 'Save debrief'}</button>
       {saveState === 'pending' && <button className="btn ghost" onClick={save}>Sync now</button>}
       <button className="btn ghost" onClick={() => printDoc('Monitoring Report', buildReport(active, payload(), origin))}>Monitoring report</button>
+      <button className="btn ghost" onClick={() => printDoc('HEFAMAA Form', buildHefamaaDoc(active, origin))}>HEFAMAA form</button>
       {letterIssued && <button className="btn ghost" onClick={() => printDoc('Compliance Letter', buildLetter(active, payload(), origin))}>Corrective letter</button>}
       {closure && <button className="btn ghost" onClick={() => printDoc('Closure Notice', buildClosure(active, payload(), origin))}>Closure notice</button>}
       <span className="save-note">{saveState === 'saved' ? 'Saved' : saveState === 'pending' ? 'Pending sync' : ''}</span>
@@ -1445,6 +1564,27 @@ function FollowUpsPage({ userId, identity }) {
   </div>)
 }
 
+/* ---------- settings (HQ) ---------- */
+function SettingsPage() {
+  const [s, setS] = useState(getSettings())
+  const set = (k, v) => setS(p => ({ ...p, [k]: v }))
+  function save() { saveSettings(s); toast('Settings saved.') }
+  return (<div className="page">
+    <div className="ptitle"><div><p className="eyebrow">Settings</p><h2>Customer service & defaults</h2></div></div>
+    <div className="settings-card">
+      <h3>Customer service contact</h3>
+      <p className="hintline">When a visit is completed, customer service is alerted here so they can call the facility. Automated send uses the connected SMS, WhatsApp or email provider.</p>
+      <div className="fgrid two">
+        <label className="field sm"><span>Email</span><input value={s.cs_email || ''} onChange={e => set('cs_email', e.target.value)} placeholder="care@example.com" /></label>
+        <label className="field sm"><span>Phone (SMS)</span><input value={s.cs_phone || ''} onChange={e => set('cs_phone', e.target.value)} placeholder="0803..." /></label>
+        <label className="field sm"><span>WhatsApp</span><input value={s.cs_whatsapp || ''} onChange={e => set('cs_whatsapp', e.target.value)} placeholder="234..." /></label>
+        <label className="field sm"><span>Default re-inspection window</span><select value={s.default_reinspection || '2 weeks'} onChange={e => set('default_reinspection', e.target.value)}>{REINSPECT.map(r => <option key={r} value={r}>{r}</option>)}</select></label>
+      </div>
+      <button className="btn primary" onClick={save}>Save settings</button>
+    </div>
+  </div>)
+}
+
 /* ---------- reports (Stage 7) & analytics (Stage 8) ---------- */
 function download(name, content, type) {
   const blob = new Blob([content], { type }); const url = URL.createObjectURL(blob)
@@ -1523,7 +1663,8 @@ function ReportsPage({ facilities, userId, scope, role }) {
   const [area, setArea] = useState('all'); const [status, setStatus] = useState('all')
   const [notifyId, setNotifyId] = useState(null)
   const [q, setQ] = useState('')
-  useEffect(() => { VIS.list().then(setVisits).catch(() => {}) }, [])
+  const [loading, setLoading] = useState(true)
+  useEffect(() => { VIS.list().then(v => { setVisits(v); setLoading(false) }).catch(() => setLoading(false)) }, [])
   const origin = (typeof window !== 'undefined' && window.location) ? window.location.origin : ''
   const readOnly = role === 'rhsc_hq' || role === 'hefamaa_reviewer'
   const scopedVisits = scope && scope !== 'all' ? visits.filter(v => (v.area || 'Unassigned') === scope) : visits
@@ -1554,7 +1695,8 @@ function ReportsPage({ facilities, userId, scope, role }) {
       ))}</div>
     </div>)}
 
-    {rows.length === 0 ? <p className="empty">No visits match these filters.</p> :
+    {loading ? <div>{[0, 1, 2, 3].map(i => <div key={i} className="skeleton skel-row" />)}</div> :
+      rows.length === 0 ? <p className="empty">No visits match these filters.</p> :
       <div className="rep-rows">{rows.map(v => (
         <div className="rep-row" key={v.id}>
           <div className="rep-main"><span className="fname">{v.facility_name}</span><span className="fmeta">{v.area} &middot; {(v.arrival_time || v.created_at || '').slice(0, 10)}</span></div>
@@ -1562,6 +1704,7 @@ function ReportsPage({ facilities, userId, scope, role }) {
           <div className="rep-actions">
             <button className="mini" onClick={() => doc(v, 'report')}>Report</button>
             <button className="mini" onClick={() => doc(v, 'letter')}>Letter</button>
+            <button className="mini" onClick={() => printDoc('HEFAMAA Form', buildHefamaaDoc(v, origin))}>HEFAMAA</button>
             {!readOnly && <button className="mini" onClick={() => setNotifyId(notifyId === v.id ? null : v.id)}>Notify</button>}
           </div>
           {!readOnly && notifyId === v.id && <NotifyPanel v={v} summary={summary} />}
@@ -1732,7 +1875,8 @@ function TabIcon({ id }) {
     reports: 'M7 3h7l5 5v13H7zM14 3v5h5M9 13h6M9 17h6',
     analytics: 'M4 20V11M10 20V4M16 20v-7M22 20H2',
     myfacility: 'M5 21h14M7 21V7l5-4 5 4v14M10 13h4M10 17h4',
-    followups: 'M4 4h5l2 5-3 2a12 12 0 006 6l2-3 5 2v5a2 2 0 01-2 2A16 16 0 014 6a2 2 0 012-2'
+    followups: 'M4 4h5l2 5-3 2a12 12 0 006 6l2-3 5 2v5a2 2 0 01-2 2A16 16 0 014 6a2 2 0 012-2',
+    settings: 'M12 15a3 3 0 100-6 3 3 0 000 6zM19 12a7 7 0 00-.1-1l2-1.6-2-3.4-2.4 1a7 7 0 00-1.7-1l-.3-2.6H9.5l-.3 2.6a7 7 0 00-1.7 1l-2.4-1-2 3.4L3.1 11a7 7 0 000 2l-2 1.6 2 3.4 2.4-1a7 7 0 001.7 1l.3 2.6h4.9l.3-2.6a7 7 0 001.7-1l2.4 1 2-3.4-2-1.6a7 7 0 00.1-1z'
   }[id] || 'M4 4h16v16H4z'
   return (<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d={p} /></svg>)
 }
@@ -1843,10 +1987,10 @@ export default function App() {
     catch (e) { setDbError((e && e.message) || 'Could not read the database.') }
   }
   async function clearAll() {
-    if (!window.confirm('Remove ALL facilities, visits and assignments? This cannot be undone.')) return
+    if (!(await confirmAction('This removes ALL facilities, visits and assignments. It cannot be undone.', { title: 'Clear all data', ok: 'Clear everything', danger: true }))) return
     try { await clearAllData() } catch (e) {}
     try { localStorage.setItem('realms_no_seed', '1') } catch (e) {}
-    seedTriedRef.current = true; setFacs([]); setDbError('')
+    seedTriedRef.current = true; setFacs([]); setDbError(''); toast('All data cleared.')
   }
   function editName() {
     const n = window.prompt('Your name (only your first name is used to greet you)', (user && user.name) || '')
@@ -1895,6 +2039,7 @@ export default function App() {
     else if (appTab === 'reports') body = <ReportsPage facilities={facs} userId={user.id} role={effRole} />
     else if (appTab === 'myfacility') body = <ProprietorPage />
     else if (appTab === 'followups') body = <FollowUpsPage userId={user.id} identity={identity} />
+    else if (appTab === 'settings') body = <SettingsPage />
     else if (appTab === 'assign') body = <AssignPage list={facs} userId={user.id} />
     else body = <Dashboard identity={effId} role={effRole} onOpen={setAppTab} facilities={facs} onSeed={loadSample} onClear={clearAll} dbError={dbError} />
   } else {
@@ -1923,6 +2068,7 @@ export default function App() {
 
   return (<div className="realms">
     <style>{css}</style>
+    <Overlays />
     {!showAuthBare && <SiteBar tab={tab} setTab={(t2) => { setView('site'); setTab(t2) }} onSignIn={() => setView('auth')} lang={lang} setLang={changeLang} t={t} />}
     <main id="top" className={showAuthBare ? 'main-auth' : ''}>{body}</main>
     {!showAuthBare && (<footer className="foot"><div className="foot-inner">
@@ -2564,4 +2710,82 @@ const css = `
 .realms .hq-status.s-assessed { color:#2E6B8A; }
 .realms .hq-status.s-debriefed { color:#2E7D46; }
 @media (max-width:760px){ .realms .hq-stats { grid-template-columns:repeat(3,1fr); } .realms .hq-tr { grid-template-columns:2fr 1fr 1fr; } .realms .hq-tr span:nth-child(3), .realms .hq-tr span:nth-child(4) { display:none; } }
+
+/* ===== contact page ===== */
+.realms .contact-page { max-width:1120px; }
+.realms .contact-hero { text-align:center; max-width:720px; margin:0 auto clamp(26px,4vw,44px); }
+.realms .contact-hero h1 { font-size:clamp(30px,5vw,48px); line-height:1.06; color:var(--p-deep); letter-spacing:-0.01em; }
+.realms .contact-lede { font-size:17px; color:#5A4C74; margin-top:14px; }
+.realms .contact-split { display:grid; grid-template-columns:0.95fr 1.05fr; gap:20px; align-items:stretch; }
+.realms .contact-panel { position:relative; overflow:hidden; border-radius:22px; padding:clamp(26px,3vw,38px); color:#fff; background:linear-gradient(150deg,#4C3B66 0%,#574277 45%,#6D4B8E 100%); box-shadow:0 24px 60px rgba(58,21,96,.28); }
+.realms .panel-glow { position:absolute; width:340px; height:340px; right:-120px; top:-120px; background:radial-gradient(circle,rgba(169,143,196,.55),transparent 70%); pointer-events:none; }
+.realms .contact-panel h2 { color:#fff; font-size:24px; margin-bottom:20px; position:relative; }
+.realms .reach { list-style:none; margin:0 0 24px; padding:0; display:grid; gap:16px; position:relative; }
+.realms .reach li { display:flex; gap:14px; align-items:flex-start; }
+.realms .reach-ic { flex:0 0 auto; width:40px; height:40px; border-radius:12px; display:grid; place-items:center; background:rgba(255,255,255,.14); color:#fff; }
+.realms .reach-k { display:block; font-size:11.5px; letter-spacing:.1em; text-transform:uppercase; color:#D9C9EC; margin-bottom:2px; }
+.realms .reach li em { font-style:normal; font-size:15px; color:#fff; line-height:1.4; }
+.realms .panel-cta { display:flex; flex-wrap:wrap; gap:10px; position:relative; }
+.realms .enquiry { background:#fff; border:1px solid var(--line); border-radius:22px; padding:clamp(24px,3vw,34px); box-shadow:0 12px 34px rgba(58,21,96,.08); }
+.realms .enquiry h2 { color:var(--p-deep); font-size:22px; margin-bottom:18px; }
+.realms .btn.wide { width:100%; justify-content:center; }
+.realms .enquiry.sent { display:flex; flex-direction:column; align-items:center; text-align:center; justify-content:center; gap:6px; }
+.realms .sent-badge { width:64px; height:64px; border-radius:50%; display:grid; place-items:center; background:#E6F4EA; color:#2E7D46; margin-bottom:8px; }
+.realms .enquiry.sent p { color:#5A4C74; max-width:380px; margin-bottom:12px; }
+@media (max-width:820px){ .realms .contact-split { grid-template-columns:1fr; } }
+
+/* ===== toasts + modal ===== */
+.realms .toaster { position:fixed; left:50%; bottom:28px; transform:translateX(-50%); z-index:9999; display:flex; flex-direction:column; gap:8px; align-items:center; pointer-events:none; }
+.realms .toast { pointer-events:auto; background:#2E2140; color:#fff; font-size:14px; padding:11px 18px; border-radius:12px; box-shadow:0 10px 30px rgba(0,0,0,.28); animation:toastin .28s ease; max-width:90vw; }
+.realms .toast.ok { background:#2E7D46; } .realms .toast.warn { background:#9A5B12; } .realms .toast.err { background:#B4442E; }
+@keyframes toastin { from { opacity:0; transform:translateY(10px) } to { opacity:1; transform:none } }
+.realms .modal-scrim { position:fixed; inset:0; z-index:9998; background:rgba(36,21,54,.5); backdrop-filter:blur(2px); display:grid; place-items:center; padding:20px; }
+.realms .modal { background:#fff; border-radius:18px; padding:26px; max-width:400px; width:100%; box-shadow:0 30px 70px rgba(0,0,0,.3); }
+.realms .modal h3 { color:var(--p-deep); font-size:19px; margin-bottom:8px; }
+.realms .modal p { color:#5A4C74; font-size:14.5px; margin-bottom:20px; }
+.realms .modal-actions { display:flex; justify-content:flex-end; gap:10px; }
+.realms .btn.danger { background:#B4442E; color:#fff; }
+.realms .btn.danger:hover { background:#98351f; }
+
+/* completion meter */
+.realms .mon-meter { display:grid; gap:8px; margin:4px 0 14px; }
+.realms .meter-row { display:grid; grid-template-columns:88px 1fr auto; gap:10px; align-items:center; }
+.realms .meter-lab { font-size:12px; color:#8A7AA6; }
+.realms .meter-track { height:8px; border-radius:6px; background:var(--lav2); overflow:hidden; }
+.realms .meter-fill { height:100%; background:linear-gradient(90deg,var(--p),var(--v)); border-radius:6px; transition:width .35s ease; }
+.realms .meter-fill.alt { background:linear-gradient(90deg,#2E7D46,#7FC29B); }
+.realms .meter-val { font-size:12px; color:#5A4C74; font-variant-numeric:tabular-nums; }
+
+/* lightbox */
+.realms .lightbox { position:fixed; inset:0; z-index:9998; background:rgba(20,10,32,.9); display:grid; place-items:center; padding:24px; cursor:zoom-out; }
+.realms .lightbox img { max-width:92vw; max-height:88vh; border-radius:10px; box-shadow:0 20px 60px rgba(0,0,0,.5); }
+.realms .lightbox-x { position:fixed; top:18px; right:22px; background:rgba(255,255,255,.15); color:#fff; border:none; width:40px; height:40px; border-radius:50%; font-size:24px; cursor:pointer; }
+
+/* facility history drawer */
+.realms .drawer-scrim { position:fixed; inset:0; z-index:9997; background:rgba(36,21,54,.45); display:flex; justify-content:flex-end; }
+.realms .drawer { width:min(420px,92vw); background:#fff; height:100%; overflow-y:auto; padding:24px; box-shadow:-20px 0 50px rgba(0,0,0,.2); }
+.realms .anim-right { animation:slidein .26s ease; }
+@keyframes slidein { from { transform:translateX(24px); opacity:.4 } to { transform:none; opacity:1 } }
+.realms .drawer-head { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; margin-bottom:16px; }
+.realms .drawer-head h3 { color:var(--p-deep); font-size:19px; }
+.realms .drawer-sub { color:var(--v); font-size:12px; letter-spacing:.06em; text-transform:uppercase; margin-bottom:10px; }
+.realms .drawer-visits { list-style:none; margin:0; padding:0; display:grid; gap:8px; }
+.realms .drawer-visits li { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:12px 14px; border:1px solid var(--line); border-radius:12px; }
+.realms .dv-main { display:flex; flex-direction:column; }
+
+/* settings */
+.realms .settings-card { background:#fff; border:1px solid var(--line); border-radius:16px; padding:24px; max-width:680px; }
+.realms .settings-card h3 { color:var(--p-deep); font-size:17px; margin-bottom:6px; }
+
+/* ===== polish: focus, motion, hovers, empty, skeleton ===== */
+.realms .btn { transition:transform .15s ease, box-shadow .15s ease, background .15s ease, color .15s ease; }
+.realms .btn.primary:hover, .realms .btn.light:hover { transform:translateY(-1px); }
+.realms a:focus-visible, .realms button:focus-visible, .realms input:focus-visible, .realms select:focus-visible, .realms textarea:focus-visible, .realms summary:focus-visible { outline:2px solid var(--p); outline-offset:2px; border-radius:6px; }
+.realms .empty { text-align:center; color:#8A7AA6; padding:34px 20px; border:1px dashed var(--line); border-radius:14px; background:var(--lav1); }
+.realms .empty.sm { padding:18px; }
+.realms .skeleton { position:relative; overflow:hidden; background:var(--lav2); border-radius:10px; }
+.realms .skeleton::after { content:''; position:absolute; inset:0; transform:translateX(-100%); background:linear-gradient(90deg,transparent,rgba(255,255,255,.6),transparent); animation:shimmer 1.3s infinite; }
+@keyframes shimmer { 100% { transform:translateX(100%) } }
+.realms .skel-row { height:58px; margin-bottom:10px; }
+@media (prefers-reduced-motion: reduce) { .realms *, .realms *::after, .realms *::before { animation-duration:.001ms !important; transition-duration:.001ms !important; } .realms .anim { animation:none !important; opacity:1 !important; transform:none !important; } }
 `
