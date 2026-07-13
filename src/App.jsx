@@ -334,21 +334,19 @@ export default function App() {
   const [view, setView] = useState('site') // 'site' | 'auth' | 'app'
   const [user, setUser] = useState(null)   // { email, id? }
   const [role, setRole] = useState(null)
-  const [ready, setReady] = useState(MODE === 'demo')
 
   // session bootstrap
   useEffect(() => {
     if (MODE === 'supabase') {
-      supabase.auth.getSession().then(({ data }) => {
-        const s = data.session
-        if (s) { setUser({ email: s.user.email, id: s.user.id }); loadRole(s.user.id) }
-        setReady(true)
-      })
-      const { data: sub } = supabase.auth.onAuthStateChange((_e, s) => {
-        if (s) { setUser({ email: s.user.email, id: s.user.id }); loadRole(s.user.id); setView('app') }
-        else { setUser(null); setRole(null); setView('site') }
-      })
-      return () => sub.subscription.unsubscribe()
+      let subscription
+      try {
+        const res = supabase.auth.onAuthStateChange((_e, s) => {
+          if (s && s.user) { setUser({ email: s.user.email, id: s.user.id }); loadRole(s.user.id); setView('app') }
+          else { setUser(null); setRole(null); setView(prev => (prev === 'app' ? 'site' : prev)) }
+        })
+        subscription = res.data.subscription
+      } catch (e) { /* site still renders */ }
+      return () => { if (subscription) subscription.unsubscribe() }
     } else {
       try {
         const raw = localStorage.getItem('realms_demo_user')
@@ -360,8 +358,10 @@ export default function App() {
 
   async function loadRole(uid) {
     if (MODE !== 'supabase') return
-    const { data } = await supabase.from('kv').select('v').eq('user_id', uid).eq('k', 'role').maybeSingle()
-    if (data && data.v) setRole(typeof data.v === 'string' ? data.v : data.v.role)
+    try {
+      const { data } = await supabase.from('kv').select('v').eq('user_id', uid).eq('k', 'role').maybeSingle()
+      if (data && data.v) setRole(typeof data.v === 'string' ? data.v : data.v.role)
+    } catch (e) { /* leave role unset; role picker will show */ }
   }
 
   async function pickRole(id) {
@@ -411,7 +411,7 @@ export default function App() {
         : <SiteBar tab={tab} setTab={(t) => { setView('site'); setTab(t) }} onSignIn={() => setView('auth')} />)}
 
       <main id="top" className={showAuthBare ? 'main-auth' : ''}>
-        {ready || MODE === 'demo' ? body : <div className="page"><p className="loading">Loading\u2026</p></div>}
+        {body}
       </main>
 
       {!showAppBar && !showAuthBare && (
