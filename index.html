@@ -8,6 +8,26 @@
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Lora:ital,wght@0,400;0,500;0,600;0,700;1,400;1,500&display=swap" rel="stylesheet" />
+    <script>
+      // Last-resort net: if a load-time script error leaves the app unmounted,
+      // show a readable message instead of a blank page.
+      (function () {
+        function fallback(detail) {
+          var root = document.getElementById('root');
+          if (root && !root.hasChildNodes()) {
+            root.innerHTML =
+              '<div style="min-height:100vh;display:grid;place-items:center;font-family:Lora,Georgia,serif;color:#642C90;text-align:center;padding:40px">' +
+              '<div><h2 style="margin:0 0 8px">Realms could not load.</h2>' +
+              '<p style="color:#7A6A93;max-width:440px;margin:0 auto">A script error occurred while starting the app. If you just set Supabase keys in Vercel, check that the URL begins with https:// and the anon key has no extra spaces or quotes, then redeploy.</p>' +
+              (detail ? '<p style="color:#B7A6CE;font-size:12px;margin-top:14px">' + detail + '</p>' : '') +
+              '</div></div>';
+          }
+        }
+        window.addEventListener('error', function (e) { fallback(e && e.message ? String(e.message) : ''); });
+        window.addEventListener('unhandledrejection', function () { fallback(''); });
+        window.addEventListener('load', function () { setTimeout(function () { fallback(''); }, 2500); });
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

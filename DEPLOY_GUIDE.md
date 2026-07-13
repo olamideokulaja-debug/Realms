@@ -54,3 +54,10 @@ create policy "own rows" on kv
 
 ## Next stage
 Stage 3 (Map) adds facility-list ingestion, area clustering and route planning onto the Field Monitor and Team Leader dashboards.
+
+## Troubleshooting a blank page
+A blank page almost always means a bad Supabase value. This build now falls back to demo mode instead of blanking, so if the site loads but shows the small "Demo mode" note on the sign-in screen, your keys did not take. Check in Vercel:
+- `VITE_SUPABASE_URL` begins with `https://` and ends in `.supabase.co`, with no quotes or spaces.
+- `VITE_SUPABASE_ANON_KEY` is the long anon public key, pasted whole with no line breaks.
+- Both are set for the Production environment, then redeploy so the new values are built in.
+To see the exact issue, open the site, press F12, and read the Console tab. A line starting with "Realms:" will name the problem.
