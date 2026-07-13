@@ -4,7 +4,7 @@ import 'leaflet/dist/leaflet.css'
 import { supabase, MODE } from './supabaseClient.js'
 import { facilities as FAC, assignments as ASG, visits as VIS, notifications as NOTIF, calls as CALLS, facilitiesFromCSV, orderRoute, googleMapsDirUrl, geocode, uploadEvidence, sendNotify, seedSampleData, clearAllData } from './data.js'
 
-const BUILD = 'field-2026-07-14b'
+const BUILD = 'field-2026-07-14c'
 
 /*
   REALMS FIELD — Stages 1 to 3 (single-file App.jsx + supabaseClient.js + data.js)
@@ -54,7 +54,7 @@ const SERVICES = [
   { t: 'Digital health & technology', d: 'Digital transformation for healthcare, powered by Genesys, our own Electronic Medical Records (EMR) platform, from patient records to real-time monitoring.', img: '/photos/g-health.jpg', href: GENESYS_URL }
 ]
 
-const IMPACT_STATS = [ { v: '25', l: 'Years of experience' }, { v: '1000+', l: 'Facilities monitored' }, { v: '20+', l: 'Projects delivered' } ]
+const IMPACT_STATS = [ { v: '25+', l: 'Years of experience' }, { v: '1000+', l: 'Facilities monitored' }, { v: '20+', l: 'Projects delivered' } ]
 const PARTNERS = ['Vatebra Limited', 'Lagos State Ministry of Health', 'HEFAMAA']
 const LEADERS = [
   { name: 'Dr. Olamide Okulaja', role: 'Founder & Executive Chairman', photo: '/photos/olamide.jpg', bio: 'A healthcare systems leader whose expertise in systems reform, policy and strategic leadership guides RHSC. His career spans healthcare financing, policy and advocacy, with senior roles at PharmAccess Foundation, the International Finance Corporation (World Bank Group) and the Lagos State Ministry of Health, where he led major universal health coverage and diagnostics initiatives.' },
@@ -1927,7 +1927,7 @@ export default function App() {
     <main id="top" className={showAuthBare ? 'main-auth' : ''}>{body}</main>
     {!showAuthBare && (<footer className="foot"><div className="foot-inner">
       <div className="foot-brand"><img className="foot-mark" src="/rhsc-mark.png" alt="RHSC" /><span>REALMS Healthcare Services Consulting Limited</span></div>
-      <p>In collaboration with HEFAMAA, Lagos State.</p><p className="foot-tag">{t('tagline')}</p>
+      <p className="foot-tag">{t('tagline')}</p>
     </div></footer>)}
   </div>)
 }
@@ -1981,7 +1981,7 @@ const css = `
 .realms .tagline { font-style:italic; color:#8A7AA6; font-size:15px; }
 .realms .hero-art { display:flex; justify-content:center; }
 .realms .art-panel { width:min(400px,86vw); border-radius:26px; padding:clamp(24px,3.5vw,42px); background:radial-gradient(circle at 50% 30%, var(--lav1), var(--lav2)); box-shadow:0 26px 64px rgba(122,52,168,.16); border:1px solid #EBDCF8; }
-.realms .home-strip { display:grid; grid-template-columns:repeat(4,1fr); gap:16px; margin-top:clamp(30px,4vw,52px); }
+.realms .home-strip { display:flex; justify-content:center; flex-wrap:wrap; gap:clamp(28px,7vw,88px); margin-top:clamp(30px,4vw,52px); text-align:center; }
 .realms .mini-stat { text-align:center; padding:20px 12px; background:var(--lav1); border:1px solid var(--line); border-radius:14px; }
 .realms .mini-value { display:block; font-size:34px; font-weight:700; color:var(--p); line-height:1; margin-bottom:8px; }
 .realms .mini-label { font-size:12.5px; color:#5A4C74; }
@@ -2437,7 +2437,7 @@ const css = `
 .realms .cta-band { max-width:1000px; margin:34px auto 0; background:linear-gradient(135deg,var(--p-deep),var(--p-mid)); border-radius:20px; padding:clamp(28px,4vw,44px); text-align:center; color:#fff; }
 .realms .cta-band h2 { color:#fff; font-size:clamp(22px,3vw,30px); margin-bottom:14px; }
 .realms .cta-band p { color:#F1E5FB; margin-bottom:18px; }
-.realms .btn.ghost.onlight { border-color:rgba(255,255,255,.55); color:#fff; }
+.realms .btn.ghost.onlight { border-color:rgba(255,255,255,.7); background:rgba(255,255,255,.16); color:#fff; }
 .realms .btn.ghost.onlight:hover { background:#fff; color:var(--p-deep); }
 .realms .mon-lead { display:grid; grid-template-columns:1.2fr 1fr; gap:24px; align-items:center; margin-bottom:30px; }
 .realms .mon-lead-copy p { color:#4A3B66; line-height:1.65; margin-bottom:12px; }
