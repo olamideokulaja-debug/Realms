@@ -4,7 +4,7 @@ import 'leaflet/dist/leaflet.css'
 import { supabase, MODE } from './supabaseClient.js'
 import { facilities as FAC, assignments as ASG, visits as VIS, facilitiesFromCSV, orderRoute, googleMapsDirUrl, geocode, uploadEvidence, sendNotify, seedSampleData, clearAllData } from './data.js'
 
-const BUILD = 'field-2026-07-13c'
+const BUILD = 'field-2026-07-13-final2'
 
 /*
   REALMS FIELD — Stages 1 to 3 (single-file App.jsx + supabaseClient.js + data.js)
@@ -15,8 +15,9 @@ const BUILD = 'field-2026-07-13c'
 */
 
 const SITE_TABS = [
-  { id: 'home', label: 'Home' }, { id: 'process', label: 'Process' },
-  { id: 'services', label: 'Services' }, { id: 'about', label: 'About' }, { id: 'contact', label: 'Contact' }
+  { id: 'home', label: 'Home' }, { id: 'services', label: 'Services' },
+  { id: 'monitoring', label: 'Facility Monitoring & Accreditation' }, { id: 'about', label: 'About' },
+  { id: 'leadership', label: 'Leadership & Staff' }, { id: 'insights', label: 'Insights' }, { id: 'contact', label: 'Contact' }
 ]
 
 const STAGES = [
@@ -36,34 +37,106 @@ const PILLARS = [
 const COVERAGE = [ { label: 'Facilities monitored' }, { label: 'Areas & LGAs covered' }, { label: 'Monitoring visits completed' }, { label: 'Corrective actions to closure' } ]
 
 const PRINCIPLES = [
-  { t: 'Professional in approach', d: 'Structured planning, official identification and a courteous, consistent process on every visit.' },
-  { t: 'Educational in engagement', d: 'We explain findings, their implications and the route to compliance, so facilities improve.' },
-  { t: 'Firm in enforcement', d: 'Evidence-based assessment and clear corrective guidance that protect the residents these facilities serve.' }
+  { t: 'Professional in approach', d: 'Structured planning, official identification and a courteous, consistent process on every engagement.' },
+  { t: 'Educational in engagement', d: 'We explain findings, their implications and the route to compliance, so partners and facilities improve.' },
+  { t: 'Firm in enforcement', d: 'Evidence-based assessment and clear corrective guidance that protect the people these facilities serve.' }
 ]
+
+// Genesys = GeneSys Health Information Systems Limited (RHSC's EMR platform)
+const GENESYS_URL = 'https://www.genesys-health.com/'
+
+const SERVICES = [
+  { t: 'Strategy & advisory', d: 'Growth, market-entry and operational strategy for health providers, investors and government, grounded in evidence and delivered to implementation.', img: '/photos/g-boardroom.jpg' },
+  { t: 'Quality & accreditation', d: 'Readiness assessments and hands-on support that help facilities meet and hold the standards required for licensing and accreditation.', img: '/photos/g-corridor.jpg' },
+  { t: 'Facility Monitoring & Accreditation', d: 'As a licensed HEFAMAA monitoring operator, we carry out routine, evidence-based monitoring of health facilities across Lagos State.', img: '/photos/team.jpg', to: 'monitoring' },
+  { t: 'Training & capacity building', d: 'Practical training and mentoring for facility teams, regulators and operators, building the knowledge that prevents non-compliance.', img: '/photos/meeting.jpg' },
+  { t: 'Health financing', d: 'Advisory on health financing, insurance design and sustainable funding models for providers, programmes and the public sector.', img: '/photos/g-handshake.jpg' },
+  { t: 'Digital health & technology', d: 'Digital transformation for healthcare, powered by Genesys, our own Electronic Medical Records (EMR) platform, from patient records to real-time monitoring.', img: '/photos/g-health.jpg', href: GENESYS_URL }
+]
+
+const IMPACT_STATS = [ { v: '\u2014', l: 'Years of experience' }, { v: '\u2014', l: 'Facilities supported' }, { v: '\u2014', l: 'Projects delivered' }, { v: '\u2014', l: 'Partners & clients' } ]
+const CLIENTS_SERVED = ['Government & regulators', 'Private hospitals & clinics', 'Investors & developers', 'Development partners & NGOs', 'Pharma & diagnostics']
+const STAFF = [
+  {
+    name: 'Rev. Dr Solomon Chidiebere Nweke', role: 'Team Lead', unit: 'Field Monitoring Team', lead: true,
+    purpose: 'Plans, coordinates, supervises and leads daily monitoring across assigned Lagos State health facilities, ensuring field operations meet HEFAMAA standards and advance quality, patient safety and regulatory compliance.',
+    duties: ['Pre-field planning, route planning and team briefing', 'Leadership, supervision and team safety in the field', 'Official representation and stakeholder engagement with HEFAMAA', 'Supervises checklist-based inspections and photographic evidence', 'Documentation, quality assurance and confidentiality', 'Exit debriefs, corrective actions and next regulatory steps', 'Reporting, escalation of critical findings and record-keeping', 'Professional ethics, integrity and accountability']
+  },
+  {
+    name: 'Ojuma Joy', role: 'Registered Nurse, Monitoring Officer', unit: 'Field Monitoring Team',
+    purpose: 'Supports routine facility assessment across allocated local government areas, combining accurate field documentation with professional nursing oversight and regulatory guidance.',
+    duties: ['Facility mapping and route planning with Google Maps', 'Documents staffing, duty rosters, equipment, wards, beds and services', 'Facility debriefing and practical corrective guidance', 'Assesses nursing quality, uniforms, practising licences and staffing', 'Daily reporting and data entry into approved templates', 'Geographic data management for coverage planning']
+  },
+  {
+    name: 'Anele Goodnews', role: 'Medical Laboratory Scientist, Monitoring Agent', unit: 'Field Monitoring Team',
+    purpose: 'Evaluates laboratory services, personnel, infrastructure, documentation and biosafety practices during routine monitoring, ensuring findings are objective and aligned with HEFAMAA requirements.',
+    duties: ['Assesses medical laboratory services against licensed scope', 'Verifies laboratory personnel qualifications and licences', 'Inspects equipment, infrastructure and infection control', 'Reviews test registers, QC records and reagent inventories', 'Evaluates biosafety, PPE and specimen handling', 'Documents findings on the HEFAMAA checklist', 'Debriefs facilities and compiles reports in Word and Excel']
+  },
+  {
+    name: 'Registered Nurse, Monitoring Officer', role: 'Role profile', unit: 'Iyana-Ipaja & Ifako-Ijaiye Monitoring Areas', roleOnly: true,
+    purpose: 'Supports HEFAMAA-aligned facility monitoring across Iyana-Ipaja and Ifako-Ijaiye, promoting safe, compliant and high-quality healthcare delivery.',
+    duties: ['Monitoring planning, scheduling and efficient daily routes', 'Facility mapping and routine inspections to HEFAMAA requirements', 'Daily monitoring reports and team updates', 'Compliance assessment: closure notices and reports of findings', 'Stakeholder engagement, commendation and corrective recommendations', 'Clinical quality, infection prevention, medication safety and records', 'Promotes the Genesys Electronic Medical Records system', 'Monthly OKRs and performance management']
+  }
+]
+const INSIGHTS = [
+  { tag: 'Article', title: '[Thought-leadership article title]', blurb: '[One-line summary of the piece.]', date: '2026' },
+  { tag: 'News', title: '[Company update or milestone]', blurb: '[One-line summary.]', date: '2026' },
+  { tag: 'Report', title: '[Whitepaper or report title]', blurb: '[One-line summary.]', date: '2026' }
+]
+const TESTIMONIALS = [
+  { quote: '[Add a short client testimonial here.]', who: '[Client name, organisation]' },
+  { quote: '[Add a second client testimonial here.]', who: '[Client name, organisation]' }
+]
+const CASE_STUDIES = [
+  { title: '[Case study title]', d: '[What we did and the measurable outcome, in two lines.]' },
+  { title: '[Case study title]', d: '[What we did and the outcome.]' }
+]
+const CERTS = ['[Certification]', '[Partner]', '[Membership]', '[Award]']
+
+// Multi-language for the public site. Yoruba, Hausa and Igbo are first-draft
+// and should be reviewed by native speakers before the final launch.
+const LANGS = [{ code: 'en', label: 'English' }, { code: 'yo', label: 'Yorùbá' }, { code: 'pcm', label: 'Pidgin' }, { code: 'ha', label: 'Hausa' }, { code: 'ig', label: 'Igbo' }]
+const TR = {
+  nav_home: { en: 'Home', yo: 'Ilé', pcm: 'Home', ha: 'Gida', ig: 'Ụlọ' },
+  nav_services: { en: 'Services', yo: 'Iṣẹ́', pcm: 'Services', ha: 'Ayyuka', ig: 'Ọrụ' },
+  nav_monitoring: { en: 'Facility Monitoring & Accreditation', yo: 'Ìbójútó Ilé-ìwòsàn', pcm: 'Facility Monitoring', ha: 'Sa Ido da Amincewa', ig: 'Nlekọta Ụlọ Ọgwụ' },
+  nav_about: { en: 'About', yo: 'Nípa Wa', pcm: 'About', ha: 'Game da Mu', ig: 'Banyere Anyị' },
+  nav_leadership: { en: 'Leadership & Staff', yo: 'Àwọn Aṣáájú', pcm: 'Our Team', ha: 'Shugabanni', ig: 'Ndị Isi' },
+  nav_insights: { en: 'Insights', yo: 'Ìjìnlẹ̀', pcm: 'Insights', ha: 'Bayanai', ig: 'Nghọta' },
+  nav_contact: { en: 'Contact', yo: 'Kàn Sí Wa', pcm: 'Contact', ha: 'Tuntuɓe Mu', ig: 'Kpọtụrụ Anyị' },
+  hero_title: { en: 'Raising the standard of healthcare', yo: 'Gbígbé ìlera ga sí ìpele tí ó yẹ', pcm: 'We dey raise di standard of healthcare', ha: 'Ɗaga matsayin kiwon lafiya', ig: 'Ibulite ọkọlọtọ nlekọta ahụike' },
+  hero_lede: { en: 'A full-service healthcare consulting firm, from strategy, quality and financing to training, digital health and regulatory monitoring.', yo: 'Ilé-iṣẹ́ ìmọ̀ràn ìlera pípé, láti ìlànà, ìdánilójú àti ìnáwó, dé ìdánilẹ́kọ̀ọ́, ìlera oní-nọ́mbà àti ìbójútó.', pcm: 'Na full healthcare consulting company, from strategy, quality and money matter, to training, digital health and monitoring.', ha: 'Cikakken kamfanin ba da shawara kan kiwon lafiya, daga dabaru, inganci da kuɗaɗe, zuwa horo, lafiyar dijital da sa ido.', ig: 'Ụlọ ọrụ ndụmọdụ ahụike zuru ezu, site na atụmatụ, ịdị mma na ego, ruo ọzụzụ, ahụike dijitalụ na nlekọta.' },
+  cta_consult: { en: 'Book a consultation', yo: 'Ṣe ìpàdé ìmọ̀ràn', pcm: 'Book consultation', ha: 'Yi rijistar shawara', ig: 'Debe oge ndụmọdụ' },
+  cta_services: { en: 'Explore our services', yo: 'Wo àwọn iṣẹ́ wa', pcm: 'See our services', ha: 'Duba ayyukanmu', ig: 'Chọpụta ọrụ anyị' },
+  cta_proposal: { en: 'Request a proposal', yo: 'Béèrè fún àbá', pcm: 'Request proposal', ha: 'Nemi shawara', ig: 'Rịọ atụmatụ' },
+  cta_signin: { en: 'Staff sign-in', yo: 'Wọlé oṣiṣẹ́', pcm: 'Staff sign-in', ha: 'Shiga ma’aikata', ig: 'Ọrụ banye' },
+  tagline: { en: 'Professional. Educational. Enforcement-driven.', yo: 'Ọjọ̀gbọ́n. Ẹ̀kọ́. Ìmúṣẹ.', pcm: 'Professional. Educational. Enforcement.', ha: 'Ƙwararru. Ilimi. Aiwatarwa.', ig: 'Ọkachamara. Mmụta. Mmezu.' }
+}
+function makeT(lang) { return (key) => (TR[key] && (TR[key][lang] || TR[key].en)) || key }
 
 const ROLES = [
   { id: 'team_leader', label: 'Team Leader', blurb: 'Assign facilities, plan routes and review your team\u2019s visits.', icon: IconLeader,
-    tools: [ ['Assign & route facilities', 'Stage 3', 'assign'], ['Review team visits', 'Stage 6', 'reports'], ['Team analytics', 'Stage 8', 'analytics'] ] },
+    tools: [ ['Assign & route facilities', 'Stage 3', 'assign'], ['Review team visits', 'Stage 6', 'reports'] ] },
   { id: 'field_monitor', label: 'Field Monitor', blurb: 'Run visits end to end: map, engage, monitor and debrief.', icon: IconMonitor,
     tools: [ ['Map & route', 'Stage 3', 'map'], ['Engage check-in', 'Stage 4', 'engage'], ['Monitor checklist', 'Stage 5', 'monitor'], ['Debrief & sign-off', 'Stage 6', 'debrief'] ] },
   { id: 'rhsc_hq', label: 'RHSC HQ', blurb: 'Oversight, facility data, exports and analytics.', icon: IconHQ,
-    tools: [ ['Facility list ingestion', 'Stage 3', 'facilities'], ['Reports & exports', 'Stage 7', 'reports'], ['Oversight dashboard', 'Stage 8', 'analytics'] ] },
+    tools: [ ['Facility list ingestion', 'Stage 3', 'facilities'], ['Reports & exports', 'Stage 7', 'reports'] ] },
   { id: 'hefamaa_reviewer', label: 'HEFAMAA Reviewer', blurb: 'Read and validate monitoring outcomes across the State.', icon: IconShield,
-    tools: [ ['Review facilities', 'Stage 3', 'facilities'], ['Review reports', 'Stage 6', 'reports'], ['Compliance overview', 'Stage 8', 'analytics'] ] },
+    tools: [ ['Review facilities', 'Stage 3', 'facilities'], ['Review reports', 'Stage 6', 'reports'] ] },
   { id: 'facility_proprietor', label: 'Facility Proprietor', blurb: 'View your facility\u2019s outcomes and required actions.', icon: IconStore,
-    tools: [ ['My facility outcomes', 'Stage 6', null], ['My corrective actions', 'Stage 6', null], ['Re-inspection status', 'Stage 7', null] ] }
+    tools: [ ['My facility outcomes', 'Live', 'myfacility'], ['My corrective actions', 'Live', 'myfacility'], ['Re-inspection status', 'Live', 'myfacility'] ] }
 ]
 
 const ROLE_TABS = {
-  team_leader: ['dashboard', 'facilities', 'map', 'engage', 'monitor', 'debrief', 'assign', 'reports', 'analytics'],
+  team_leader: ['dashboard', 'facilities', 'map', 'engage', 'monitor', 'debrief', 'assign', 'reports'],
   field_monitor: ['dashboard', 'facilities', 'map', 'engage', 'monitor', 'debrief'],
-  rhsc_hq: ['dashboard', 'facilities', 'map', 'reports', 'analytics'],
-  hefamaa_reviewer: ['dashboard', 'facilities', 'reports', 'analytics'],
-  facility_proprietor: ['dashboard']
+  rhsc_hq: ['dashboard', 'facilities', 'map', 'reports'],
+  hefamaa_reviewer: ['dashboard', 'facilities', 'reports'],
+  facility_proprietor: ['dashboard', 'myfacility']
 }
-const TAB_LABEL = { dashboard: 'Dashboard', facilities: 'Facilities', map: 'Map & Route', engage: 'Engage', monitor: 'Monitor', debrief: 'Debrief', assign: 'Assign', reports: 'Reports', analytics: 'Analytics' }
+const TAB_LABEL = { dashboard: 'Dashboard', facilities: 'Facilities', map: 'Map & Route', engage: 'Engage', monitor: 'Monitor', debrief: 'Debrief', assign: 'Assign', reports: 'Reports', analytics: 'Analytics', myfacility: 'My Facility' }
 const CAN_EDIT = ['team_leader', 'field_monitor', 'rhsc_hq']
-const AREA_COLORS = ['#7A34A8', '#3E86C9', '#C7549C', '#5FA35A', '#D08A2E', '#8E44C0', '#4AA3A3', '#B0562E', '#6C6FD0', '#C0603C']
+const AREA_COLORS = ['#6D4B8E', '#3E86C9', '#C7549C', '#5FA35A', '#D08A2E', '#7E63A0', '#4AA3A3', '#B0562E', '#6C6FD0', '#C0603C']
 
 const IDENTITY = {
   // 'solomon@realms.ng': { name: 'Dr Solomon', title: 'Team Leader', photo: '' },
@@ -77,10 +150,11 @@ function identityFor(email, name) {
   return { name: n, first: n.split(' ')[0], title: '', photo: '' }
 }
 const VIEW_USERS = [
-  { name: 'Amaka Obi', role: 'team_leader' },
-  { name: 'Chidi Eze', role: 'field_monitor' },
-  { name: 'Ngozi Okoro', role: 'hefamaa_reviewer' },
-  { name: 'Bola Adeyemi', role: 'facility_proprietor' }
+  { name: 'Rev. Dr Solomon Nweke', role: 'team_leader' },
+  { name: 'Ojuma Joy', role: 'field_monitor' },
+  { name: 'Anele Goodnews', role: 'field_monitor' },
+  { name: 'HEFAMAA Reviewer', role: 'hefamaa_reviewer' },
+  { name: 'Facility Proprietor', role: 'facility_proprietor' }
 ]
 function roleById(id) { return ROLES.find(r => r.id === id) || null }
 function hasCoords(f) { return typeof f.lat === 'number' && typeof f.lng === 'number' && !isNaN(f.lat) && !isNaN(f.lng) }
@@ -96,76 +170,177 @@ function IconStore() { return (<svg viewBox="0 0 24 24" fill="none" stroke="curr
 function SectionHead({ eyebrow, title }) { return (<div className="section-head anim"><p className="eyebrow">{eyebrow}</p><h2>{title}</h2></div>) }
 
 /* ---------- public pages ---------- */
-function HomePage({ onSignIn, go }) {
+function HomePage({ onSignIn, go, t }) {
   return (
     <div className="page">
       <section className="hero">
         <div className="hero-copy anim">
-          <p className="eyebrow">Lagos State &middot; In collaboration with HEFAMAA</p>
-          <h1>Safer facilities.<br />Higher standards.<br /><span className="accent">Healthier Lagos.</span></h1>
-          <p className="lede">REALMS Healthcare Services Consulting Limited partners with HEFAMAA to monitor health facilities across Lagos State, holding every provider to the standards that protect the people they serve.</p>
+          <p className="eyebrow">REALMS Healthcare Services Consulting Limited</p>
+          <h1>{t('hero_title')}</h1>
+          <p className="lede">{t('hero_lede')}</p>
           <div className="cta-row">
-            <button className="btn primary" onClick={onSignIn}>Staff sign-in</button>
-            <button className="btn ghost" onClick={() => go('contact')}>Enquire about our work</button>
+            <button className="btn primary" onClick={() => go('contact')}>{t('cta_consult')}</button>
+            <button className="btn ghost" onClick={() => go('services')}>{t('cta_services')}</button>
           </div>
-          <p className="tagline">Professional. Educational. Enforcement-driven.</p>
+          <p className="tagline">{t('tagline')}</p>
         </div>
         <div className="hero-art anim" style={{ animationDelay: '120ms' }}>
           <div className="art-panel"><img src="/rhsc-logo.png" alt="REALMS Healthcare Services Consulting Limited" /></div>
         </div>
       </section>
+
+      <section className="home-services anim">
+        <p className="eyebrow center">What we do</p>
+        <h2 className="gallery-h">Six ways we strengthen healthcare</h2>
+        <div className="svc-grid">{SERVICES.map((s, i) => (
+          <article className="svc-card anim" key={s.t} style={{ animationDelay: (i * 50) + 'ms' }} onClick={() => s.to ? go(s.to) : s.href ? window.open(s.href, '_blank') : go('services')}>
+            <div className="svc-img"><img src={s.img} alt="" /></div>
+            <h3>{s.t}</h3><p>{s.d}</p>
+            <span className="svc-more">{s.href ? 'Visit Genesys &#8599;' : s.to ? 'Learn more \u2192' : 'Learn more \u2192'}</span>
+          </article>
+        ))}</div>
+      </section>
+
       <section className="home-strip anim">
-        {COVERAGE.map(c => (<div className="mini-stat" key={c.label}><span className="mini-value">&mdash;</span><span className="mini-label">{c.label}</span></div>))}
+        {IMPACT_STATS.map(c => (<div className="mini-stat" key={c.l}><span className="mini-value">{c.v}</span><span className="mini-label">{c.l}</span></div>))}
       </section>
-      <section className="gallery anim">
-        <p className="eyebrow center">Field in action</p>
-        <h2 className="gallery-h">Monitoring, on the ground across Lagos</h2>
-        <div className="gal-grid">
-          <figure className="gal big"><img src="/photos/team.jpg" alt="RHSC monitoring team at a health centre" /><figcaption>On arrival at a health centre</figcaption></figure>
-          <figure className="gal"><img src="/photos/pharmacy.jpg" alt="Inspecting pharmacy stock" /><figcaption>Checking equipment and stock</figcaption></figure>
-          <figure className="gal"><img src="/photos/handwash.jpg" alt="Hand hygiene facilities" /><figcaption>Infrastructure and hygiene</figcaption></figure>
-          <figure className="gal"><img src="/photos/meeting.jpg" alt="Debrief with the person in charge" /><figcaption>Debrief with the proprietor</figcaption></figure>
-          <figure className="gal"><img src="/photos/suv.jpg" alt="RHSC field vehicle" /><figcaption>Reaching every facility</figcaption></figure>
-        </div>
+
+      <section className="clients-band anim">
+        <p className="eyebrow center">Who we work with</p>
+        <div className="clients-row">{CLIENTS_SERVED.map(c => <span className="client-chip" key={c}>{c}</span>)}</div>
       </section>
+
+      <section className="testi-band anim">
+        <div className="testi-grid">{TESTIMONIALS.map((t, i) => (
+          <blockquote className="testi" key={i}><p>{t.quote}</p><cite>{t.who}</cite></blockquote>
+        ))}</div>
+      </section>
+
       <section className="impact anim">
         <div className="impact-copy">
-          <p className="eyebrow light">Why it matters</p>
-          <h2>Standards that protect Lagos residents</h2>
-          <p>Every visit is professional in approach, educational in engagement and firm in enforcement, helping facilities meet the standards required to keep patients safe.</p>
-          <button className="btn light" onClick={() => go('contact')}>Work with RHSC</button>
+          <p className="eyebrow light">Why RHSC</p>
+          <h2>A partner from strategy to the ground</h2>
+          <p>Few firms combine boardroom advisory with field delivery. RHSC does both, advising on strategy, quality and financing, and operating regulatory monitoring at scale as a licensed HEFAMAA operator.</p>
+          <div className="cta-row"><button className="btn light" onClick={() => go('contact')}>{t('cta_proposal')}</button><button className="btn ghost onlight" onClick={() => go('monitoring')}>Our HEFAMAA work</button></div>
         </div>
-        <div className="impact-art"><img src="/photos/g-network.jpg" alt="Connected coverage across the State" /></div>
+        <div className="impact-art"><img src="/photos/g-network.jpg" alt="Connected healthcare across the State" /></div>
       </section>
     </div>
   )
 }
-function ProcessPage() {
-  return (<div className="page"><SectionHead eyebrow="How we work" title="A four-stage field process" />
-    <div className="wave-wrap"><svg className="wave" viewBox="0 0 1000 90" preserveAspectRatio="none" aria-hidden="true"><path d="M0 55 C110 22, 200 78, 320 52 S540 20, 660 52 S870 82, 1000 46" fill="none" stroke="#A66BD4" strokeWidth="2.5"/></svg>
-      <ol className="stages">{STAGES.map((s, i) => (<li className="stage anim" key={s.n} style={{ animationDelay: (i * 80) + 'ms' }}><span className="stage-n">{s.n}</span><span className="dot" aria-hidden="true" /><h3>{s.t}</h3><p>{s.d}</p></li>))}</ol>
-    </div></div>)
+
+function ServicesPage({ go }) {
+  return (<div className="page"><SectionHead eyebrow="What we do" title="Our services" />
+    <p className="page-lede anim">End-to-end healthcare consulting: we advise, build and operate across the health system.</p>
+    <div className="pillars">{SERVICES.map((p, i) => {
+      const clickable = p.to || p.href
+      return (<article className={'pillar photo anim' + (clickable ? ' clickable' : '')} key={p.t} style={{ animationDelay: (i * 60) + 'ms' }}
+        onClick={() => p.to ? go(p.to) : p.href ? window.open(p.href, '_blank') : null}>
+        <div className="pillar-img"><img src={p.img} alt="" /></div>
+        <span className="pillar-rule" aria-hidden="true" /><h3>{p.t}</h3><p>{p.d}</p>
+        {p.to && <span className="svc-more">See the programme &rarr;</span>}
+        {p.href && <span className="svc-more">Visit Genesys &#8599;</span>}
+      </article>)
+    })}</div>
+    <div className="cta-band anim"><h2>Have a brief in mind?</h2><button className="btn primary" onClick={() => go('contact')}>Book a consultation</button></div>
+  </div>)
 }
-function ServicesPage() {
-  const imgs = ['/photos/g-corridor.jpg', '/photos/g-health.jpg', '/photos/g-handshake.jpg', '/photos/g-boardroom.jpg']
-  return (<div className="page"><SectionHead eyebrow="What we do" title="Four service pillars" />
-    <div className="pillars">{PILLARS.map((p, i) => (<article className="pillar photo anim" key={p.t} style={{ animationDelay: (i * 70) + 'ms' }}><div className="pillar-img"><img src={imgs[i % imgs.length]} alt="" /></div><span className="pillar-rule" aria-hidden="true" /><h3>{p.t}</h3><p>{p.d}</p></article>))}</div></div>)
-}
-function AboutPage() {
-  return (<div className="page"><SectionHead eyebrow="The mandate" title="Who we are" />
-    <div className="about-lead anim"><img src="/photos/g-building.jpg" alt="Health facility" /></div>
-    <div className="mandate-grid">
-      <p className="anim">The Health Facility Monitoring and Accreditation Agency (HEFAMAA) is the Lagos State authority responsible for inspecting, monitoring and licensing public and private health facilities, and for promoting consistent quality in service delivery.</p>
-      <p className="anim" style={{ animationDelay: '90ms' }}>REALMS Healthcare Services Consulting Limited supports that mandate on the ground. Our field teams carry out routine monitoring across the State, combining efficient planning, professional engagement, evidence-based assessment and clear corrective guidance, raising the standard of care while treating facility owners with courtesy and respect.</p>
+
+function MonitoringPage({ onSignIn, go }) {
+  return (<div className="page"><SectionHead eyebrow="Licensed HEFAMAA monitoring operator" title="Facility Monitoring & Accreditation" />
+    <div className="mon-lead anim">
+      <div className="mon-lead-copy">
+        <p>As a licensed operator for the Health Facility Monitoring and Accreditation Agency (HEFAMAA), RHSC carries out routine, evidence-based monitoring of public and private health facilities across Lagos State, holding every provider to the standards that protect the people they serve.</p>
+        <p>Our field teams plan efficient routes, engage facilities with courtesy and official identification, assess against the approved HEFAMAA checklist, and debrief proprietors with clear corrective actions and timelines. Findings flow to a live oversight dashboard for the Agency and RHSC leadership.</p>
+        <div className="cta-row"><button className="btn primary" onClick={onSignIn}>Staff sign-in</button><button className="btn ghost" onClick={() => go('contact')}>Partner with us</button></div>
+      </div>
+      <div className="mon-lead-art"><img src="/photos/team.jpg" alt="RHSC monitoring team" /></div>
     </div>
-    <div className="principles">{PRINCIPLES.map((p, i) => (<div className="principle anim" key={p.t} style={{ animationDelay: (i * 70) + 'ms' }}><h3>{p.t}</h3><p>{p.d}</p></div>))}</div></div>)
+    <div className="wave-wrap"><svg className="wave" viewBox="0 0 1000 90" preserveAspectRatio="none" aria-hidden="true"><path d="M0 55 C110 22, 200 78, 320 52 S540 20, 660 52 S870 82, 1000 46" fill="none" stroke="#A98FC4" strokeWidth="2.5" /></svg>
+      <ol className="stages">{STAGES.map((s, i) => (<li className="stage anim" key={s.n} style={{ animationDelay: (i * 80) + 'ms' }}><span className="stage-n">{s.n}</span><span className="dot" aria-hidden="true" /><h3>{s.t}</h3><p>{s.d}</p></li>))}</ol>
+    </div>
+    <div className="pillars">{PILLARS.map((p, i) => (<article className="pillar anim" key={p.t} style={{ animationDelay: (i * 70) + 'ms' }}><span className="pillar-rule" aria-hidden="true" /><h3>{p.t}</h3><p>{p.d}</p></article>))}</div>
+  </div>)
 }
+
+function AboutPage() {
+  return (<div className="page"><SectionHead eyebrow="Who we are" title="A full-service healthcare consulting firm" />
+    <div className="about-lead anim"><img src="/photos/g-building.jpg" alt="Healthcare" /></div>
+    <div className="mandate-grid">
+      <p className="anim">REALMS Healthcare Services Consulting Limited (RHSC) is a healthcare consulting firm working across strategy, quality and accreditation, training, health financing, digital health and regulatory monitoring. We serve government and regulators, private providers, investors and development partners.</p>
+      <p className="anim" style={{ animationDelay: '90ms' }}>We combine boardroom advisory with on-the-ground delivery. That range, from shaping strategy to operating monitoring at scale as a licensed HEFAMAA operator, lets us turn recommendations into measurable results and raise the standard of care.</p>
+    </div>
+    <div className="principles">{PRINCIPLES.map((p, i) => (<div className="principle anim" key={p.t} style={{ animationDelay: (i * 70) + 'ms' }}><h3>{p.t}</h3><p>{p.d}</p></div>))}</div>
+    <SectionHead eyebrow="Track record" title="Selected case studies" />
+    <div className="case-grid">{CASE_STUDIES.map((c, i) => (<article className="case anim" key={i} style={{ animationDelay: (i * 70) + 'ms' }}><h3>{c.title}</h3><p>{c.d}</p></article>))}</div>
+    <div className="certs anim"><span className="certs-lab">Certifications & partners</span>{CERTS.map(c => <span className="cert-chip" key={c}>{c}</span>)}</div>
+  </div>)
+}
+
+function StaffCard({ s }) {
+  const [open, setOpen] = useState(false)
+  const initials = (s.name.replace(/[^A-Za-z ]/g, '').split(' ').filter(Boolean).map(w => w[0]).slice(0, 2).join('') || 'R').toUpperCase()
+  return (<article className={'staff' + (s.lead ? ' lead' : '')}>
+    <div className="staff-top">
+      <div className="staff-photo" aria-hidden="true"><span>{initials}</span></div>
+      <div className="staff-id"><h3>{s.name}</h3><p className="staff-role">{s.role}</p><p className="staff-unit">{s.unit}</p></div>
+    </div>
+    <p className="staff-purpose">{s.purpose}</p>
+    <button className="linkbtn" onClick={() => setOpen(o => !o)}>{open ? 'Hide role profile' : 'View role profile'}</button>
+    {open && <ul className="staff-duties">{s.duties.map((d, i) => <li key={i}>{d}</li>)}</ul>}
+  </article>)
+}
+function LeadershipPage({ go }) {
+  const lead = STAFF.filter(s => s.lead); const team = STAFF.filter(s => !s.lead)
+  return (<div className="page"><SectionHead eyebrow="Our people" title="Leadership & staff" />
+    <p className="page-lede">The RHSC field monitoring team, operating as a licensed HEFAMAA monitoring operator across Lagos State.</p>
+    <div className="staff-grid lead-grid anim">{lead.map((s, i) => <StaffCard key={i} s={s} />)}</div>
+    <SectionHead eyebrow="Our team" title="Monitoring officers & specialists" />
+    <div className="staff-grid anim">{team.map((s, i) => <StaffCard key={i} s={s} />)}</div>
+    <div className="cta-band anim"><h2>Join our team</h2><p>We are always interested in talented people who care about better healthcare.</p><button className="btn primary" onClick={() => go('contact')}>See careers</button></div>
+  </div>)
+}
+
+function InsightsPage() {
+  return (<div className="page"><SectionHead eyebrow="Insights" title="Thinking, news & reports" />
+    <p className="page-lede anim">Perspectives from our team, company updates, and research on healthcare in Nigeria and beyond.</p>
+    <div className="insights">{INSIGHTS.map((p, i) => (
+      <article className="insight anim" key={i} style={{ animationDelay: (i * 70) + 'ms' }}>
+        <span className="insight-tag">{p.tag}</span><span className="insight-date">{p.date}</span>
+        <h3>{p.title}</h3><p>{p.blurb}</p><span className="svc-more">Read &rarr;</span>
+      </article>
+    ))}</div>
+    <p className="hintline center">More insights coming soon.</p>
+  </div>)
+}
+
 function ContactPage() {
   return (<div className="page"><SectionHead eyebrow="Get in touch" title="Work with RHSC" />
-    <div className="enquiry-card anim">
-      <div className="enquiry-copy"><h2>Reach our team</h2><p>For regulatory partnerships, facility support or consulting.</p></div>
-      <ul className="contacts"><li><span>Email</span><em>hello@example.com</em></li><li><span>Phone</span><em>Add number</em></li><li><span>Office</span><em>Add Lagos address</em></li></ul>
-    </div></div>)
+    <div className="contact-grid">
+      <div className="enquiry-card anim">
+        <h2>Tell us about your need</h2>
+        <div className="fgrid two">
+          <label className="field sm"><span>Name</span><input placeholder="Your name" /></label>
+          <label className="field sm"><span>Organisation</span><input placeholder="Organisation" /></label>
+          <label className="field sm"><span>Email</span><input type="email" placeholder="you@example.com" /></label>
+          <label className="field sm"><span>Interest</span><select><option>Book a consultation</option><option>Request a proposal</option><option>Facility monitoring</option><option>Training</option><option>Digital health (Genesys)</option><option>Other</option></select></label>
+        </div>
+        <label className="field sm"><span>Message</span><textarea rows="3" placeholder="How can we help?" /></label>
+        <button className="btn primary" onClick={() => window.alert('Thank you. Connect this form to your email or CRM to receive enquiries.')}>Send enquiry</button>
+        <p className="hintline">This form is ready to connect to your email or CRM.</p>
+      </div>
+      <div className="contact-side anim">
+        <h3>Reach us directly</h3>
+        <ul className="contacts">
+          <li><span>Email</span><em>[Imade Forte email]</em></li>
+          <li><span>Phone</span><em>[Imade Forte phone]</em></li>
+          <li><span>WhatsApp</span><em>[Imade Forte WhatsApp]</em></li>
+          <li><span>Office</span><em>21 Fatai Arobieke Street, off Admiralty Way, Lekki Phase 1, Lagos</em></li>
+        </ul>
+        <div className="cta-row"><a className="btn primary" href="#" onClick={e => { e.preventDefault(); window.alert('Add your WhatsApp link (https://wa.me/234...)') }}>WhatsApp us</a></div>
+      </div>
+    </div>
+  </div>)
 }
 
 /* ---------- auth ---------- */
@@ -215,6 +390,7 @@ function Dashboard({ identity, role, onOpen, facilities, onSeed, onClear, dbErro
   const areas = Array.from(new Set((facilities || []).map(f => f.area || 'Unassigned')))
   const quick = [{ v: (facilities || []).length, l: 'Facilities' }, { v: areas.length, l: 'Areas' }, { v: (r ? r.tools.filter(t => t[2]).length : 0), l: 'Live tools' }]
   const hasData = (facilities || []).length > 0
+  const showAnalytics = ['rhsc_hq', 'team_leader', 'hefamaa_reviewer'].includes(role)
   return (<div className="page dash">
     <div className="dash-banner anim">
       <img src="/photos/team.jpg" alt="RHSC field team" />
@@ -229,9 +405,11 @@ function Dashboard({ identity, role, onOpen, facilities, onSeed, onClear, dbErro
       <span>If you just updated the app, make sure the new version finished deploying, then tap Try again. Running build: {BUILD}.</span>
       <button className="btn small primary" onClick={onSeed}>Try again</button>
     </div>) : (!hasData && onSeed && (<div className="seed-card anim"><div><strong>No data yet.</strong><span>Loading sample facilities and visits so you can see the maps, charts and reports.</span></div><button className="btn small primary" onClick={onSeed}>Load sample data</button></div>))}
-    <div className="dash-quick anim">{quick.map(q => (<div className="dq" key={q.l}><span className="dq-v">{q.v}</span><span className="dq-l">{q.l}</span></div>))}</div>
-    <p className="dash-intro anim">Your tools are on the left. The ones marked ready are live now; the rest unlock as the build grows.</p>
     {hasData && onClear && (<div className="clear-row anim"><span>Demo data is loaded. Clear it all before going live.</span><button className="mini danger" onClick={onClear}>Clear all data</button></div>)}
+    {showAnalytics
+      ? (<div className="dash-analytics anim"><AnalyticsBody facilities={facilities} /></div>)
+      : (<div className="dash-quick anim">{quick.map(q => (<div className="dq" key={q.l}><span className="dq-v">{q.v}</span><span className="dq-l">{q.l}</span></div>))}</div>)}
+    <p className="dash-intro anim">Your tools are on the left. The ones marked ready are live now; the rest unlock as the build grows.</p>
     <div className="tool-grid">{(r ? r.tools : []).map(([name, stage, tab], i) => {
       const live = !!tab
       return (<button className={'tool-card' + (live ? ' live' : '')} key={name} style={{ animationDelay: (i * 60) + 'ms' }} disabled={!live} onClick={() => live && onOpen(tab)}>
@@ -261,14 +439,46 @@ function FacilitiesPage({ list, canEdit, userId, reload }) {
       setForm({ name: '', category: '', area: '', address: '', lat: '', lng: '' }); setAdding(false); await reload()
     } catch (e) { setMsg(e.message || 'Could not save the facility.') } finally { setBusy(false) }
   }
+  async function importRows(text, sourceLabel) {
+    const items = facilitiesFromCSV(text)
+    if (!items.length) { setMsg('No rows found. Include a header row with a name column.'); return }
+    await FAC.addMany(items, userId); await reload(); setMsg(items.length + ' facilities imported' + (sourceLabel ? ' from ' + sourceLabel : '') + '.')
+  }
   async function onFile(e) {
     const file = e.target.files && e.target.files[0]; if (!file) return
     setBusy(true); setMsg('')
     try {
-      const text = await file.text(); const items = facilitiesFromCSV(text)
-      if (!items.length) { setMsg('No rows found. Check the CSV has a header row.'); return }
-      await FAC.addMany(items, userId); await reload(); setMsg(items.length + ' facilities imported.')
+      const name = (file.name || '').toLowerCase()
+      if (name.endsWith('.xlsx') || name.endsWith('.xls')) {
+        const XLSX = await import('xlsx')
+        const buf = await file.arrayBuffer()
+        const wb = XLSX.read(buf, { type: 'array' })
+        const sheet = wb.Sheets[wb.SheetNames[0]]
+        const csv = XLSX.utils.sheet_to_csv(sheet)
+        await importRows(csv, 'Excel')
+      } else {
+        const text = await file.text(); await importRows(text, '')
+      }
     } catch (e) { setMsg(e.message || 'Could not import the file.') } finally { setBusy(false); if (fileRef.current) fileRef.current.value = '' }
+  }
+  function downloadTemplate() {
+    const header = 'name,category,area,address,lat,lng,last_visit'
+    const example = 'Example Health Centre,Primary health centre,Ikeja,12 Example Road,,,'
+    download('realms-facilities-template.csv', header + '\n' + example + '\n', 'text/csv')
+  }
+  async function importSheet() {
+    const url = window.prompt('Paste your Google Sheet link (the sheet must be shared as "Anyone with the link can view").')
+    if (!url) return
+    setBusy(true); setMsg('')
+    try {
+      const m = url.match(/\/d\/([a-zA-Z0-9-_]+)/); if (!m) throw new Error('That does not look like a Google Sheet link.')
+      const gid = (url.match(/[#&?]gid=(\d+)/) || [])[1] || '0'
+      const csvUrl = 'https://docs.google.com/spreadsheets/d/' + m[1] + '/export?format=csv&gid=' + gid
+      const res = await fetch(csvUrl); if (!res.ok) throw new Error('Could not read the sheet. Make sure link-sharing is on for anyone with the link.')
+      const text = await res.text(); const items = facilitiesFromCSV(text)
+      if (!items.length) throw new Error('No rows found. Include a header row with a name column.')
+      await FAC.addMany(items, userId); await reload(); setMsg(items.length + ' facilities imported from Google Sheet.')
+    } catch (e) { setMsg(e.message || 'Google Sheet import failed.') } finally { setBusy(false) }
   }
   async function locate(f) {
     setBusy(true); setMsg('')
@@ -280,12 +490,15 @@ function FacilitiesPage({ list, canEdit, userId, reload }) {
   return (<div className="page">
     <div className="ptitle"><div><p className="eyebrow">Facilities</p><h2>{list.length} in {areas.length} area{areas.length === 1 ? '' : 's'}</h2></div>
       {canEdit && <div className="ptools">
-        <button className="btn small ghost" onClick={() => fileRef.current && fileRef.current.click()}>Import CSV</button>
+        <button className="btn small ghost" onClick={() => fileRef.current && fileRef.current.click()}>Bulk upload</button>
+        <button className="btn small ghost" onClick={importSheet}>Google Sheet</button>
+        <button className="btn small ghost" onClick={downloadTemplate}>Template</button>
+        <button className="btn small ghost" onClick={() => window.alert('HEFAMAA sync connects to the Agency\u2019s data feed. Share the API endpoint and we will enable it.')}>HEFAMAA sync</button>
         <button className="btn small primary" onClick={() => setAdding(a => !a)}>{adding ? 'Close' : 'Add facility'}</button>
-        <input ref={fileRef} type="file" accept=".csv,text/csv" onChange={onFile} style={{ display: 'none' }} />
+        <input ref={fileRef} type="file" accept=".csv,text/csv,.xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel" onChange={onFile} style={{ display: 'none' }} />
       </div>}
     </div>
-    {canEdit && <p className="hintline">CSV columns: name, category, area (or lga), address, lat, lng, last_visit. Only name is required.</p>}
+    {canEdit && <p className="hintline">Bulk upload a CSV or Excel file. Columns: name, category, area (or lga), address, lat, lng, last_visit. Only name is required. Use Template for the exact format.</p>}
     {msg && <p className="auth-msg block">{msg}</p>}
     {missing > 0 && <p className="warnline">{missing} facilit{missing === 1 ? 'y is' : 'ies are'} missing coordinates and will not appear on the map. Add lat/lng or use Locate.</p>}
 
@@ -345,11 +558,11 @@ function MapRoutePage({ list }) {
     const m = mapObj.current, lg = layerRef.current; if (!m || !lg) return
     lg.clearLayers()
     ordered.forEach((f, i) => {
-      const mk = L.marker([f.lat, f.lng], { icon: pinIcon(colorMap[f.area || 'Unassigned'] || '#7A34A8', routed ? i + 1 : null) })
+      const mk = L.marker([f.lat, f.lng], { icon: pinIcon(colorMap[f.area || 'Unassigned'] || '#6D4B8E', routed ? i + 1 : null) })
       mk.bindPopup('<strong>' + (f.name || '') + '</strong><br>' + [f.category, f.area].filter(Boolean).join(' \u00b7 '))
       mk.addTo(lg)
     })
-    if (routed && ordered.length > 1) L.polyline(ordered.map(f => [f.lat, f.lng]), { color: '#7A34A8', weight: 3, opacity: .8, dashArray: '6 6' }).addTo(lg)
+    if (routed && ordered.length > 1) L.polyline(ordered.map(f => [f.lat, f.lng]), { color: '#6D4B8E', weight: 3, opacity: .8, dashArray: '6 6' }).addTo(lg)
     if (ordered.length) { try { m.fitBounds(ordered.map(f => [f.lat, f.lng]), { padding: [40, 40], maxZoom: 14 }) } catch (e) {} }
   }, [area, routed, list.length])
 
@@ -453,16 +666,20 @@ function EngagePage({ list, identity, role, userId }) {
   const intro = 'Good morning, sir/ma. We are from REALMS Healthcare Services Consulting Limited, working with HEFAMAA, Lagos State. I am ' + (lead ? lead.name : 'the team lead') + (others.length ? (', and these are ' + introMembers) : '') + '. We are here to conduct routine monitoring of this health facility as mandated by law.'
 
   function chooseFacility(f) { setFacility(f); setStep(1) }
-  function checkIn() { setArrival(new Date()); setStep(2) }
+  function checkIn() {
+    if (!coords) { setGeoMsg('GPS location is required at check-in. Tap Capture location and allow access.'); return }
+    setArrival(new Date()); setStep(2)
+  }
   function capture() {
-    if (!navigator.geolocation) { setGeoMsg('Location is not available on this device.'); return }
+    if (!navigator.geolocation) { setGeoMsg('Location is not available on this device. GPS is required to check in.'); return }
     setGeoMsg('Locating\u2026')
     navigator.geolocation.getCurrentPosition(
       p => { setCoords({ lat: +p.coords.latitude.toFixed(6), lng: +p.coords.longitude.toFixed(6) }); setGeoMsg('') },
-      () => setGeoMsg('Location permission denied. You can proceed without it.'),
+      () => setGeoMsg('Location permission denied. GPS is required at check-in, please enable location and try again.'),
       { enableHighAccuracy: true, timeout: 10000 }
     )
   }
+  useEffect(() => { if (step === 1 && !coords) capture() }, [step])
   function addMember() { if (!nm.trim()) return; setTeam(t => t.concat([{ name: nm.trim(), role: nr.trim() || 'Field Monitor' }])); setNm(''); setNr('') }
   function removeMember(i) { setTeam(t => t.filter((_, x) => x !== i)) }
 
@@ -513,11 +730,12 @@ function EngagePage({ list, identity, role, userId }) {
       <h3 className="fbig">{facility.name}</h3>
       <p className="fsub">{[facility.category, facility.area, facility.address].filter(Boolean).join(' \u00b7 ')}</p>
       <div className="ci-row"><span>Arrival time</span><em>{new Date().toLocaleTimeString('en-GB')}</em></div>
-      <div className="ci-row"><span>Location</span><em>{coords ? (coords.lat + ', ' + coords.lng) : 'Not captured'}</em></div>
+      <div className="ci-row"><span>Location</span><em>{coords ? (coords.lat + ', ' + coords.lng) : 'Required \u2014 not captured'}</em></div>
       {geoMsg && <p className="hintline">{geoMsg}</p>}
-      <div className="btnrow"><button className="btn small ghost" onClick={capture}>Capture location</button>
+      {!coords && <p className="hintline req">GPS is mandatory at check-in.</p>}
+      <div className="btnrow"><button className="btn small ghost" onClick={capture}>{coords ? 'Re-capture location' : 'Capture location'}</button>
         <button className="btn small ghost" onClick={() => setStep(0)}>Back</button>
-        <button className="btn small primary" onClick={checkIn}>Confirm and continue</button></div>
+        <button className="btn small primary" onClick={checkIn} disabled={!coords}>Confirm and continue</button></div>
     </div>)}
 
     {step === 2 && facility && (<div className="engage-present">
@@ -555,12 +773,14 @@ function EngagePage({ list, identity, role, userId }) {
 
 /* ---------- monitor (Stage 5) ---------- */
 const CHECKLIST = [
-  { id: 'infrastructure', label: 'Infrastructure', items: ['Cleanliness and hygiene', 'Ventilation and lighting', 'Water supply', 'Power supply', 'Waste disposal and sanitation'] },
-  { id: 'personnel', label: 'Personnel', items: ['Qualified staff on duty', 'Valid professional licences', 'Duty rosters displayed'] },
-  { id: 'equipment', label: 'Equipment', items: ['Essential equipment available', 'Equipment functional and maintained'] },
-  { id: 'records', label: 'Records', items: ['Patient registers', 'Admission and discharge books', 'Laboratory registers'] },
-  { id: 'compliance', label: 'Compliance', items: ['Valid HEFAMAA licence', 'Required permits displayed', 'Price list displayed'] },
-  { id: 'services', label: 'Services', items: ['Services match the licensed category'] }
+  { id: 'infrastructure', label: 'Infrastructure & environment', items: ['Cleanliness and hygiene', 'Ventilation and lighting', 'Water supply', 'Power supply', 'Waste disposal and sanitation', 'Toilets and patient facilities'] },
+  { id: 'infection', label: 'Infection prevention', items: ['Hand hygiene stations', 'Sterilisation and disinfection', 'PPE availability and use', 'Waste segregation'] },
+  { id: 'personnel', label: 'Personnel', items: ['Qualified staff on duty', 'Valid professional / practising licences', 'Staff in appropriate uniform', 'Duty rosters displayed', 'Staffing adequate for patient load'] },
+  { id: 'equipment', label: 'Equipment', items: ['Essential equipment available', 'Equipment functional and maintained', 'Emergency and basic life-support equipment', 'Medication storage and cold chain'] },
+  { id: 'records', label: 'Records', items: ['Patient registers', 'Admission and discharge books', 'Laboratory registers', 'Quality-control and equipment logs', 'Reagent inventory (laboratory)'] },
+  { id: 'compliance', label: 'Compliance', items: ['Valid HEFAMAA registration', 'Valid HEFAMAA licence', 'HEFAMAA logo and signage displayed', 'Required permits displayed', 'Qualified personnel on duty', 'Price list displayed'] },
+  { id: 'laboratory', label: 'Laboratory & biosafety', items: ['Laboratory services within licensed scope', 'Specimen handling and biosafety', 'Reagent and cold-chain controls'] },
+  { id: 'services', label: 'Services', items: ['Services match the licensed category', 'Service scope matches capacity', 'Emergency readiness and referral'] }
 ]
 function ragWeight(r) { return r === 'green' ? 2 : r === 'amber' ? 1 : 0 }
 function ragFromPct(pct) { return pct == null ? null : pct >= 80 ? 'green' : pct >= 50 ? 'amber' : 'red' }
@@ -621,6 +841,7 @@ function MonitorPage({ userId }) {
   const [saveState, setSaveState] = useState('')
   const [busy, setBusy] = useState(false); const [msg, setMsg] = useState('')
   const [geo, setGeo] = useState(null)
+  const [profile, setProfile] = useState({})
 
   useEffect(() => { VIS.list().then(setVisits).catch(() => {}) }, [])
   useEffect(() => { const on = () => setOnline(true), off = () => setOnline(false); window.addEventListener('online', on); window.addEventListener('offline', off); return () => { window.removeEventListener('online', on); window.removeEventListener('offline', off) } }, [])
@@ -632,8 +853,9 @@ function MonitorPage({ userId }) {
   function open(v) {
     setMsg(''); let d = (v.monitoring && v.monitoring.items) || {}
     try { const raw = localStorage.getItem('realms_monitor_' + v.id); if (raw) { const p = JSON.parse(raw); if (p && p.items) d = p.items } } catch (e) {}
-    setActive(v); setData(d); setSaveState('')
+    setActive(v); setData(d); setProfile((v.monitoring && v.monitoring.profile) || {}); setSaveState('')
   }
+  function setProfileField(k, val) { setProfile(p => ({ ...p, [k]: val })); setSaveState('draft') }
   function setItem(key, patch) { setData(d => ({ ...d, [key]: { ...(d[key] || { rating: null, note: '', evidence: [] }), ...patch } })); setSaveState('draft') }
   function addEvidence(key, type, url) { setData(d => { const it = d[key] || { rating: null, note: '', evidence: [] }; const ev = (it.evidence || []).concat([{ type, data: url, at: new Date().toISOString(), lat: geo ? geo.lat : null, lng: geo ? geo.lng : null }]); return { ...d, [key]: { ...it, evidence: ev } } }); setSaveState('draft') }
   function removeEvidence(key, idx) { setData(d => { const it = d[key]; if (!it) return d; return { ...d, [key]: { ...it, evidence: it.evidence.filter((_, i) => i !== idx) } } }); setSaveState('draft') }
@@ -642,10 +864,33 @@ function MonitorPage({ userId }) {
   const score = computeScore(data)
   const totalItems = CHECKLIST.reduce((n, c) => n + c.items.length, 0)
 
+  function requirements() {
+    const noPhoto = [], noVoice = []
+    CHECKLIST.forEach(cat => {
+      let hasVoice = false, hasRating = false
+      cat.items.forEach((label, i) => {
+        const it = data[cat.id + '_' + i]; if (!it) return
+        if (it.rating) hasRating = true
+        if ((it.evidence || []).some(e => e.type === 'voice')) hasVoice = true
+        if (it.rating === 'red' && !(it.evidence || []).some(e => e.type === 'photo')) noPhoto.push(cat.label + ': ' + label)
+      })
+      if (hasRating && !hasVoice) noVoice.push(cat.label)
+    })
+    return { noPhoto, noVoice }
+  }
+
   async function save() {
     if (!active) return
+    const req = requirements()
+    if (req.noPhoto.length || req.noVoice.length) {
+      const parts = []
+      if (req.noPhoto.length) parts.push('add a photo on red items (' + req.noPhoto.join('; ') + ')')
+      if (req.noVoice.length) parts.push('add a voice note for ' + req.noVoice.join(', '))
+      setMsg('Before saving, please ' + parts.join(', and ') + '.')
+      return
+    }
     setBusy(true); setMsg('')
-    const payload = { items: data, score: score.pct, overallRating: score.rag, updatedAt: new Date().toISOString() }
+    const payload = { items: data, profile, score: score.pct, overallRating: score.rag, updatedAt: new Date().toISOString() }
     try {
       await VIS.update(active.id, { monitoring: payload, score: score.pct, overall_rating: score.rag, status: 'monitored' })
       try { localStorage.removeItem(draftKey) } catch (e) {}
@@ -684,21 +929,37 @@ function MonitorPage({ userId }) {
       </div>
     </div>
     {msg && <p className="auth-msg block">{msg}</p>}
+    <p className="mon-rules">Evidence rules: a photo on every red item, a voice note per category, and GPS captured at check-in.</p>
+
+    <div className="mcat profile-cat">
+      <div className="mcat-head"><h3>Facility profile</h3></div>
+      <div className="prof-grid">
+        <label className="field sm"><span>Wards</span><input type="number" value={profile.wards || ''} onChange={e => setProfileField('wards', e.target.value)} /></label>
+        <label className="field sm"><span>Beds</span><input type="number" value={profile.beds || ''} onChange={e => setProfileField('beds', e.target.value)} /></label>
+        <label className="field sm"><span>Toilets</span><input type="number" value={profile.toilets || ''} onChange={e => setProfileField('toilets', e.target.value)} /></label>
+        <label className="field sm"><span>Staff on duty</span><input type="number" value={profile.staff || ''} onChange={e => setProfileField('staff', e.target.value)} /></label>
+      </div>
+      <label className="field sm"><span>Service scope observed</span><input value={profile.scope || ''} onChange={e => setProfileField('scope', e.target.value)} placeholder="e.g. general practice, laboratory, maternity" /></label>
+    </div>
 
     {CHECKLIST.map(cat => {
       const cs = categoryScore(data, cat)
+      const catRated = cat.items.some((_, i) => { const it = data[cat.id + '_' + i]; return it && it.rating })
+      const catVoice = cat.items.some((_, i) => { const it = data[cat.id + '_' + i]; return it && (it.evidence || []).some(e => e.type === 'voice') })
       return (<div className="mcat" key={cat.id}>
-        <div className="mcat-head"><h3>{cat.label}</h3><Chip rag={cs.rag} pct={cs.pct} /></div>
+        <div className="mcat-head"><h3>{cat.label}</h3><div className="mcat-r">{catRated && !catVoice && <span className="need">Voice note needed</span>}{catVoice && <span className="ok">Voice &#10003;</span>}<Chip rag={cs.rag} pct={cs.pct} /></div></div>
         <div className="mitems">{cat.items.map((label, i) => {
           const key = cat.id + '_' + i; const it = data[key] || { rating: null, note: '', evidence: [] }
-          return (<div className="mitem" key={key}>
+          const needPhoto = it.rating === 'red' && !(it.evidence || []).some(e => e.type === 'photo')
+          return (<div className={'mitem' + (needPhoto ? ' flag' : '')} key={key}>
             <div className="mitem-top"><span className="mlabel">{label}</span><Rag value={it.rating} onChange={r => setItem(key, { rating: r })} /></div>
             <textarea className="mnote" rows="1" placeholder="Note (optional)" value={it.note || ''} onChange={e => setItem(key, { note: e.target.value })} />
             <div className="evrow">
-              <label className="ev-btn">Photo<input type="file" accept="image/*" capture="environment" onChange={e => { onPickImage(key, 'photo', e.target.files[0]); e.target.value = '' }} /></label>
+              <label className={'ev-btn' + (needPhoto ? ' urgent' : '')}>Photo<input type="file" accept="image/*" capture="environment" onChange={e => { onPickImage(key, 'photo', e.target.files[0]); e.target.value = '' }} /></label>
               <label className="ev-btn">Scan<input type="file" accept="image/*" onChange={e => { onPickImage(key, 'scan', e.target.files[0]); e.target.value = '' }} /></label>
               <VoiceButton onClip={async url => { const stored = await uploadEvidence(active.id, 'voice', url); addEvidence(key, 'voice', stored) }} />
               {geo && <span className="geotag">geotag on</span>}
+              {needPhoto && <span className="need">Photo required</span>}
             </div>
             {it.evidence && it.evidence.length > 0 && (<div className="evstrip">{it.evidence.map((ev, ei) => (
               <div className="evthumb" key={ei}>
@@ -735,7 +996,7 @@ function deriveDebrief(v) {
   return { strengths, gaps }
 }
 
-const DOC_CSS = "@import url('https://fonts.googleapis.com/css2?family=Lora:ital,wght@0,400;0,600;1,400&display=swap');*{font-family:'Lora',Georgia,serif;color:#241536;box-sizing:border-box}body{max-width:760px;margin:36px auto;padding:0 24px;line-height:1.6}h1{color:#642C90;font-size:23px;margin:14px 0 6px}h2{color:#642C90;font-size:15px;margin:22px 0 8px}p{margin:0 0 10px}table{width:100%;border-collapse:collapse;margin:8px 0 14px}th,td{border:1px solid #E9DCF6;padding:8px 10px;text-align:left;font-size:12.5px;vertical-align:top}th{background:#F7F1FD;color:#642C90}ul,ol{margin:6px 0 14px;padding-left:20px}li{font-size:13px;margin-bottom:4px}.head{display:flex;align-items:center;gap:12px;border-bottom:2px solid #EEE1F9;padding-bottom:12px;margin-bottom:8px}.chip{display:inline-block;padding:2px 10px;border-radius:12px;font-size:12px;border:1px solid #ccc}.g{background:#E6F4EA;color:#2E7D46;border-color:#BFE3CB}.a{background:#FBF3E6;color:#9A5B12;border-color:#F0D9B5}.r{background:#FBE9E6;color:#B4442E;border-color:#F0C9BF}.muted{color:#7A6A93;font-size:12px}.sig{height:80px;margin:6px 0}.right{text-align:right}@media print{body{margin:0}}"
+const DOC_CSS = "@import url('https://fonts.googleapis.com/css2?family=Lora:ital,wght@0,400;0,600;1,400&display=swap');*{font-family:'Lora',Georgia,serif;color:#241536;box-sizing:border-box}body{max-width:760px;margin:36px auto;padding:0 24px;line-height:1.6}h1{color:#574277;font-size:23px;margin:14px 0 6px}h2{color:#574277;font-size:15px;margin:22px 0 8px}p{margin:0 0 10px}table{width:100%;border-collapse:collapse;margin:8px 0 14px}th,td{border:1px solid #E4DCEE;padding:8px 10px;text-align:left;font-size:12.5px;vertical-align:top}th{background:#F6F3FA;color:#574277}ul,ol{margin:6px 0 14px;padding-left:20px}li{font-size:13px;margin-bottom:4px}.head{display:flex;align-items:center;gap:12px;border-bottom:2px solid #EDE7F4;padding-bottom:12px;margin-bottom:8px}.chip{display:inline-block;padding:2px 10px;border-radius:12px;font-size:12px;border:1px solid #ccc}.g{background:#E6F4EA;color:#2E7D46;border-color:#BFE3CB}.a{background:#FBF3E6;color:#9A5B12;border-color:#F0D9B5}.r{background:#FBE9E6;color:#B4442E;border-color:#F0C9BF}.muted{color:#7A6A93;font-size:12px}.sig{height:80px;margin:6px 0}.right{text-align:right}@media print{body{margin:0}}"
 function chipCls(r) { return r === 'green' ? 'g' : r === 'amber' ? 'a' : r === 'red' ? 'r' : '' }
 function printDoc(title, inner) {
   const w = window.open('', '_blank'); if (!w) { window.alert('Please allow pop-ups to open the document, then try again.'); return }
@@ -752,14 +1013,35 @@ function buildReport(v, d, origin) {
   const strengths = d.strengths.length ? '<ul>' + d.strengths.map(s => '<li>' + s + '</li>').join('') + '</ul>' : '<p class="muted">None recorded.</p>'
   const gaps = d.gaps.length ? '<table><tr><th>Finding</th><th>Rating</th><th>Required action</th><th>Timeline</th></tr>' + d.gaps.map(g => '<tr><td>' + g.category + ': ' + g.label + '</td><td>' + ragText(g.rating) + '</td><td>' + (g.action || '\u2014') + '</td><td>' + (g.timeline || '\u2014') + '</td></tr>').join('') + '</table>' : '<p class="muted">No gaps recorded.</p>'
   const sig = d.signature ? '<img class="sig" src="' + d.signature + '">' : '<p class="muted">Not signed.</p>'
+  const pr = (v.monitoring && v.monitoring.profile) || {}
+  const profileBits = [pr.wards && (pr.wards + ' wards'), pr.beds && (pr.beds + ' beds'), pr.toilets && (pr.toilets + ' toilets'), pr.staff && (pr.staff + ' staff on duty'), pr.scope].filter(Boolean).join(' &middot; ')
+  const profileHtml = profileBits ? '<h2>Facility profile</h2><p>' + profileBits + '</p>' : ''
+  const digital = d.genesys_interest ? '<h2>Digital health</h2><p>Facility expressed interest in the Genesys EMR.' + (d.genesys_note ? ' ' + d.genesys_note : '') + '</p>' : ''
+  const esc = d.escalated ? '<p class="muted"><strong>Note:</strong> critical finding escalated to HEFAMAA / RHSC HQ.</p>' : ''
   return docHead(origin) + '<h1>Health Facility Monitoring Report</h1>' +
     '<p><strong>Facility:</strong> ' + v.facility_name + ' &middot; <strong>Area:</strong> ' + (v.area || '') + '<br><strong>Visit date:</strong> ' + date + ' &middot; <strong>Overall:</strong> <span class="chip ' + chipCls(v.overall_rating) + '">' + ragText(v.overall_rating) + (v.score != null ? ' ' + v.score + '%' : '') + '</span></p>' +
+    profileHtml +
     '<h2>Assessment by category</h2><table><tr><th>Category</th><th>Rating</th></tr>' + cats + '</table>' +
     '<h2>Strengths</h2>' + strengths +
     '<h2>Gaps and required corrective actions</h2>' + gaps +
-    '<h2>Next steps</h2><p>Remediation deadline: ' + (d.remediation_deadline || 'to be set') + '. Re-inspection: ' + (d.reinspection || 'to be scheduled') + '. Compliance letter issued: ' + (d.letter_issued ? 'Yes' : 'No') + '.</p>' +
+    '<h2>Next steps</h2><p>Remediation deadline: ' + (d.remediation_deadline || 'to be set') + '. Re-inspection: ' + (d.reinspection || 'to be scheduled') + '. Compliance letter issued: ' + (d.letter_issued ? 'Yes' : 'No') + '.' + (d.closure_recommended ? ' Closure recommended.' : '') + '</p>' + esc +
+    digital +
     '<h2>Debrief and sign-off</h2><p>Person in charge: ' + (d.proprietor_name || '\u2014') + '. Acknowledged: ' + (d.proprietor_ack ? 'Yes' : 'No') + '.</p>' + sig + (d.signed_at ? '<p class="muted">Signed ' + d.signed_at.slice(0, 16).replace('T', ' ') + '</p>' : '') +
     '<p class="muted">Prepared by REALMS Healthcare Services Consulting Limited in support of the HEFAMAA regulatory mandate. This report is not legal advice.</p>'
+}
+function buildClosure(v, d, origin) {
+  const date = (v.arrival_time || v.created_at || '').slice(0, 10)
+  const ref = 'RHSC/CN/' + (v.area || 'LAG').slice(0, 3).toUpperCase() + '/' + date.replace(/-/g, '')
+  const grounds = d.gaps && d.gaps.length ? '<ol>' + d.gaps.filter(g => g.rating === 'red').slice(0, 8).map(g => '<li>' + g.category + ' &mdash; ' + g.label + '.</li>').join('') + '</ol>' : '<p>Grounds as recorded during the monitoring visit.</p>'
+  return docHead(origin) + '<p class="right">Ref: ' + ref + '<br>' + date + '</p>' +
+    '<p>The Proprietor / Person in Charge<br>' + v.facility_name + '<br>' + (v.area || '') + ', Lagos State</p>' +
+    '<p><strong>Dear Sir/Ma,</strong></p>' +
+    '<p><strong>RE: NOTICE OF CLOSURE &mdash; ' + (v.facility_name || '').toUpperCase() + '</strong></p>' +
+    '<p>Following a routine monitoring visit conducted at your facility on ' + date + ' by REALMS Healthcare Services Consulting Limited, as a licensed monitoring operator for the Health Facility Monitoring and Accreditation Agency (HEFAMAA), Lagos State, your facility has been found to be in serious breach of the standards required to operate.</p>' +
+    '<p><strong>Grounds for this notice.</strong></p>' + grounds +
+    '<p>You are hereby directed to cease operations pending regulatory review and the correction of the above. This matter has been referred to HEFAMAA for enforcement. You may make representations to the Agency.</p>' +
+    '<p>Yours Sincerely,<br>For: REALMS Healthcare Services Consulting Limited</p>' +
+    '<p class="muted">Issued in support of the HEFAMAA regulatory mandate. Final enforcement decisions rest with HEFAMAA.</p>'
 }
 function buildLetter(v, d, origin) {
   const date = (v.arrival_time || v.created_at || '').slice(0, 10)
@@ -801,6 +1083,10 @@ function DebriefPage({ userId }) {
   const [propName, setPropName] = useState('')
   const [ack, setAck] = useState(false)
   const [signature, setSignature] = useState('')
+  const [genesys, setGenesys] = useState(false)
+  const [genesysNote, setGenesysNote] = useState('')
+  const [closure, setClosure] = useState(false)
+  const [escalate, setEscalate] = useState(false)
   const [online, setOnline] = useState(typeof navigator !== 'undefined' ? navigator.onLine : true)
   const [busy, setBusy] = useState(false); const [msg, setMsg] = useState(''); const [saveState, setSaveState] = useState('')
 
@@ -814,14 +1100,16 @@ function DebriefPage({ userId }) {
       setStrengths(existing.strengths || []); setGaps(existing.gaps || []); setDeadline(existing.remediation_deadline || '')
       setReinspection(existing.reinspection || '2 weeks'); setLetterIssued(existing.letter_issued !== false)
       setPropName(existing.proprietor_name || (v.person_in_charge && v.person_in_charge.name) || ''); setAck(!!existing.proprietor_ack); setSignature(existing.signature || '')
+      setGenesys(!!existing.genesys_interest); setGenesysNote(existing.genesys_note || ''); setClosure(!!existing.closure_recommended); setEscalate(!!existing.escalated)
     } else {
       const d = deriveDebrief(v); setStrengths(d.strengths); setGaps(d.gaps); setDeadline(''); setReinspection('2 weeks'); setLetterIssued(true)
       setPropName((v.person_in_charge && v.person_in_charge.name) || ''); setAck(false); setSignature('')
+      setGenesys(false); setGenesysNote(''); setClosure(false); setEscalate(false)
     }
   }
   function setGap(i, patch) { setGaps(gs => gs.map((g, x) => x === i ? { ...g, ...patch } : g)); setSaveState('draft') }
 
-  function payload() { return { strengths, gaps, remediation_deadline: deadline, reinspection, letter_issued: letterIssued, proprietor_name: propName.trim(), proprietor_ack: ack, signature, signed_at: signature ? new Date().toISOString() : '', updatedAt: new Date().toISOString() } }
+  function payload() { return { strengths, gaps, remediation_deadline: deadline, reinspection, letter_issued: letterIssued, proprietor_name: propName.trim(), proprietor_ack: ack, signature, signed_at: signature ? new Date().toISOString() : '', genesys_interest: genesys, genesys_note: genesysNote.trim(), closure_recommended: closure, escalated: escalate, updatedAt: new Date().toISOString() } }
 
   async function save() {
     if (!active) return
@@ -882,6 +1170,19 @@ function DebriefPage({ userId }) {
       </div>
     </div>
 
+    <div className="dsec"><h3>Regulatory action</h3>
+      <div className="fgrid">
+        <label className="field sm chkfield"><span>Closure notice</span><label className="inl"><input type="checkbox" checked={closure} onChange={e => { setClosure(e.target.checked); setSaveState('draft') }} /> Recommend closure</label></label>
+        <label className="field sm chkfield"><span>Escalation</span><label className="inl"><input type="checkbox" checked={escalate} onChange={e => { setEscalate(e.target.checked); setSaveState('draft') }} /> Escalate critical finding</label></label>
+      </div>
+      <p className="hintline">Closure applies where a facility operates without registration, with an expired licence, without HEFAMAA signage, or without qualified personnel on duty.</p>
+    </div>
+
+    <div className="dsec"><h3>Digital health</h3>
+      <label className="field sm chkfield"><span>Genesys EMR</span><label className="inl"><input type="checkbox" checked={genesys} onChange={e => { setGenesys(e.target.checked); setSaveState('draft') }} /> Facility interested in the Genesys EMR</label></label>
+      {genesys && <label className="field sm"><span>Notes</span><input value={genesysNote} onChange={e => { setGenesysNote(e.target.value); setSaveState('draft') }} placeholder="Contact, timing, systems in use" /></label>}
+    </div>
+
     <div className="dsec"><h3>Proprietor sign-off</h3>
       <div className="fgrid two">
         <label className="field sm"><span>Person in charge</span><input value={propName} onChange={e => { setPropName(e.target.value); setSaveState('draft') }} /></label>
@@ -896,9 +1197,36 @@ function DebriefPage({ userId }) {
       {saveState === 'pending' && <button className="btn ghost" onClick={save}>Sync now</button>}
       <button className="btn ghost" onClick={() => printDoc('Monitoring Report', buildReport(active, payload(), origin))}>Monitoring report</button>
       {letterIssued && <button className="btn ghost" onClick={() => printDoc('Compliance Letter', buildLetter(active, payload(), origin))}>Corrective letter</button>}
+      {closure && <button className="btn ghost" onClick={() => printDoc('Closure Notice', buildClosure(active, payload(), origin))}>Closure notice</button>}
       <span className="save-note">{saveState === 'saved' ? 'Saved' : saveState === 'pending' ? 'Pending sync' : ''}</span>
     </div>
     <p className="hintline">Reports open in a new tab; use your browser's Print or Save as PDF. Human review before issue is expected.</p>
+  </div>)
+}
+
+/* ---------- proprietor view ---------- */
+function ProprietorPage() {
+  const [visits, setVisits] = useState([])
+  useEffect(() => { VIS.list().then(setVisits).catch(() => {}) }, [])
+  const origin = (typeof window !== 'undefined' && window.location) ? window.location.origin : ''
+  const mine = visits.filter(v => v.status === 'monitored' || v.status === 'debriefed')
+  return (<div className="page">
+    <div className="ptitle"><div><p className="eyebrow">My facility</p><h2>Monitoring outcomes</h2></div></div>
+    <p className="page-lede">Your latest monitoring outcomes, the corrective actions required, and re-inspection timelines.</p>
+    {mine.length === 0 ? <p className="empty">No monitoring visits recorded yet.</p> :
+      <div className="prop-list">{mine.map(v => {
+        const d = v.debrief || deriveDebrief(v); const gaps = d.gaps || []
+        return (<div className="prop-card" key={v.id}>
+          <div className="prop-head"><div><span className="fname">{v.facility_name}</span><span className="fmeta">{v.area} &middot; {(v.arrival_time || v.created_at || '').slice(0, 10)}</span></div><Chip rag={v.overall_rating} pct={v.score} /></div>
+          <div className="prop-sec"><h4>Corrective actions</h4>
+            {gaps.length === 0 ? <p className="muted sm">No corrective actions outstanding. Well done.</p> :
+              <ul className="corr">{gaps.map((g, i) => (<li key={i}><span className="corr-item">{(g.category ? g.category + ': ' : '') + (typeof g.label === 'string' ? g.label : '')}</span>{g.action ? <em> {g.action}</em> : null}{g.timeline ? <span className="corr-tl">{g.timeline}</span> : null}</li>))}</ul>}
+          </div>
+          {(d.remediation_deadline || d.reinspection) && <div className="prop-sec"><h4>Re-inspection</h4><p className="muted sm">{d.remediation_deadline ? 'Corrective actions due by ' + d.remediation_deadline + '. ' : ''}{d.reinspection ? 'A re-inspection is scheduled within ' + d.reinspection + '.' : ''}</p></div>}
+          <div className="prop-actions"><button className="mini" onClick={() => printDoc('Monitoring Report', buildReport(v, d, origin))}>View full report</button></div>
+        </div>)
+      })}</div>}
+    <p className="hintline">In production this view is limited to your own facility.</p>
   </div>)
 }
 
@@ -914,6 +1242,28 @@ function exportVisitsCSV(rows) {
   const lines = [header].concat(rows.map(v => [v.facility_name, v.area, (v.arrival_time || v.created_at || '').slice(0, 10), v.status, v.score == null ? '' : v.score, v.overall_rating || '', (v.debrief && v.debrief.remediation_deadline) || '', (v.debrief && v.debrief.reinspection) || '']))
   download('realms-visits.csv', lines.map(l => l.map(csvCell).join(',')).join('\n'), 'text/csv')
 }
+function xmlCell(v) { return String(v == null ? '' : v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;') }
+function exportVisitsXLS(rows) {
+  const head = ['Facility', 'Area', 'Date', 'Status', 'Score', 'Rating', 'Remediation deadline', 'Re-inspection']
+  const body = rows.map(v => '<tr>' + [v.facility_name, v.area, (v.arrival_time || v.created_at || '').slice(0, 10), v.status, v.score == null ? '' : v.score, v.overall_rating || '', (v.debrief && v.debrief.remediation_deadline) || '', (v.debrief && v.debrief.reinspection) || ''].map(c => '<td>' + xmlCell(c) + '</td>').join('') + '</tr>').join('')
+  const html = '<html><head><meta charset="utf-8"></head><body><table border="1"><tr>' + head.map(h => '<th>' + h + '</th>').join('') + '</tr>' + body + '</table></body></html>'
+  download('realms-visits.xls', html, 'application/vnd.ms-excel')
+}
+function exportVisitsPDF(rows, origin) {
+  const body = rows.map(v => '<tr><td>' + xmlCell(v.facility_name) + '</td><td>' + xmlCell(v.area) + '</td><td>' + (v.arrival_time || v.created_at || '').slice(0, 10) + '</td><td>' + ragText(v.overall_rating) + '</td><td>' + (v.score == null ? '' : v.score + '%') + '</td></tr>').join('')
+  const inner = docHead(origin) + '<h1>Monitoring summary</h1><p class="muted">' + rows.length + ' visit' + (rows.length === 1 ? '' : 's') + '</p><table><tr><th>Facility</th><th>Area</th><th>Date</th><th>Outcome</th><th>Score</th></tr>' + body + '</table>'
+  printDoc('Monitoring Summary', inner)
+}
+function buildDailyPDF(rows, origin) {
+  const today = new Date().toISOString().slice(0, 10)
+  const todays = rows.filter(v => (v.arrival_time || v.created_at || '').slice(0, 10) === today)
+  const byArea = {}; todays.forEach(v => { const a = v.area || 'Unassigned'; byArea[a] = (byArea[a] || 0) + 1 })
+  const areaLine = Object.keys(byArea).map(a => a + ' (' + byArea[a] + ')').join(', ') || 'none'
+  const body = todays.map(v => '<tr><td>' + xmlCell(v.facility_name) + '</td><td>' + xmlCell(v.area) + '</td><td>' + ragText(v.overall_rating) + '</td><td>' + (v.score == null ? '' : v.score + '%') + '</td></tr>').join('')
+  const inner = docHead(origin) + '<h1>Daily monitoring report</h1><p class="muted">' + today + ' &middot; ' + todays.length + ' facility' + (todays.length === 1 ? '' : 'ies') + ' monitored</p><p><strong>By area:</strong> ' + areaLine + '</p><table><tr><th>Facility</th><th>Area</th><th>Outcome</th><th>Score</th></tr>' + body + '</table>'
+  printDoc('Daily Report', inner)
+}
+function waLink(phone, body) { const p = String(phone || '').replace(/[^0-9]/g, ''); return 'https://wa.me/' + p + '?text=' + encodeURIComponent(body) }
 function mailtoLink(subject, body, to) { return 'mailto:' + encodeURIComponent(to || '') + '?subject=' + encodeURIComponent(subject) + '&body=' + encodeURIComponent(body) }
 function smsLink(phone, body) { return 'sms:' + (phone || '') + '?&body=' + encodeURIComponent(body) }
 function daysUntil(d) { if (!d) return null; const ms = new Date(d + 'T00:00:00').getTime() - Date.now(); return Math.ceil(ms / 86400000) }
@@ -925,9 +1275,9 @@ function NotifyPanel({ v, summary }) {
   const smsMsg = 'RHSC: monitoring completed at ' + v.facility_name + '. A summary and any required actions will follow.'
   async function send(channel) {
     setSt(s => ({ ...s, [channel]: 'sending' }))
-    const payload = channel === 'sms'
-      ? { channel: 'sms', to: phone, message: smsMsg }
-      : { channel: 'email', to: email, subject: 'RHSC monitoring outcome: ' + v.facility_name, message: summary(v) }
+    const payload = channel === 'sms' ? { channel: 'sms', to: phone, message: smsMsg }
+      : channel === 'whatsapp' ? { channel: 'whatsapp', to: phone, message: smsMsg }
+        : { channel: 'email', to: email, subject: 'RHSC monitoring outcome: ' + v.facility_name, message: summary(v) }
     const r = await sendNotify(payload)
     setSt(s => ({ ...s, [channel]: r.ok ? 'sent' : (r.reason || 'failed') }))
   }
@@ -937,6 +1287,11 @@ function NotifyPanel({ v, summary }) {
       <button className="mini" onClick={() => send('sms')} disabled={!phone}>Send SMS</button>
       <a className="mini ghosted" href={smsLink(phone, smsMsg)}>open SMS app</a>
       <span className="nstat">{lbl(st.sms)}</span>
+    </div>
+    <div className="notify-row">
+      <button className="mini" onClick={() => send('whatsapp')} disabled={!phone}>Send WhatsApp</button>
+      <a className="mini ghosted" href={waLink(phone, smsMsg)} target="_blank" rel="noreferrer">open WhatsApp</a>
+      <span className="nstat">{lbl(st.whatsapp)}</span>
     </div>
     <div className="notify-row">
       <input className="ninput" type="email" placeholder="email address" value={email} onChange={e => setEmail(e.target.value)} />
@@ -967,7 +1322,10 @@ function ReportsPage({ facilities, userId, scope }) {
       <div className="ptools">
         <select className="sel" value={area} onChange={e => setArea(e.target.value)}><option value="all">All areas</option>{areas.map(a => <option key={a} value={a}>{a}</option>)}</select>
         <select className="sel" value={status} onChange={e => setStatus(e.target.value)}><option value="all">All statuses</option><option value="engaged">Engaged</option><option value="monitored">Monitored</option><option value="debriefed">Debriefed</option></select>
-        <button className="btn small ghost" onClick={() => exportVisitsCSV(rows)}>Export CSV</button>
+        <button className="btn small ghost" onClick={() => exportVisitsCSV(rows)}>CSV</button>
+        <button className="btn small ghost" onClick={() => exportVisitsXLS(rows)}>Excel</button>
+        <button className="btn small ghost" onClick={() => exportVisitsPDF(rows, origin)}>PDF</button>
+        <button className="btn small primary" onClick={() => buildDailyPDF(rows, origin)}>Daily report</button>
       </div>
     </div>
 
@@ -982,7 +1340,7 @@ function ReportsPage({ facilities, userId, scope }) {
       <div className="rep-rows">{rows.map(v => (
         <div className="rep-row" key={v.id}>
           <div className="rep-main"><span className="fname">{v.facility_name}</span><span className="fmeta">{v.area} &middot; {(v.arrival_time || v.created_at || '').slice(0, 10)}</span></div>
-          <div className="rep-mid">{v.score != null ? <Chip rag={v.overall_rating} pct={v.score} /> : <span className={'chip ' + (v.status || 'engaged')}>{v.status === 'monitored' ? 'Assessed' : v.status === 'debriefed' ? 'Debriefed' : 'Engaged'}</span>}</div>
+          <div className="rep-mid">{v.score != null ? <Chip rag={v.overall_rating} pct={v.score} /> : <span className={'chip ' + (v.status || 'engaged')}>{v.status === 'monitored' ? 'Assessed' : v.status === 'debriefed' ? 'Debriefed' : 'Engaged'}</span>}{v.debrief && v.debrief.closure_recommended && <span className="risk-badge high">Closure</span>}{v.debrief && v.debrief.escalated && <span className="risk-badge high">Escalated</span>}{v.debrief && v.debrief.genesys_interest && <span className="risk-badge low">Genesys</span>}</div>
           <div className="rep-actions">
             <button className="mini" onClick={() => doc(v, 'report')}>Report</button>
             <button className="mini" onClick={() => doc(v, 'letter')}>Letter</button>
@@ -1024,7 +1382,7 @@ function Donut({ data }) {
   const R = 54, C = 2 * Math.PI * R; let off = 0
   return (<div className="donut">
     <svg viewBox="0 0 140 140" className="donut-svg">
-      <circle cx="70" cy="70" r={R} fill="none" stroke="#EEE1F9" strokeWidth="18" />
+      <circle cx="70" cy="70" r={R} fill="none" stroke="#EDE7F4" strokeWidth="18" />
       {data.map((d, i) => { const dash = d.value / total * C; const el = (<circle key={i} cx="70" cy="70" r={R} fill="none" stroke={d.color} strokeWidth="18" strokeDasharray={dash + ' ' + (C - dash)} strokeDashoffset={-off} transform="rotate(-90 70 70)" />); off += dash; return el })}
       <text x="70" y="67" textAnchor="middle" className="donut-num">{total}</text>
       <text x="70" y="85" textAnchor="middle" className="donut-lab">assessed</text>
@@ -1036,18 +1394,35 @@ function Ring({ pct, label }) {
   const R = 48, C = 2 * Math.PI * R; const dash = (pct == null ? 0 : pct) / 100 * C; const disp = pct == null ? '-' : pct + '%'
   return (<div className="ring">
     <svg viewBox="0 0 120 120" className="ring-svg">
-      <circle cx="60" cy="60" r={R} fill="none" stroke="#EEE1F9" strokeWidth="12" />
-      <circle cx="60" cy="60" r={R} fill="none" stroke="#7A34A8" strokeWidth="12" strokeLinecap="round" strokeDasharray={dash + ' ' + (C - dash)} transform="rotate(-90 60 60)" />
+      <circle cx="60" cy="60" r={R} fill="none" stroke="#EDE7F4" strokeWidth="12" />
+      <circle cx="60" cy="60" r={R} fill="none" stroke="#6D4B8E" strokeWidth="12" strokeLinecap="round" strokeDasharray={dash + ' ' + (C - dash)} transform="rotate(-90 60 60)" />
       <text x="60" y="58" textAnchor="middle" className="ring-num">{disp}</text>
       <text x="60" y="77" textAnchor="middle" className="ring-lab">green</text>
     </svg>
     <span className="ring-cap">{label}</span>
   </div>)
 }
-function AnalyticsPage({ facilities, scope }) {
+function monthLabel(m) { try { return new Date(m + '-01T00:00:00').toLocaleString('en', { month: 'short' }) } catch (e) { return m } }
+function riskLevel(s) { return s >= 4 ? 'High' : s >= 2 ? 'Medium' : 'Low' }
+function LineChart({ points }) {
+  const W = 560, H = 180, pad = 30
+  if (!points.length) return <p className="empty sm">Not enough data yet.</p>
+  const max = Math.max(100, ...points.map(p => p.value)); const min = 0; const n = points.length
+  const x = i => n === 1 ? W / 2 : pad + i * (W - 2 * pad) / (n - 1)
+  const y = v => H - pad - (v - min) / (max - min) * (H - 2 * pad)
+  const d = points.map((p, i) => (i ? 'L' : 'M') + x(i).toFixed(1) + ' ' + y(p.value).toFixed(1)).join(' ')
+  const area = d + ' L' + x(n - 1).toFixed(1) + ' ' + (H - pad) + ' L' + x(0).toFixed(1) + ' ' + (H - pad) + ' Z'
+  return (<svg viewBox={'0 0 ' + W + ' ' + H} className="line-chart">
+    <line x1={pad} y1={H - pad} x2={W - pad} y2={H - pad} stroke="#EDE7F4" />
+    <path d={area} fill="#6D4B8E" opacity="0.08" />
+    <path d={d} fill="none" stroke="#6D4B8E" strokeWidth="2.5" strokeLinejoin="round" />
+    {points.map((p, i) => (<g key={i}><circle cx={x(i)} cy={y(p.value)} r="4" fill="#6D4B8E" /><text x={x(i)} y={H - pad + 16} textAnchor="middle" className="lc-x">{p.label}</text><text x={x(i)} y={y(p.value) - 10} textAnchor="middle" className="lc-v">{p.value}</text></g>))}
+  </svg>)
+}
+function AnalyticsBody({ facilities }) {
   const [visits, setVisits] = useState([])
   useEffect(() => { VIS.list().then(setVisits).catch(() => {}) }, [])
-  const vis = scope && scope !== 'all' ? visits.filter(v => (v.area || 'Unassigned') === scope) : visits
+  const vis = visits
   const areas = Array.from(new Set(facilities.map(f => f.area || 'Unassigned')))
   const assessed = vis.filter(v => v.score != null)
   const avg = assessed.length ? Math.round(assessed.reduce((a, v) => a + v.score, 0) / assessed.length) : null
@@ -1061,12 +1436,47 @@ function AnalyticsPage({ facilities, scope }) {
   const cards = [{ v: facilities.length, l: 'Facilities' }, { v: areas.length, l: 'Areas covered' }, { v: vis.length, l: 'Visits' }, { v: assessed.length, l: 'Assessed' }, { v: avg == null ? '-' : avg + '%', l: 'Average score' }, { v: complianceRate == null ? '-' : complianceRate + '%', l: 'Green rate' }]
   const donutData = [{ label: 'Green', value: rag.green, color: '#2E7D46' }, { label: 'Amber', value: rag.amber, color: '#C77D0A' }, { label: 'Red', value: rag.red, color: '#B4442E' }]
 
-  return (<div className="page">
-    <div className="ptitle"><div><p className="eyebrow">Analytics{scope && scope !== 'all' ? ' \u00b7 ' + scope : ''}</p><h2>Oversight dashboard</h2></div></div>
+  // compliance trend over time (by month)
+  const byMonth = {}; assessed.forEach(v => { const m = (v.arrival_time || v.created_at || '').slice(0, 7); if (!m) return; (byMonth[m] = byMonth[m] || []).push(v.score) })
+  const trend = Object.keys(byMonth).sort().map(m => ({ label: monthLabel(m), value: Math.round(byMonth[m].reduce((a, b) => a + b, 0) / byMonth[m].length) }))
+
+  // team / monitor performance
+  const perf = {}; vis.forEach(v => { (v.team || []).forEach(t => { const k = t.name; if (!k) return; const m = perf[k] = perf[k] || { name: k, role: t.role, visits: 0, sum: 0, scored: 0 }; m.visits++; if (v.score != null) { m.sum += v.score; m.scored++ } }) })
+  const monitors = Object.values(perf).map(m => ({ ...m, avg: m.scored ? Math.round(m.sum / m.scored) : null })).sort((a, b) => b.visits - a.visits).slice(0, 6)
+
+  // facility risk ranking
+  const now = Date.now()
+  const risk = facilities.map(f => {
+    const lv = latest[f.id]; let s = 0
+    if (lv) { if (lv.overall_rating === 'red') s += 3; else if (lv.overall_rating === 'amber') s += 2; else if (!lv.overall_rating) s += 1 } else s += 1
+    const dl = lv && lv.debrief && lv.debrief.remediation_deadline
+    if (dl && new Date(dl + 'T00:00:00').getTime() < now) s += 2
+    return { f, s, rag: lv ? lv.overall_rating : null }
+  }).sort((a, b) => b.s - a.s)
+  const topRisk = risk.filter(r => r.s >= 2).slice(0, 6)
+
+  return (<>
     <div className="an-cards">{cards.map(c => (<StatCard key={c.l} value={c.v} label={c.l} />))}</div>
     <div className="an-two">
       <div className="an-panel"><h3>Compliance outcomes</h3>{assessed.length === 0 ? <p className="empty sm">No assessments yet.</p> : <Donut data={donutData} />}</div>
       <div className="an-panel ring-panel"><h3>Green rate</h3><Ring pct={complianceRate} label="Rated green at the most recent visit" /></div>
+    </div>
+    <div className="an-panel"><h3>Compliance trend</h3>
+      <p className="hintline">Average compliance score by month.</p>
+      <LineChart points={trend} />
+    </div>
+    <div className="an-two">
+      <div className="an-panel"><h3>Team performance</h3>
+        {monitors.length === 0 ? <p className="empty sm">No visits yet.</p> : <div className="perf">{monitors.map(m => {
+          const rg = m.avg == null ? null : m.avg >= 80 ? 'green' : m.avg >= 50 ? 'amber' : 'red'
+          return (<div className="perf-row" key={m.name}><span className="perf-name">{m.name}<em>{m.role}</em></span><span className="perf-stat">{m.visits} visit{m.visits === 1 ? '' : 's'}</span><Chip rag={rg} pct={m.avg == null ? null : m.avg} /></div>)
+        })}</div>}
+      </div>
+      <div className="an-panel"><h3>Facilities needing attention</h3>
+        {topRisk.length === 0 ? <p className="empty sm">Nothing flagged.</p> : <div className="risk">{topRisk.map(r => (
+          <div className="risk-row" key={r.f.id}><span className="risk-name">{r.f.name}<em>{r.f.area || 'Unassigned'}</em></span><span className={'risk-badge ' + riskLevel(r.s).toLowerCase()}>{riskLevel(r.s)} risk</span></div>
+        ))}</div>}
+      </div>
     </div>
     <div className="an-panel"><h3>Visits by area</h3>
       {areaRows.length === 0 ? <p className="empty sm">No visits yet.</p> : <div className="bars">{areaRows.map(r => (
@@ -1077,7 +1487,7 @@ function AnalyticsPage({ facilities, scope }) {
       <p className="hintline">Each facility is coloured by its most recent visit outcome. Grey means not yet assessed.</p>
       {points.length === 0 ? <p className="empty sm">No mapped facilities yet.</p> : <HeatMap points={points} />}
     </div>
-  </div>)
+  </>)
 }
 
 /* ---------- bars ---------- */
@@ -1102,14 +1512,19 @@ function TabIcon({ id }) {
     debrief: 'M6 3h12v18l-6-3-6 3zM9 8h6M9 12h4',
     assign: 'M8 6h11M8 12h11M8 18h11M4 6h.01M4 12h.01M4 18h.01',
     reports: 'M7 3h7l5 5v13H7zM14 3v5h5M9 13h6M9 17h6',
-    analytics: 'M4 20V11M10 20V4M16 20v-7M22 20H2'
+    analytics: 'M4 20V11M10 20V4M16 20v-7M22 20H2',
+    myfacility: 'M5 21h14M7 21V7l5-4 5 4v14M10 13h4M10 17h4'
   }[id] || 'M4 4h16v16H4z'
   return (<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d={p} /></svg>)
 }
-function SiteBar({ tab, setTab, onSignIn }) {
+function SiteBar({ tab, setTab, onSignIn, lang, setLang, t }) {
   return (<header className="bar">
     <button className="wordmark" onClick={() => setTab('home')} aria-label="REALMS home"><img className="mark" src="/rhsc-mark.png" alt="RHSC" /><span className="wm-text"><strong>REALMS</strong><em>Healthcare Services Consulting</em></span></button>
-    <nav className="nav"><div className="tabs">{SITE_TABS.map(t => (<button key={t.id} className={'tab' + (tab === t.id ? ' active' : '')} onClick={() => setTab(t.id)}>{t.label}</button>))}</div><button className="signin" onClick={onSignIn}>Staff sign-in</button></nav>
+    <nav className="nav">
+      <div className="tabs">{SITE_TABS.map(tb => (<button key={tb.id} className={'tab' + (tab === tb.id ? ' active' : '')} onClick={() => setTab(tb.id)}>{t('nav_' + tb.id)}</button>))}</div>
+      <select className="langsel" value={lang} onChange={e => setLang(e.target.value)} aria-label="Language">{LANGS.map(l => <option key={l.code} value={l.code}>{l.label}</option>)}</select>
+      <button className="signin" onClick={onSignIn}>{t('cta_signin')}</button>
+    </nav>
   </header>)
 }
 function TopBarApp({ identity, realRole, viewAsName, onViewAs, onEditName, onSignOut, onToggleNav }) {
@@ -1159,6 +1574,8 @@ export default function App() {
   const [navOpen, setNavOpen] = useState(false)
   const [viewAs, setViewAs] = useState(null)
   const [dbError, setDbError] = useState('')
+  const [lang, setLang] = useState(() => { try { return localStorage.getItem('realms_lang') || 'en' } catch (e) { return 'en' } })
+  function changeLang(l) { setLang(l); try { localStorage.setItem('realms_lang', l) } catch (e) {} }
   const seedTriedRef = useRef(false)
 
   useEffect(() => {
@@ -1192,7 +1609,7 @@ export default function App() {
     let list = []
     try { list = await FAC.list() } catch (e) { setDbError((e && e.message) || 'Could not read the database.'); setFacs([]); return }
     let noSeed = false; try { noSeed = !!localStorage.getItem('realms_no_seed') } catch (e) {}
-    if (list.length === 0 && !seedTriedRef.current && !noSeed) {
+    if (MODE === 'demo' && list.length === 0 && !seedTriedRef.current && !noSeed) {
       seedTriedRef.current = true
       const res = await seedSampleData(user && user.id)
       try { list = await FAC.list() } catch (e) {}
@@ -1242,6 +1659,7 @@ export default function App() {
   }
 
   const identity = user ? identityFor(user.email, user.name) : { name: 'Staff', first: 'Staff', title: '' }
+  const t = makeT(lang)
   const effRole = viewAs ? viewAs.role : role
   const effId = viewAs ? { name: viewAs.name, first: viewAs.name.split(' ')[0], title: '', photo: '' } : identity
   const canEdit = CAN_EDIT.includes(effRole)
@@ -1256,12 +1674,17 @@ export default function App() {
     else if (appTab === 'monitor') body = <MonitorPage userId={user.id} />
     else if (appTab === 'debrief') body = <DebriefPage userId={user.id} />
     else if (appTab === 'reports') body = <ReportsPage facilities={facs} userId={user.id} />
-    else if (appTab === 'analytics') body = <AnalyticsPage facilities={facs} />
+    else if (appTab === 'myfacility') body = <ProprietorPage />
     else if (appTab === 'assign') body = <AssignPage list={facs} userId={user.id} />
     else body = <Dashboard identity={effId} role={effRole} onOpen={setAppTab} facilities={facs} onSeed={loadSample} onClear={clearAll} dbError={dbError} />
   } else {
-    body = tab === 'home' ? <HomePage onSignIn={() => setView('auth')} go={setTab} />
-      : tab === 'process' ? <ProcessPage /> : tab === 'services' ? <ServicesPage /> : tab === 'about' ? <AboutPage /> : <ContactPage />
+    body = tab === 'home' ? <HomePage onSignIn={() => setView('auth')} go={setTab} t={t} />
+      : tab === 'services' ? <ServicesPage go={setTab} />
+      : tab === 'monitoring' ? <MonitoringPage onSignIn={() => setView('auth')} go={setTab} />
+      : tab === 'about' ? <AboutPage />
+      : tab === 'leadership' ? <LeadershipPage go={setTab} />
+      : tab === 'insights' ? <InsightsPage />
+      : <ContactPage />
   }
 
   const showAppShell = view === 'app' && user && role
@@ -1281,17 +1704,17 @@ export default function App() {
 
   return (<div className="realms">
     <style>{css}</style>
-    {!showAuthBare && <SiteBar tab={tab} setTab={(t) => { setView('site'); setTab(t) }} onSignIn={() => setView('auth')} />}
+    {!showAuthBare && <SiteBar tab={tab} setTab={(t2) => { setView('site'); setTab(t2) }} onSignIn={() => setView('auth')} lang={lang} setLang={changeLang} t={t} />}
     <main id="top" className={showAuthBare ? 'main-auth' : ''}>{body}</main>
     {!showAuthBare && (<footer className="foot"><div className="foot-inner">
       <div className="foot-brand"><img className="foot-mark" src="/rhsc-mark.png" alt="RHSC" /><span>REALMS Healthcare Services Consulting Limited</span></div>
-      <p>In collaboration with HEFAMAA, Lagos State.</p><p className="foot-tag">Professional. Educational. Enforcement-driven.</p>
+      <p>In collaboration with HEFAMAA, Lagos State.</p><p className="foot-tag">{t('tagline')}</p>
     </div></footer>)}
   </div>)
 }
 
 const css = `
-.realms { --ink:#3A2B54; --p:#7A34A8; --p-deep:#642C90; --p-mid:#8E44C0; --v:#A66BD4; --lav1:#F7F1FD; --lav2:#EEE1F9; --line:#E9DCF6; --white:#ffffff; color:var(--ink); min-height:100vh; display:flex; flex-direction:column; }
+.realms { --ink:#3A2B54; --p:#6D4B8E; --p-deep:#574277; --p-mid:#7E63A0; --v:#A98FC4; --lav1:#F6F3FA; --lav2:#EDE7F4; --line:#E4DCEE; --white:#ffffff; color:var(--ink); min-height:100vh; display:flex; flex-direction:column; }
 .realms h1,.realms h2,.realms h3 { font-weight:600; letter-spacing:.01em; margin:0; }
 .realms p { margin:0; }
 .realms a { color:inherit; text-decoration:none; }
@@ -1466,7 +1889,7 @@ const css = `
 .realms .saved-card em { display:block; font-style:normal; font-size:12.5px; color:#8A7AA6; margin-top:2px; }
 .realms .saved-card p { font-size:13px; color:#5A4C74; margin-top:4px; }
 
-.realms .foot { background:#4A2A73; color:#EADAF7; padding:clamp(32px,4vw,52px) clamp(18px,4vw,56px); }
+.realms .foot { background:#4C3B66; color:#EADAF7; padding:clamp(32px,4vw,52px) clamp(18px,4vw,56px); }
 .realms .foot-inner { max-width:1080px; margin:0 auto; text-align:center; display:grid; gap:8px; justify-items:center; }
 .realms .foot-brand { display:flex; align-items:center; justify-content:center; gap:12px; font-size:15px; color:#fff; }
 .realms .foot-mark { height:32px; width:auto; }
@@ -1633,7 +2056,7 @@ const css = `
 
 /* ===== app shell: top bar + left sidebar ===== */
 .realms.app-mode { display:flex; flex-direction:column; min-height:100vh; }
-.realms .topbar { position:sticky; top:0; z-index:1000; display:flex; align-items:center; justify-content:space-between; gap:16px; padding:10px clamp(14px,3vw,28px); background:linear-gradient(90deg,#4A2A73,#642C90); color:#fff; }
+.realms .topbar { position:sticky; top:0; z-index:1000; display:flex; align-items:center; justify-content:space-between; gap:16px; padding:10px clamp(14px,3vw,28px); background:linear-gradient(90deg,#4C3B66,#574277); color:#fff; }
 .realms .tb-left, .realms .tb-right { display:flex; align-items:center; gap:14px; }
 .realms .topbar .mark { height:34px; background:#fff; border-radius:8px; padding:2px; }
 .realms .tb-name { font-size:16px; letter-spacing:.14em; font-weight:600; }
@@ -1753,4 +2176,117 @@ const css = `
 .realms .db-error strong { font-size:15px; }
 .realms .db-error span { font-size:13.5px; color:#8a4433; }
 .realms .db-error .db-msg { font-family:monospace; background:#fff; border:1px solid #F0C9BF; border-radius:8px; padding:6px 10px; color:#B4442E; word-break:break-word; max-width:100%; }
+.realms .dash-analytics { margin-bottom:6px; }
+.realms .line-chart { width:100%; height:auto; }
+.realms .lc-x { font-size:11px; fill:#8A7AA6; }
+.realms .lc-v { font-size:11px; fill:var(--p-deep); font-weight:600; }
+.realms .perf, .realms .risk { display:grid; gap:10px; }
+.realms .perf-row, .realms .risk-row { display:flex; align-items:center; justify-content:space-between; gap:10px; border-top:1px solid var(--lav2); padding-top:10px; }
+.realms .perf-row:first-child, .realms .risk-row:first-child { border-top:0; padding-top:0; }
+.realms .perf-name, .realms .risk-name { display:flex; flex-direction:column; font-size:14.5px; color:#3A2B54; }
+.realms .perf-name em, .realms .risk-name em { font-style:normal; font-size:12px; color:#8A7AA6; }
+.realms .perf-stat { font-size:13px; color:#5A4C74; margin-left:auto; margin-right:10px; }
+.realms .risk-badge { font-size:12px; padding:4px 12px; border-radius:20px; border:1px solid var(--line); white-space:nowrap; }
+.realms .risk-badge.high { background:#FBE9E6; color:#B4442E; border-color:#F0C9BF; }
+.realms .risk-badge.medium { background:#FBF3E6; color:#9A5B12; border-color:#F0D9B5; }
+.realms .risk-badge.low { background:#E6F4EA; color:#2E7D46; border-color:#BFE3CB; }
+
+/* ===== consulting site ===== */
+.realms .bar .nav { min-width:0; }
+.realms .bar .tabs { overflow-x:auto; max-width:calc(100vw - 320px); scrollbar-width:thin; flex-wrap:nowrap; }
+.realms .bar .tab { white-space:nowrap; }
+.realms .page-lede { font-size:17px; color:#5A4C74; max-width:720px; margin:-8px auto 26px; text-align:center; }
+.realms .center { text-align:center; }
+.realms .home-services { max-width:1160px; margin:0 auto; padding:clamp(30px,4vw,56px) clamp(18px,4vw,56px); }
+.realms .svc-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:16px; margin-top:22px; }
+.realms .svc-card { background:#fff; border:1px solid var(--line); border-radius:16px; overflow:hidden; cursor:pointer; transition:.18s; display:flex; flex-direction:column; }
+.realms .svc-card:hover { transform:translateY(-4px); box-shadow:0 16px 34px rgba(58,21,96,.14); border-color:var(--v); }
+.realms .svc-img { height:140px; overflow:hidden; }
+.realms .svc-img img { width:100%; height:100%; object-fit:cover; }
+.realms .svc-card h3 { font-size:17px; color:var(--p-deep); margin:16px 18px 6px; }
+.realms .svc-card p { font-size:13.5px; color:#5A4C74; margin:0 18px 12px; line-height:1.55; flex:1; }
+.realms .svc-more { font-size:13px; color:var(--p); font-weight:600; margin:0 18px 16px; }
+.realms .clients-band { max-width:1000px; margin:0 auto; padding:10px 18px 30px; text-align:center; }
+.realms .clients-row { display:flex; flex-wrap:wrap; gap:10px; justify-content:center; margin-top:14px; }
+.realms .client-chip { background:var(--lav1); border:1px solid var(--line); color:#4A3B66; border-radius:22px; padding:8px 16px; font-size:14px; }
+.realms .testi-band { max-width:1000px; margin:0 auto; padding:10px 18px 40px; }
+.realms .testi-grid { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+.realms .testi { margin:0; background:#fff; border:1px solid var(--line); border-left:3px solid var(--p); border-radius:14px; padding:22px 24px; }
+.realms .testi p { font-size:16px; color:#3A2B54; font-style:italic; margin-bottom:12px; }
+.realms .testi cite { font-style:normal; font-size:13px; color:#8A7AA6; }
+.realms .cta-band, .realms .cta-row.onlight { }
+.realms .cta-band { max-width:1000px; margin:34px auto 0; background:linear-gradient(135deg,var(--p-deep),var(--p-mid)); border-radius:20px; padding:clamp(28px,4vw,44px); text-align:center; color:#fff; }
+.realms .cta-band h2 { color:#fff; font-size:clamp(22px,3vw,30px); margin-bottom:14px; }
+.realms .cta-band p { color:#F1E5FB; margin-bottom:18px; }
+.realms .btn.ghost.onlight { border-color:rgba(255,255,255,.55); color:#fff; }
+.realms .btn.ghost.onlight:hover { background:#fff; color:var(--p-deep); }
+.realms .mon-lead { display:grid; grid-template-columns:1.2fr 1fr; gap:24px; align-items:center; margin-bottom:30px; }
+.realms .mon-lead-copy p { color:#4A3B66; line-height:1.65; margin-bottom:12px; }
+.realms .mon-lead-art { border-radius:18px; overflow:hidden; }
+.realms .mon-lead-art img { width:100%; height:100%; object-fit:cover; }
+.realms .case-grid { display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-bottom:24px; }
+.realms .case { background:#fff; border:1px solid var(--line); border-radius:14px; padding:22px; }
+.realms .case h3 { color:var(--p-deep); font-size:17px; margin-bottom:8px; }
+.realms .case p { color:#5A4C74; font-size:14px; }
+.realms .certs { display:flex; flex-wrap:wrap; align-items:center; gap:10px; }
+.realms .certs-lab { font-size:12px; letter-spacing:.1em; text-transform:uppercase; color:var(--v); margin-right:6px; }
+.realms .cert-chip { background:var(--lav1); border:1px dashed var(--line); border-radius:10px; padding:8px 14px; font-size:13px; color:#5A4C74; }
+.realms .leaders { display:grid; grid-template-columns:repeat(3,1fr); gap:18px; margin-bottom:34px; }
+.realms .staff-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:18px; margin-bottom:30px; }
+.realms .lead-grid { grid-template-columns:1fr; max-width:760px; }
+.realms .staff { background:#fff; border:1px solid var(--line); border-radius:16px; padding:22px; }
+.realms .staff.lead { border-color:var(--v); box-shadow:0 12px 30px rgba(58,21,96,.12); background:linear-gradient(180deg,#fff,var(--lav1)); }
+.realms .staff-top { display:flex; align-items:center; gap:14px; margin-bottom:12px; }
+.realms .staff-photo { width:60px; height:60px; flex-shrink:0; border-radius:50%; background:linear-gradient(135deg,var(--p),var(--v)); display:grid; place-items:center; }
+.realms .staff-photo span { color:#fff; font-size:20px; font-weight:700; letter-spacing:.03em; }
+.realms .staff-id h3 { color:var(--p-deep); font-size:17px; line-height:1.2; }
+.realms .staff-role { color:var(--p); font-size:13.5px; margin-top:3px; }
+.realms .staff-unit { color:#8A7AA6; font-size:12.5px; }
+.realms .staff-purpose { color:#5A4C74; font-size:14px; line-height:1.55; margin-bottom:8px; }
+.realms .staff-duties { margin:10px 0 0; padding-left:18px; display:grid; gap:5px; }
+.realms .staff-duties li { font-size:13.5px; color:#3A2B54; }
+@media (max-width:900px){ .realms .staff-grid { grid-template-columns:1fr 1fr; } }
+@media (max-width:560px){ .realms .staff-grid { grid-template-columns:1fr; } }
+.realms .insights { display:grid; grid-template-columns:repeat(3,1fr); gap:16px; margin-bottom:20px; }
+.realms .insight { background:#fff; border:1px solid var(--line); border-radius:16px; padding:22px; display:flex; flex-direction:column; gap:6px; }
+.realms .insight-tag { display:inline-block; align-self:flex-start; background:var(--lav2); color:var(--p-deep); font-size:11px; letter-spacing:.06em; text-transform:uppercase; padding:3px 10px; border-radius:12px; }
+.realms .insight-date { font-size:12px; color:#8A7AA6; }
+.realms .insight h3 { color:var(--p-deep); font-size:17px; margin:4px 0; }
+.realms .insight p { color:#5A4C74; font-size:14px; flex:1; }
+.realms .insight .svc-more { margin:6px 0 0; }
+.realms .contact-grid { display:grid; grid-template-columns:1.4fr 1fr; gap:20px; }
+.realms .contact-side { background:var(--lav1); border:1px solid var(--line); border-radius:16px; padding:24px; }
+.realms .contact-side h3 { color:var(--p-deep); margin-bottom:14px; }
+.realms .enquiry-card h2 { color:var(--p-deep); margin-bottom:16px; }
+.realms .pillar.clickable { cursor:pointer; }
+.realms .pillar.clickable:hover { border-color:var(--v); transform:translateY(-3px); }
+@media (max-width:900px){
+  .realms .svc-grid, .realms .leaders, .realms .team-dir, .realms .insights { grid-template-columns:1fr 1fr; }
+  .realms .testi-grid, .realms .case-grid, .realms .mon-lead, .realms .contact-grid { grid-template-columns:1fr; }
+  .realms .bar .tabs { max-width:calc(100vw - 200px); }
+}
+@media (max-width:560px){ .realms .svc-grid, .realms .leaders, .realms .team-dir, .realms .insights { grid-template-columns:1fr; } }
+
+.realms .mon-rules { font-size:12.5px; color:#8A5A12; background:#FBF3E6; border:1px solid #F0D9B5; border-radius:10px; padding:8px 12px; margin-bottom:14px; }
+.realms .mcat-r { display:flex; align-items:center; gap:8px; }
+.realms .need { font-size:11.5px; color:#B4442E; background:#FBE9E6; border:1px solid #F0C9BF; border-radius:12px; padding:3px 9px; white-space:nowrap; }
+.realms .ok { font-size:11.5px; color:#2E7D46; background:#E6F4EA; border:1px solid #BFE3CB; border-radius:12px; padding:3px 9px; }
+.realms .mitem.flag { border-left:3px solid #B4442E; padding-left:12px; margin-left:-12px; }
+.realms .ev-btn.urgent { border-color:#B4442E; color:#B4442E; }
+.realms .hintline.req { color:#B4442E; font-weight:600; }
+.realms .prop-list { display:grid; gap:14px; }
+.realms .prop-card { background:#fff; border:1px solid var(--line); border-radius:16px; padding:20px 22px; }
+.realms .prop-head { display:flex; align-items:center; justify-content:space-between; gap:12px; border-bottom:1px solid var(--lav2); padding-bottom:12px; margin-bottom:12px; }
+.realms .prop-sec { margin-bottom:12px; }
+.realms .prop-sec h4 { font-size:13px; letter-spacing:.04em; text-transform:uppercase; color:var(--v); margin-bottom:8px; }
+.realms .corr { margin:0; padding-left:18px; display:grid; gap:6px; }
+.realms .corr li { font-size:14px; color:#3A2B54; }
+.realms .corr em { color:#5A4C74; font-style:italic; }
+.realms .corr-tl { display:inline-block; margin-left:8px; font-size:11.5px; color:#9A5B12; background:#FBF3E6; border:1px solid #F0D9B5; border-radius:10px; padding:2px 8px; }
+.realms .prop-actions { margin-top:4px; }
+.realms .muted.sm { font-size:13.5px; color:#7A6A93; }
+.realms .profile-cat .prof-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:10px; margin-bottom:10px; }
+@media (max-width:560px){ .realms .profile-cat .prof-grid { grid-template-columns:1fr 1fr; } }
+.realms .langsel { font-family:inherit; font-size:13px; border:1px solid var(--line); border-radius:16px; padding:6px 10px; background:#fff; color:var(--p-deep); margin-right:2px; }
+.realms .langsel:focus { outline:none; border-color:var(--p); }
 `

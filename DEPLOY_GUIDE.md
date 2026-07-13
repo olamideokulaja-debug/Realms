@@ -175,3 +175,11 @@ Redeploy after adding them. In Reports, open Notify on a visit: Send SMS uses th
 
 ### Evidence in Supabase Storage
 By default, photos, scans and voice notes are stored inline with the visit, which is fine for routine volumes. To store heavier media as files instead, create a Storage bucket named `evidence` in Supabase and make it public (Storage, New bucket, name it evidence, tick Public). The app then uploads each piece of evidence and stores its URL; if the bucket is missing or upload fails, it quietly falls back to inline storage, so nothing breaks. For tighter access you can keep the bucket private and switch the app to signed URLs later.
+
+## This build adds
+- Installable app (PWA): on a phone, open the site and choose "Add to Home Screen". It then launches full-screen and caches the shell for offline use.
+- Proprietor view: the Facility Proprietor role now has a "My Facility" tab with read-only outcomes, corrective actions and re-inspection timelines. (In production, scope this to the proprietor's own facility.)
+- WhatsApp notifications: add `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_WHATSAPP_FROM` (e.g. `whatsapp:+14155238886`) in Vercel to enable automated WhatsApp from the Reports Notify panel. Without them, the "open WhatsApp" link still works.
+- Exports: Reports now export CSV, Excel and a PDF summary.
+- Google Sheet import: on Facilities, "Google Sheet" imports from a view-shared sheet link. "HEFAMAA sync" is ready to wire once you share the Agency's API endpoint.
+- Field evidence rules: photo required on red items, a voice note per rated category, and GPS mandatory at check-in.
