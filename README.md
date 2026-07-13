@@ -61,3 +61,117 @@ A blank page almost always means a bad Supabase value. This build now falls back
 - `VITE_SUPABASE_ANON_KEY` is the long anon public key, pasted whole with no line breaks.
 - Both are set for the Production environment, then redeploy so the new values are built in.
 To see the exact issue, open the site, press F12, and read the Console tab. A line starting with "Realms:" will name the problem.
+
+## Stage 3 (Map) setup
+Stage 3 adds Facilities, a Map & Route view and Team Leader assignment. In demo mode these save in the browser. For real accounts, run this once in the Supabase SQL Editor (paste from `create` to the last `);`, without the code fences):
+
+```sql
+create table if not exists facilities (
+  id uuid primary key default gen_random_uuid(),
+  name text not null,
+  category text,
+  area text,
+  address text,
+  lat double precision,
+  lng double precision,
+  last_visit date,
+  created_by uuid references auth.users(id),
+  created_at timestamptz default now()
+);
+alter table facilities enable row level security;
+create policy "auth read facilities" on facilities for select using (auth.uid() is not null);
+create policy "auth write facilities" on facilities for insert with check (auth.uid() is not null);
+create policy "auth update facilities" on facilities for update using (auth.uid() is not null);
+create policy "auth delete facilities" on facilities for delete using (auth.uid() is not null);
+
+create table if not exists assignments (
+  id uuid primary key default gen_random_uuid(),
+  visit_date date,
+  area text,
+  facility_ids jsonb,
+  note text,
+  created_by uuid references auth.users(id),
+  created_at timestamptz default now()
+);
+alter table assignments enable row level security;
+create policy "auth all assignments" on assignments for all using (auth.uid() is not null) with check (auth.uid() is not null);
+```
+
+### Importing facilities by CSV
+Use a header row with any of these columns (only `name` is required): `name, category, area` (or `lga`), `address, lat, lng, last_visit`. If a row has `lat` and `lng`, it appears on the map straight away. Rows without coordinates can be placed later with the Locate button, which looks the address up on OpenStreetMap.
+
+### Maps and directions
+The map uses OpenStreetMap, so it needs no API key. Build route orders the stops for the shortest hop-to-hop path, and Open in Google Maps hands the ordered stops to the Google Maps app for turn-by-turn on the day. If you later want in-app Google directions, that is a small addition and will need a Google Maps key.
+
+## Stage 4 (Engage) setup
+Stage 4 adds the arrival check-in, saved as a visit. In demo mode visits save in the browser. For real accounts, run this once in the Supabase SQL Editor:
+
+```sql
+create table if not exists visits (
+  id uuid primary key default gen_random_uuid(),
+  facility_id text,
+  facility_name text,
+  area text,
+  status text default 'engaged',
+  arrival_time timestamptz,
+  lat double precision,
+  lng double precision,
+  team jsonb,
+  person_in_charge jsonb,
+  greeting_confirmed boolean default false,
+  created_by uuid references auth.users(id),
+  created_at timestamptz default now()
+);
+alter table visits enable row level security;
+create policy "auth all visits" on visits for all using (auth.uid() is not null) with check (auth.uid() is not null);
+```
+
+The Engage tab appears for Field Monitor and Team Leader. It walks four steps: choose the facility, confirm arrival and capture location, present the monitoring letter and team ID cards with the introduction script, then record the person in charge and confirm the greeting. Location capture uses the browser and needs the site on https, which Vercel provides. The assessment checklist that follows arrives in Stage 5.
+
+## Stage 5 (Monitor) setup
+Stage 5 adds the six-category HEFAMAA checklist onto a visit, with red/amber/green scoring and evidence capture. In demo mode this saves in the browser. For real accounts, add three columns to the existing visits table (run once in the Supabase SQL Editor):
+
+```sql
+alter table visits add column if not exists monitoring jsonb;
+alter table visits add column if not exists score int;
+alter table visits add column if not exists overall_rating text;
+```
+
+### How it works
+Open Monitor, choose a checked-in visit, and rate each item Green, Amber or Red. The category and overall compliance scores update live. Per item you can add a photo, a document scan, or a voice note, and each piece of evidence is stamped with the time and, if allowed, the location. Photos and scans are shrunk in the browser before saving to keep them small. Your work autosaves to the device as you go, so a lost connection will not lose it: an Online or Offline badge shows the state, and if a save cannot reach Supabase it is kept locally and marked Pending sync, with a Sync now button to retry.
+
+Two notes. Camera, microphone and location need the site on https, which Vercel provides. Evidence is stored inline for now, which is fine for routine volumes; if you later capture a great deal of media per visit, moving evidence to Supabase Storage is the clean next step.
+
+## Stage 6 (Debrief) setup
+Stage 6 closes out a visit: strengths and gaps, corrective actions, a remediation timeline, the proprietor e-signature, and the monitoring report and corrective letter. In demo mode this saves in the browser. For real accounts, add one column to the visits table (run once in the Supabase SQL Editor):
+
+```sql
+alter table visits add column if not exists debrief jsonb;
+```
+
+### How it works
+Open Debrief and choose an assessed visit. The strengths (green items) and gaps (amber and red items) are pulled straight from the Monitor ratings. Enter a required action and timeline for each gap, set a remediation deadline and re-inspection window, and record the person in charge with their acknowledgement and signature, drawn on the device. Save debrief stores everything and moves the visit to debriefed, with the same offline and Sync now safety as Monitor. Monitoring report and Corrective letter open a formatted document in a new tab; use the browser's Print or Save as PDF. Signing and drawing need the site on https, which Vercel provides. Reports are drafts for human review before they are issued.
+
+## Stage 7 (Reports & notifications) and Stage 8 (Analytics)
+These two stages read the data already stored, so there are no new tables to create.
+
+### Reports (Stage 7)
+The Reports tab (RHSC HQ, Team Leader, HEFAMAA Reviewer) lists every visit with filters for area and status. For each visit you can open the Monitoring report or Corrective letter, or open Notify. A Re-inspections due panel lists debriefed visits by their remediation deadline, flagging overdue and near-due ones. Export CSV downloads the filtered list.
+
+Notifications work without a backend: Email report and HQ alert open your mail app with the summary prefilled, and SMS proprietor opens your phone's messaging app to the proprietor's number. To send SMS and email automatically instead, connect a provider (for example Termii or Africa's Talking for SMS, and a transactional email service) behind a small serverless function; the buttons can then post to it. That is an optional integration and needs provider keys.
+
+### Analytics (Stage 8)
+The Analytics tab (RHSC HQ, Team Leader, HEFAMAA Reviewer) shows headline figures (facilities, areas covered, visits, assessed, average score, green rate), a visits-by-area bar chart, a compliance-outcomes breakdown, and a geographic map where every facility is coloured by its most recent visit outcome, green, amber, red, or grey for not yet assessed. Everything is computed live from your facilities and visits.
+
+## Optional: automated notifications and evidence storage
+These are optional upgrades. The app runs fully without them; they improve real-account deployments.
+
+### Automated SMS and email (serverless function)
+A function at `api/notify.js` sends SMS via Termii and email via Resend. Set these environment variables in Vercel (add only the ones you want; missing ones make the app fall back to opening your device's mail or SMS app):
+- SMS: `TERMII_API_KEY`, and optionally `TERMII_SENDER_ID` (defaults to RHSC).
+- Email: `RESEND_API_KEY`, and `NOTIFY_FROM` (a sender address verified with Resend).
+
+Redeploy after adding them. In Reports, open Notify on a visit: Send SMS uses the proprietor's phone; enter an address and Send email to email the summary. The open-app links remain as a manual fallback. You can swap Termii or Resend for another provider by editing the two fetch calls in `api/notify.js`.
+
+### Evidence in Supabase Storage
+By default, photos, scans and voice notes are stored inline with the visit, which is fine for routine volumes. To store heavier media as files instead, create a Storage bucket named `evidence` in Supabase and make it public (Storage, New bucket, name it evidence, tick Public). The app then uploads each piece of evidence and stores its URL; if the bucket is missing or upload fails, it quietly falls back to inline storage, so nothing breaks. For tighter access you can keep the bucket private and switch the app to signed URLs later.

@@ -1,20 +1,20 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
+import L from 'leaflet'
+import 'leaflet/dist/leaflet.css'
 import { supabase, MODE } from './supabaseClient.js'
+import { facilities as FAC, assignments as ASG, visits as VIS, facilitiesFromCSV, orderRoute, googleMapsDirUrl, geocode, uploadEvidence, sendNotify } from './data.js'
 
 /*
-  REALMS FIELD — Stages 1 & 2 (single-file App.jsx)
-  Stage 1: tabbed public site (Home, Process, Services, About, Contact).
-  Stage 2: Supabase auth + role picker + per-user identity + role-aware dashboard.
-  Auth runs in demo mode until VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY are set.
-  Fields to complete before publishing are marked EDIT.
+  REALMS FIELD — Stages 1 to 3 (single-file App.jsx + supabaseClient.js + data.js)
+  Stage 1: tabbed public site. Stage 2: auth, role picker, dashboard.
+  Stage 3 (Map): facilities with area clustering, CSV import, Leaflet map,
+  nearest-neighbour route ordering, hand-off to Google Maps, Team Leader assignment.
+  Runs in demo mode (browser storage) until Supabase keys are set.
 */
 
 const SITE_TABS = [
-  { id: 'home', label: 'Home' },
-  { id: 'process', label: 'Process' },
-  { id: 'services', label: 'Services' },
-  { id: 'about', label: 'About' },
-  { id: 'contact', label: 'Contact' }
+  { id: 'home', label: 'Home' }, { id: 'process', label: 'Process' },
+  { id: 'services', label: 'Services' }, { id: 'about', label: 'About' }, { id: 'contact', label: 'Contact' }
 ]
 
 const STAGES = [
@@ -31,12 +31,7 @@ const PILLARS = [
   { t: 'Training & consulting', d: 'Educational engagement for facility teams and advisory support for regulators and operators, building the knowledge that prevents non-compliance before it happens.' }
 ]
 
-const COVERAGE = [
-  { label: 'Facilities monitored' },
-  { label: 'Areas & LGAs covered' },
-  { label: 'Monitoring visits completed' },
-  { label: 'Corrective actions to closure' }
-]
+const COVERAGE = [ { label: 'Facilities monitored' }, { label: 'Areas & LGAs covered' }, { label: 'Monitoring visits completed' }, { label: 'Corrective actions to closure' } ]
 
 const PRINCIPLES = [
   { t: 'Professional in approach', d: 'Structured planning, official identification and a courteous, consistent process on every visit.' },
@@ -46,22 +41,31 @@ const PRINCIPLES = [
 
 const ROLES = [
   { id: 'team_leader', label: 'Team Leader', blurb: 'Assign facilities, plan routes and review your team\u2019s visits.', icon: IconLeader,
-    tools: [ ['Assign & route facilities', 'Stage 3'], ['Review team visits', 'Stage 6'], ['Team analytics', 'Stage 8'] ] },
+    tools: [ ['Assign & route facilities', 'Stage 3', 'assign'], ['Review team visits', 'Stage 6', 'reports'], ['Team analytics', 'Stage 8', 'analytics'] ] },
   { id: 'field_monitor', label: 'Field Monitor', blurb: 'Run visits end to end: map, engage, monitor and debrief.', icon: IconMonitor,
-    tools: [ ['Map & route', 'Stage 3'], ['Engage check-in', 'Stage 4'], ['Monitor checklist', 'Stage 5'], ['Debrief & sign-off', 'Stage 6'] ] },
+    tools: [ ['Map & route', 'Stage 3', 'map'], ['Engage check-in', 'Stage 4', 'engage'], ['Monitor checklist', 'Stage 5', 'monitor'], ['Debrief & sign-off', 'Stage 6', 'debrief'] ] },
   { id: 'rhsc_hq', label: 'RHSC HQ', blurb: 'Oversight, facility data, exports and analytics.', icon: IconHQ,
-    tools: [ ['Facility list ingestion', 'Stage 3'], ['Reports & exports', 'Stage 7'], ['Oversight dashboard', 'Stage 8'] ] },
+    tools: [ ['Facility list ingestion', 'Stage 3', 'facilities'], ['Reports & exports', 'Stage 7', 'reports'], ['Oversight dashboard', 'Stage 8', 'analytics'] ] },
   { id: 'hefamaa_reviewer', label: 'HEFAMAA Reviewer', blurb: 'Read and validate monitoring outcomes across the State.', icon: IconShield,
-    tools: [ ['Review reports', 'Stage 6'], ['Validate outcomes', 'Stage 6'], ['Compliance overview', 'Stage 8'] ] },
+    tools: [ ['Review facilities', 'Stage 3', 'facilities'], ['Review reports', 'Stage 6', 'reports'], ['Compliance overview', 'Stage 8', 'analytics'] ] },
   { id: 'facility_proprietor', label: 'Facility Proprietor', blurb: 'View your facility\u2019s outcomes and required actions.', icon: IconStore,
-    tools: [ ['My facility outcomes', 'Stage 6'], ['My corrective actions', 'Stage 6'], ['Re-inspection status', 'Stage 7'] ] }
+    tools: [ ['My facility outcomes', 'Stage 6', null], ['My corrective actions', 'Stage 6', null], ['Re-inspection status', 'Stage 7', null] ] }
 ]
 
-// EDIT: map staff sign-in emails to their identity. Unlisted emails get a name from the address.
+const ROLE_TABS = {
+  team_leader: ['dashboard', 'facilities', 'map', 'engage', 'monitor', 'debrief', 'assign', 'reports', 'analytics'],
+  field_monitor: ['dashboard', 'facilities', 'map', 'engage', 'monitor', 'debrief'],
+  rhsc_hq: ['dashboard', 'facilities', 'map', 'reports', 'analytics'],
+  hefamaa_reviewer: ['dashboard', 'facilities', 'reports', 'analytics'],
+  facility_proprietor: ['dashboard']
+}
+const TAB_LABEL = { dashboard: 'Dashboard', facilities: 'Facilities', map: 'Map & Route', engage: 'Engage', monitor: 'Monitor', debrief: 'Debrief', assign: 'Assign', reports: 'Reports', analytics: 'Analytics' }
+const CAN_EDIT = ['team_leader', 'field_monitor', 'rhsc_hq']
+const AREA_COLORS = ['#7A34A8', '#3E86C9', '#C7549C', '#5FA35A', '#D08A2E', '#8E44C0', '#4AA3A3', '#B0562E', '#6C6FD0', '#C0603C']
+
 const IDENTITY = {
   // 'solomon@realms.ng': { name: 'Dr Solomon', title: 'Team Leader', photo: '' },
 }
-
 function identityFor(email) {
   const found = IDENTITY[(email || '').toLowerCase()]
   if (found) return found
@@ -69,22 +73,20 @@ function identityFor(email) {
   const name = base.split(' ').map(w => w ? w[0].toUpperCase() + w.slice(1) : w).join(' ')
   return { name: name || 'Staff', title: '', photo: '' }
 }
-
 function roleById(id) { return ROLES.find(r => r.id === id) || null }
+function hasCoords(f) { return typeof f.lat === 'number' && typeof f.lng === 'number' && !isNaN(f.lat) && !isNaN(f.lng) }
 
-/* ---------- role icons ---------- */
+/* ---------- icons ---------- */
 function IconLeader() { return (<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6"><circle cx="12" cy="8" r="3.4"/><path d="M5 20c0-3.6 3.1-6 7-6s7 2.4 7 6"/><path d="M12 1.6l1 2 2.2.2-1.7 1.5.5 2.1L12 6.4 9.9 7.5l.5-2.1L8.8 3.8 11 3.6z"/></svg>) }
 function IconMonitor() { return (<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6"><rect x="5" y="3.5" width="14" height="17" rx="2"/><path d="M9 3.5V6h6V3.5"/><path d="M8.5 11l2 2 4-4.5"/><path d="M8.5 16h7"/></svg>) }
 function IconHQ() { return (<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6"><path d="M3 21h18"/><path d="M5 21V7l7-4 7 4v14"/><path d="M9.5 21v-4h5v4"/><path d="M9 11h1.5M13.5 11H15M9 14h1.5M13.5 14H15"/></svg>) }
 function IconShield() { return (<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6"><path d="M12 2.5l7 2.6v5.4c0 4.7-3 8.2-7 9.5-4-1.3-7-4.8-7-9.5V5.1z"/><path d="M8.8 12l2.1 2.1 4.3-4.6"/></svg>) }
 function IconStore() { return (<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6"><path d="M4 9.5V20h16V9.5"/><path d="M3 4.5h18l1 5H2z"/><path d="M9.5 20v-5h5v5"/></svg>) }
 
-/* ---------- shared page pieces ---------- */
-function SectionHead({ eyebrow, title }) {
-  return (<div className="section-head anim"><p className="eyebrow">{eyebrow}</p><h2>{title}</h2></div>)
-}
+/* ---------- shared ---------- */
+function SectionHead({ eyebrow, title }) { return (<div className="section-head anim"><p className="eyebrow">{eyebrow}</p><h2>{title}</h2></div>) }
 
-/* ---------- public site pages ---------- */
+/* ---------- public pages ---------- */
 function HomePage({ onSignIn, go }) {
   return (
     <div className="page">
@@ -104,238 +106,937 @@ function HomePage({ onSignIn, go }) {
         </div>
       </section>
       <section className="home-strip anim">
-        {/* EDIT: replace each value with a verified figure before publishing. */}
         {COVERAGE.map(c => (<div className="mini-stat" key={c.label}><span className="mini-value">&mdash;</span><span className="mini-label">{c.label}</span></div>))}
       </section>
     </div>
   )
 }
-
 function ProcessPage() {
-  return (
-    <div className="page">
-      <SectionHead eyebrow="How we work" title="A four-stage field process" />
-      <div className="wave-wrap">
-        <svg className="wave" viewBox="0 0 1000 90" preserveAspectRatio="none" aria-hidden="true"><path d="M0 55 C110 22, 200 78, 320 52 S540 20, 660 52 S870 82, 1000 46" fill="none" stroke="#A66BD4" strokeWidth="2.5"/></svg>
-        <ol className="stages">
-          {STAGES.map((s, i) => (
-            <li className="stage anim" key={s.n} style={{ animationDelay: (i * 80) + 'ms' }}>
-              <span className="stage-n">{s.n}</span><span className="dot" aria-hidden="true" /><h3>{s.t}</h3><p>{s.d}</p>
-            </li>
-          ))}
-        </ol>
-      </div>
-    </div>
-  )
+  return (<div className="page"><SectionHead eyebrow="How we work" title="A four-stage field process" />
+    <div className="wave-wrap"><svg className="wave" viewBox="0 0 1000 90" preserveAspectRatio="none" aria-hidden="true"><path d="M0 55 C110 22, 200 78, 320 52 S540 20, 660 52 S870 82, 1000 46" fill="none" stroke="#A66BD4" strokeWidth="2.5"/></svg>
+      <ol className="stages">{STAGES.map((s, i) => (<li className="stage anim" key={s.n} style={{ animationDelay: (i * 80) + 'ms' }}><span className="stage-n">{s.n}</span><span className="dot" aria-hidden="true" /><h3>{s.t}</h3><p>{s.d}</p></li>))}</ol>
+    </div></div>)
 }
-
 function ServicesPage() {
-  return (
-    <div className="page">
-      <SectionHead eyebrow="What we do" title="Four service pillars" />
-      <div className="pillars">
-        {PILLARS.map((p, i) => (
-          <article className="pillar anim" key={p.t} style={{ animationDelay: (i * 70) + 'ms' }}>
-            <span className="pillar-rule" aria-hidden="true" /><h3>{p.t}</h3><p>{p.d}</p>
-          </article>
-        ))}
-      </div>
-    </div>
-  )
+  return (<div className="page"><SectionHead eyebrow="What we do" title="Four service pillars" />
+    <div className="pillars">{PILLARS.map((p, i) => (<article className="pillar anim" key={p.t} style={{ animationDelay: (i * 70) + 'ms' }}><span className="pillar-rule" aria-hidden="true" /><h3>{p.t}</h3><p>{p.d}</p></article>))}</div></div>)
 }
-
 function AboutPage() {
-  return (
-    <div className="page">
-      <SectionHead eyebrow="The mandate" title="Who we are" />
-      <div className="mandate-grid">
-        <p className="anim">The Health Facility Monitoring and Accreditation Agency (HEFAMAA) is the Lagos State authority responsible for inspecting, monitoring and licensing public and private health facilities, and for promoting consistent quality in service delivery.</p>
-        <p className="anim" style={{ animationDelay: '90ms' }}>REALMS Healthcare Services Consulting Limited supports that mandate on the ground. Our field teams carry out routine monitoring across the State, combining efficient planning, professional engagement, evidence-based assessment and clear corrective guidance, raising the standard of care while treating facility owners with courtesy and respect.</p>
-      </div>
-      <div className="principles">
-        {PRINCIPLES.map((p, i) => (<div className="principle anim" key={p.t} style={{ animationDelay: (i * 70) + 'ms' }}><h3>{p.t}</h3><p>{p.d}</p></div>))}
-      </div>
+  return (<div className="page"><SectionHead eyebrow="The mandate" title="Who we are" />
+    <div className="mandate-grid">
+      <p className="anim">The Health Facility Monitoring and Accreditation Agency (HEFAMAA) is the Lagos State authority responsible for inspecting, monitoring and licensing public and private health facilities, and for promoting consistent quality in service delivery.</p>
+      <p className="anim" style={{ animationDelay: '90ms' }}>REALMS Healthcare Services Consulting Limited supports that mandate on the ground. Our field teams carry out routine monitoring across the State, combining efficient planning, professional engagement, evidence-based assessment and clear corrective guidance, raising the standard of care while treating facility owners with courtesy and respect.</p>
     </div>
-  )
+    <div className="principles">{PRINCIPLES.map((p, i) => (<div className="principle anim" key={p.t} style={{ animationDelay: (i * 70) + 'ms' }}><h3>{p.t}</h3><p>{p.d}</p></div>))}</div></div>)
 }
-
 function ContactPage() {
-  return (
-    <div className="page">
-      <SectionHead eyebrow="Get in touch" title="Work with RHSC" />
-      <div className="enquiry-card anim">
-        <div className="enquiry-copy">
-          <h2>Reach our team</h2>
-          <p>For regulatory partnerships, facility support or consulting.</p>
-        </div>
-        {/* EDIT: add real contact details below before publishing. */}
-        <ul className="contacts">
-          <li><span>Email</span><em>hello@example.com</em></li>
-          <li><span>Phone</span><em>Add number</em></li>
-          <li><span>Office</span><em>Add Lagos address</em></li>
-        </ul>
-      </div>
-    </div>
-  )
+  return (<div className="page"><SectionHead eyebrow="Get in touch" title="Work with RHSC" />
+    <div className="enquiry-card anim">
+      <div className="enquiry-copy"><h2>Reach our team</h2><p>For regulatory partnerships, facility support or consulting.</p></div>
+      <ul className="contacts"><li><span>Email</span><em>hello@example.com</em></li><li><span>Phone</span><em>Add number</em></li><li><span>Office</span><em>Add Lagos address</em></li></ul>
+    </div></div>)
 }
 
 /* ---------- auth ---------- */
 function AuthPanel({ onDone, onCancel }) {
-  const [mode, setMode] = useState('signin')
-  const [email, setEmail] = useState('')
-  const [password, setPassword] = useState('')
-  const [busy, setBusy] = useState(false)
-  const [msg, setMsg] = useState('')
-
+  const [mode, setMode] = useState('signin'); const [email, setEmail] = useState(''); const [password, setPassword] = useState('')
+  const [busy, setBusy] = useState(false); const [msg, setMsg] = useState('')
   async function submit() {
     setMsg(''); setBusy(true)
     try {
       if (MODE === 'supabase') {
-        if (mode === 'signup') {
-          const { error } = await supabase.auth.signUp({ email, password })
-          if (error) throw error
-          setMsg('Account created. Check your email if confirmation is required, then sign in.')
-          setMode('signin')
-        } else {
-          const { error } = await supabase.auth.signInWithPassword({ email, password })
-          if (error) throw error
-        }
-      } else {
-        // demo mode: accept any email, persist locally
-        if (!email) throw new Error('Enter an email to continue.')
-        localStorage.setItem('realms_demo_user', JSON.stringify({ email }))
-        onDone({ email })
-      }
-    } catch (e) {
-      setMsg(e.message || 'Something went wrong. Please try again.')
-    } finally {
-      setBusy(false)
-    }
+        if (mode === 'signup') { const { error } = await supabase.auth.signUp({ email, password }); if (error) throw error; setMsg('Account created. If confirmation is required, check your email, then sign in.'); setMode('signin') }
+        else { const { error } = await supabase.auth.signInWithPassword({ email, password }); if (error) throw error }
+      } else { if (!email) throw new Error('Enter an email to continue.'); localStorage.setItem('realms_demo_user', JSON.stringify({ email })); onDone({ email }) }
+    } catch (e) { setMsg(e.message || 'Something went wrong. Please try again.') } finally { setBusy(false) }
   }
-
-  return (
-    <div className="auth-shell">
-      <div className="auth-card anim">
-        <img className="auth-mark" src="/rhsc-mark.png" alt="RHSC" />
-        <h2>{mode === 'signup' ? 'Create your Realms Field account' : 'Sign in to Realms Field'}</h2>
-        <p className="auth-sub">For RHSC staff and authorised HEFAMAA reviewers.</p>
-        <label className="field"><span>Email</span>
-          <input type="email" value={email} autoComplete="email" onChange={e => setEmail(e.target.value)} placeholder="you@realms.ng" />
-        </label>
-        <label className="field"><span>Password</span>
-          <input type="password" value={password} autoComplete="current-password" onChange={e => setPassword(e.target.value)} placeholder={MODE === 'demo' ? 'Not required in demo' : '\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022'} />
-        </label>
-        {msg && <p className="auth-msg">{msg}</p>}
-        <button className="btn primary wide" onClick={submit} disabled={busy}>{busy ? 'Please wait\u2026' : (mode === 'signup' ? 'Create account' : 'Sign in')}</button>
-        <button className="linkbtn" onClick={() => setMode(mode === 'signup' ? 'signin' : 'signup')}>
-          {mode === 'signup' ? 'Already have an account? Sign in' : 'Need an account? Create one'}
-        </button>
-        <button className="linkbtn subtle" onClick={onCancel}>Back to site</button>
-        {MODE === 'demo' && <p className="demo-note">Demo mode: add Supabase keys to enable real accounts. See the deploy guide.</p>}
-      </div>
-    </div>
-  )
+  return (<div className="auth-shell"><div className="auth-card anim">
+    <img className="auth-mark" src="/rhsc-mark.png" alt="RHSC" />
+    <h2>{mode === 'signup' ? 'Create your Realms Field account' : 'Sign in to Realms Field'}</h2>
+    <p className="auth-sub">For RHSC staff and authorised HEFAMAA reviewers.</p>
+    <label className="field"><span>Email</span><input type="email" value={email} autoComplete="email" onChange={e => setEmail(e.target.value)} placeholder="you@realms.ng" /></label>
+    <label className="field"><span>Password</span><input type="password" value={password} autoComplete="current-password" onChange={e => setPassword(e.target.value)} placeholder={MODE === 'demo' ? 'Not required in demo' : 'Your password'} /></label>
+    {msg && <p className="auth-msg">{msg}</p>}
+    <button className="btn primary wide" onClick={submit} disabled={busy}>{busy ? 'Please wait\u2026' : (mode === 'signup' ? 'Create account' : 'Sign in')}</button>
+    <button className="linkbtn" onClick={() => setMode(mode === 'signup' ? 'signin' : 'signup')}>{mode === 'signup' ? 'Already have an account? Sign in' : 'Need an account? Create one'}</button>
+    <button className="linkbtn subtle" onClick={onCancel}>Back to site</button>
+    {MODE === 'demo' && <p className="demo-note">Demo mode: add Supabase keys to enable real accounts. See the deploy guide.</p>}
+  </div></div>)
 }
 
 /* ---------- role picker ---------- */
 function RolePicker({ identity, onPick, onSignOut }) {
-  return (
-    <div className="page role-page">
-      <div className="section-head anim">
-        <p className="eyebrow">Welcome, {identity.name}</p>
-        <h2>Which best describes you?</h2>
-      </div>
-      <div className="role-grid">
-        {ROLES.map((r, i) => {
-          const Icon = r.icon
-          return (
-            <button className="role-card anim" key={r.id} style={{ animationDelay: (i * 60) + 'ms' }} onClick={() => onPick(r.id)}>
-              <span className="role-icon"><Icon /></span>
-              <span className="role-label">{r.label}</span>
-              <span className="role-blurb">{r.blurb}</span>
-            </button>
-          )
-        })}
-      </div>
-      <button className="linkbtn subtle center" onClick={onSignOut}>Sign out</button>
-    </div>
-  )
+  return (<div className="page role-page">
+    <div className="section-head anim"><p className="eyebrow">Welcome, {identity.name}</p><h2>Which best describes you?</h2></div>
+    <div className="role-grid">{ROLES.map((r, i) => { const Icon = r.icon; return (
+      <button className="role-card anim" key={r.id} style={{ animationDelay: (i * 60) + 'ms' }} onClick={() => onPick(r.id)}>
+        <span className="role-icon"><Icon /></span><span className="role-label">{r.label}</span><span className="role-blurb">{r.blurb}</span>
+      </button>) })}</div>
+    <button className="linkbtn subtle center" onClick={onSignOut}>Sign out</button>
+  </div>)
 }
 
 /* ---------- dashboard ---------- */
-function Dashboard({ identity, role, onSignOut, onChangeRole }) {
-  const r = roleById(role)
-  const Icon = r ? r.icon : IconMonitor
-  return (
-    <div className="page dash">
-      <div className="dash-head anim">
-        <div className="dash-hello">
-          <span className="dash-icon"><Icon /></span>
-          <div>
-            <p className="eyebrow">{r ? r.label : 'Realms Field'}</p>
-            <h2>Welcome, {identity.name}</h2>
-            {identity.title ? <p className="dash-title">{identity.title}</p> : null}
-          </div>
-        </div>
+function Dashboard({ identity, role, onOpen }) {
+  const r = roleById(role); const Icon = r ? r.icon : IconMonitor
+  return (<div className="page dash">
+    <div className="dash-head anim"><div className="dash-hello">
+      <span className="dash-icon"><Icon /></span>
+      <div><p className="eyebrow">{r ? r.label : 'Realms Field'}</p><h2>Welcome, {identity.name}</h2>{identity.title ? <p className="dash-title">{identity.title}</p> : null}</div>
+    </div></div>
+    <p className="dash-intro anim">Your workspace is ready. Tools tagged with a stage unlock as the build grows; the ones marked ready are live now.</p>
+    <div className="tool-grid">{(r ? r.tools : []).map(([name, stage, tab], i) => {
+      const live = !!tab
+      return (<button className={'tool-card' + (live ? ' live' : '')} key={name} style={{ animationDelay: (i * 60) + 'ms' }} disabled={!live} onClick={() => live && onOpen(tab)}>
+        <span className="tool-name">{name}</span><span className={'tool-stage' + (live ? ' ready' : '')}>{live ? 'Open' : stage}</span>
+      </button>)
+    })}</div>
+  </div>)
+}
+
+/* ---------- facilities ---------- */
+function FacilitiesPage({ list, canEdit, userId, reload }) {
+  const [adding, setAdding] = useState(false); const [busy, setBusy] = useState(false); const [msg, setMsg] = useState('')
+  const [form, setForm] = useState({ name: '', category: '', area: '', address: '', lat: '', lng: '' })
+  const fileRef = useRef(null)
+
+  const groups = {}
+  list.forEach(f => { const a = f.area || 'Unassigned'; (groups[a] = groups[a] || []).push(f) })
+  const areas = Object.keys(groups).sort()
+  const missing = list.filter(f => !hasCoords(f)).length
+
+  async function saveForm() {
+    if (!form.name.trim()) { setMsg('A facility name is required.'); return }
+    setBusy(true); setMsg('')
+    try {
+      const lat = parseFloat(form.lat), lng = parseFloat(form.lng)
+      await FAC.addMany([{ name: form.name.trim(), category: form.category.trim(), area: form.area.trim() || 'Unassigned', address: form.address.trim(), last_visit: '', lat: isNaN(lat) ? null : lat, lng: isNaN(lng) ? null : lng }], userId)
+      setForm({ name: '', category: '', area: '', address: '', lat: '', lng: '' }); setAdding(false); await reload()
+    } catch (e) { setMsg(e.message || 'Could not save the facility.') } finally { setBusy(false) }
+  }
+  async function onFile(e) {
+    const file = e.target.files && e.target.files[0]; if (!file) return
+    setBusy(true); setMsg('')
+    try {
+      const text = await file.text(); const items = facilitiesFromCSV(text)
+      if (!items.length) { setMsg('No rows found. Check the CSV has a header row.'); return }
+      await FAC.addMany(items, userId); await reload(); setMsg(items.length + ' facilities imported.')
+    } catch (e) { setMsg(e.message || 'Could not import the file.') } finally { setBusy(false); if (fileRef.current) fileRef.current.value = '' }
+  }
+  async function locate(f) {
+    setBusy(true); setMsg('')
+    try { const g = await geocode(f.address || f.name + ' ' + (f.area || '')); if (g) { await FAC.update(f.id, g); await reload() } else setMsg('No match found. Add coordinates manually.') }
+    catch (e) { setMsg('Location lookup failed. Add coordinates manually.') } finally { setBusy(false) }
+  }
+  async function del(f) { if (!window.confirm('Remove ' + f.name + '?')) return; await FAC.remove(f.id); await reload() }
+
+  return (<div className="page">
+    <div className="ptitle"><div><p className="eyebrow">Facilities</p><h2>{list.length} in {areas.length} area{areas.length === 1 ? '' : 's'}</h2></div>
+      {canEdit && <div className="ptools">
+        <button className="btn small ghost" onClick={() => fileRef.current && fileRef.current.click()}>Import CSV</button>
+        <button className="btn small primary" onClick={() => setAdding(a => !a)}>{adding ? 'Close' : 'Add facility'}</button>
+        <input ref={fileRef} type="file" accept=".csv,text/csv" onChange={onFile} style={{ display: 'none' }} />
+      </div>}
+    </div>
+    {canEdit && <p className="hintline">CSV columns: name, category, area (or lga), address, lat, lng, last_visit. Only name is required.</p>}
+    {msg && <p className="auth-msg block">{msg}</p>}
+    {missing > 0 && <p className="warnline">{missing} facilit{missing === 1 ? 'y is' : 'ies are'} missing coordinates and will not appear on the map. Add lat/lng or use Locate.</p>}
+
+    {adding && canEdit && (<div className="addform">
+      <div className="fgrid">
+        <label className="field sm"><span>Name</span><input value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} /></label>
+        <label className="field sm"><span>Category</span><input value={form.category} onChange={e => setForm({ ...form, category: e.target.value })} placeholder="e.g. Primary clinic" /></label>
+        <label className="field sm"><span>Area / LGA</span><input value={form.area} onChange={e => setForm({ ...form, area: e.target.value })} placeholder="e.g. Ikeja" /></label>
+        <label className="field sm"><span>Address</span><input value={form.address} onChange={e => setForm({ ...form, address: e.target.value })} /></label>
+        <label className="field sm"><span>Latitude</span><input value={form.lat} onChange={e => setForm({ ...form, lat: e.target.value })} placeholder="optional" /></label>
+        <label className="field sm"><span>Longitude</span><input value={form.lng} onChange={e => setForm({ ...form, lng: e.target.value })} placeholder="optional" /></label>
       </div>
-      <p className="dash-intro anim">Your workspace is ready. The tools below unlock in the coming build stages.</p>
-      <div className="tool-grid">
-        {(r ? r.tools : []).map(([name, stage], i) => (
-          <div className="tool-card anim" key={name} style={{ animationDelay: (i * 60) + 'ms' }}>
-            <span className="tool-name">{name}</span>
-            <span className="tool-stage">{stage}</span>
+      <button className="btn small primary" onClick={saveForm} disabled={busy}>{busy ? 'Saving\u2026' : 'Save facility'}</button>
+    </div>)}
+
+    {list.length === 0 ? <p className="empty">No facilities yet. {canEdit ? 'Add one or import a CSV to begin.' : 'Nothing to show.'}</p> :
+      areas.map((a, ai) => (<div className="cluster" key={a}>
+        <div className="cluster-head"><span className="area-dot" style={{ background: AREA_COLORS[ai % AREA_COLORS.length] }} /><h3>{a}</h3><span className="cluster-count">{groups[a].length}</span></div>
+        <div className="frows">{groups[a].map(f => (<div className="frow" key={f.id}>
+          <div className="fmain"><span className="fname">{f.name}</span><span className="fmeta">{[f.category, f.address].filter(Boolean).join(' \u00b7 ') || 'No details'}</span></div>
+          <div className="factions">
+            {hasCoords(f) ? <span className="pin ok" title="Mapped">&#9679;</span> : (canEdit ? <button className="mini" onClick={() => locate(f)} disabled={busy}>Locate</button> : <span className="pin no">no coords</span>)}
+            {canEdit && <button className="mini danger" onClick={() => del(f)}>Remove</button>}
           </div>
+        </div>))}</div>
+      </div>))}
+  </div>)
+}
+
+/* ---------- map + route ---------- */
+function pinIcon(color, num) {
+  const label = num ? '<span style="position:absolute;inset:0;display:grid;place-items:center;transform:rotate(45deg);color:#fff;font:700 11px Lora,serif">' + num + '</span>' : ''
+  return L.divIcon({ className: 'rf-pin', html: '<div style="position:relative;width:24px;height:24px"><div style="width:24px;height:24px;background:' + color + ';border:2px solid #fff;border-radius:50% 50% 50% 0;transform:rotate(-45deg);box-shadow:0 2px 5px rgba(0,0,0,.35)"></div>' + label + '</div>', iconSize: [24, 24], iconAnchor: [12, 22], popupAnchor: [0, -20] })
+}
+function MapRoutePage({ list }) {
+  const mapRef = useRef(null); const mapObj = useRef(null); const layerRef = useRef(null)
+  const areas = Array.from(new Set(list.map(f => f.area || 'Unassigned'))).sort()
+  const colorMap = {}; areas.forEach((a, i) => { colorMap[a] = AREA_COLORS[i % AREA_COLORS.length] })
+  const [area, setArea] = useState('all')
+  const [routed, setRouted] = useState(false)
+
+  const filtered = (area === 'all' ? list : list.filter(f => (f.area || 'Unassigned') === area))
+  const plotted = filtered.filter(hasCoords)
+  const ordered = routed ? orderRoute(plotted) : plotted
+  const gmaps = googleMapsDirUrl(ordered)
+
+  useEffect(() => {
+    if (!mapRef.current || mapObj.current) return
+    const m = L.map(mapRef.current, { scrollWheelZoom: true }).setView([6.5244, 3.3792], 10)
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '\u00a9 OpenStreetMap contributors' }).addTo(m)
+    layerRef.current = L.layerGroup().addTo(m); mapObj.current = m
+    setTimeout(() => m.invalidateSize(), 200)
+    return () => { m.remove(); mapObj.current = null }
+  }, [])
+
+  useEffect(() => {
+    const m = mapObj.current, lg = layerRef.current; if (!m || !lg) return
+    lg.clearLayers()
+    ordered.forEach((f, i) => {
+      const mk = L.marker([f.lat, f.lng], { icon: pinIcon(colorMap[f.area || 'Unassigned'] || '#7A34A8', routed ? i + 1 : null) })
+      mk.bindPopup('<strong>' + (f.name || '') + '</strong><br>' + [f.category, f.area].filter(Boolean).join(' \u00b7 '))
+      mk.addTo(lg)
+    })
+    if (routed && ordered.length > 1) L.polyline(ordered.map(f => [f.lat, f.lng]), { color: '#7A34A8', weight: 3, opacity: .8, dashArray: '6 6' }).addTo(lg)
+    if (ordered.length) { try { m.fitBounds(ordered.map(f => [f.lat, f.lng]), { padding: [40, 40], maxZoom: 14 }) } catch (e) {} }
+  }, [area, routed, list.length])
+
+  return (<div className="page map-page">
+    <div className="ptitle"><div><p className="eyebrow">Map & route</p><h2>{plotted.length} mapped in {area === 'all' ? 'all areas' : area}</h2></div>
+      <div className="ptools">
+        <select className="sel" value={area} onChange={e => { setArea(e.target.value); setRouted(false) }}>
+          <option value="all">All areas</option>{areas.map(a => <option key={a} value={a}>{a}</option>)}
+        </select>
+        <button className="btn small primary" onClick={() => setRouted(r => !r)} disabled={plotted.length < 2}>{routed ? 'Clear route' : 'Build route'}</button>
+        {routed && gmaps && <a className="btn small ghost" href={gmaps} target="_blank" rel="noreferrer">Open in Google Maps</a>}
+      </div>
+    </div>
+    {plotted.length === 0 && <p className="warnline">No mapped facilities in this view. Add coordinates on the Facilities tab.</p>}
+    <div className="map-frame"><div ref={mapRef} className="leaflet-holder" /></div>
+    {routed && ordered.length > 0 && (<ol className="route-list">{ordered.map((f, i) => (<li key={f.id || i}><span className="rn">{i + 1}</span><span>{f.name}</span><em>{f.area}</em></li>))}</ol>)}
+  </div>)
+}
+
+/* ---------- assign (team leader) ---------- */
+function AssignPage({ list, userId }) {
+  const areas = Array.from(new Set(list.map(f => f.area || 'Unassigned'))).sort()
+  const [date, setDate] = useState(''); const [area, setArea] = useState(areas[0] || '')
+  const [picked, setPicked] = useState({}); const [note, setNote] = useState('')
+  const [busy, setBusy] = useState(false); const [msg, setMsg] = useState(''); const [saved, setSaved] = useState([])
+
+  useEffect(() => { ASG.list().then(setSaved).catch(() => {}) }, [])
+  const inArea = list.filter(f => (f.area || 'Unassigned') === area)
+  function toggle(id) { setPicked(p => ({ ...p, [id]: !p[id] })) }
+
+  async function save() {
+    const ids = Object.keys(picked).filter(k => picked[k])
+    if (!date) { setMsg('Choose a visit date.'); return }
+    if (!ids.length) { setMsg('Select at least one facility.'); return }
+    setBusy(true); setMsg('')
+    try {
+      const rec = await ASG.add({ visit_date: date, area, facility_ids: ids, note: note.trim() }, userId)
+      setSaved(s => [rec].concat(s)); setPicked({}); setNote(''); setMsg('Assignment saved.')
+    } catch (e) { setMsg(e.message || 'Could not save the assignment.') } finally { setBusy(false) }
+  }
+
+  return (<div className="page">
+    <div className="ptitle"><div><p className="eyebrow">Assign</p><h2>Plan a day of visits</h2></div></div>
+    {msg && <p className="auth-msg block">{msg}</p>}
+    <div className="assign-grid">
+      <div className="assign-form">
+        <div className="fgrid two">
+          <label className="field sm"><span>Visit date</span><input type="date" value={date} onChange={e => setDate(e.target.value)} /></label>
+          <label className="field sm"><span>Area</span><select value={area} onChange={e => { setArea(e.target.value); setPicked({}) }}>{areas.map(a => <option key={a} value={a}>{a}</option>)}</select></label>
+        </div>
+        <p className="pick-label">Facilities in {area || 'this area'}</p>
+        <div className="pick-list">
+          {inArea.length === 0 ? <p className="empty sm">No facilities here yet.</p> : inArea.map(f => (
+            <label className="pick-row" key={f.id}><input type="checkbox" checked={!!picked[f.id]} onChange={() => toggle(f.id)} /><span>{f.name}</span>{!hasCoords(f) && <em className="nocoord">no coords</em>}</label>
+          ))}
+        </div>
+        <label className="field sm"><span>Team note</span><input value={note} onChange={e => setNote(e.target.value)} placeholder="e.g. Team A, start 9am" /></label>
+        <button className="btn small primary" onClick={save} disabled={busy}>{busy ? 'Saving\u2026' : 'Save assignment'}</button>
+      </div>
+      <div className="assign-saved">
+        <p className="pick-label">Planned</p>
+        {saved.length === 0 ? <p className="empty sm">No assignments yet.</p> : saved.map((a, i) => (
+          <div className="saved-card" key={a.id || i}><strong>{a.visit_date}</strong><span>{a.area}</span><em>{(a.facility_ids || []).length} facilities</em>{a.note ? <p>{a.note}</p> : null}</div>
         ))}
       </div>
     </div>
-  )
+  </div>)
 }
 
-/* ---------- top bars ---------- */
-function SiteBar({ tab, setTab, onSignIn }) {
-  return (
-    <header className="bar">
-      <button className="wordmark" onClick={() => setTab('home')} aria-label="REALMS home">
-        <img className="mark" src="/rhsc-mark.png" alt="RHSC" />
-        <span className="wm-text"><strong>REALMS</strong><em>Healthcare Services Consulting</em></span>
-      </button>
-      <nav className="nav">
-        <div className="tabs">
-          {SITE_TABS.map(t => (
-            <button key={t.id} className={'tab' + (tab === t.id ? ' active' : '')} onClick={() => setTab(t.id)}>{t.label}</button>
-          ))}
-        </div>
-        <button className="signin" onClick={onSignIn}>Staff sign-in</button>
-      </nav>
-    </header>
-  )
+/* ---------- engage (Stage 4) ---------- */
+function IdCard({ name, role }) {
+  return (<div className="idcard">
+    <img className="idmark" src="/rhsc-mark.png" alt="RHSC" />
+    <div className="idbody">
+      <span className="idname">{name || 'Team member'}</span>
+      <span className="idrole">{role || 'Field Monitor'}</span>
+      <span className="idorg">RHSC &middot; HEFAMAA &middot; Lagos State</span>
+    </div>
+  </div>)
 }
 
-function AppBar({ identity, role, onSignOut, onChangeRole }) {
-  const r = roleById(role)
-  return (
-    <header className="bar app-bar">
-      <div className="wordmark">
-        <img className="mark" src="/rhsc-mark.png" alt="RHSC" />
-        <span className="wm-text"><strong>REALMS FIELD</strong><em>{r ? r.label : 'Staff workspace'}</em></span>
+function EngagePage({ list, identity, role, userId }) {
+  const roleLabel = (roleById(role) || {}).label || 'Field Monitor'
+  const [step, setStep] = useState(0)
+  const [facility, setFacility] = useState(null)
+  const [arrival, setArrival] = useState(null)
+  const [coords, setCoords] = useState(null)
+  const [geoMsg, setGeoMsg] = useState('')
+  const [team, setTeam] = useState([{ name: identity.name, role: roleLabel }])
+  const [nm, setNm] = useState(''); const [nr, setNr] = useState('')
+  const [pic, setPic] = useState({ name: '', role: '', phone: '' })
+  const [greeted, setGreeted] = useState(false)
+  const [busy, setBusy] = useState(false); const [msg, setMsg] = useState(''); const [done, setDone] = useState(false)
+  const [ref] = useState(() => 'RF-' + new Date().toISOString().slice(0, 10).replace(/-/g, '') + '-' + String(Math.floor(Math.random() * 9000) + 1000))
+
+  const groups = {}; list.forEach(f => { const a = f.area || 'Unassigned'; (groups[a] = groups[a] || []).push(f) })
+  const areaKeys = Object.keys(groups).sort()
+  const dateStr = new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })
+  const lead = team[0]; const others = team.slice(1)
+  const introMembers = others.length ? others.map(m => m.name).join(', ') : ''
+  const intro = 'Good morning, sir/ma. We are from REALMS Healthcare Services Consulting Limited, working with HEFAMAA, Lagos State. I am ' + (lead ? lead.name : 'the team lead') + (others.length ? (', and these are ' + introMembers) : '') + '. We are here to conduct routine monitoring of this health facility as mandated by law.'
+
+  function chooseFacility(f) { setFacility(f); setStep(1) }
+  function checkIn() { setArrival(new Date()); setStep(2) }
+  function capture() {
+    if (!navigator.geolocation) { setGeoMsg('Location is not available on this device.'); return }
+    setGeoMsg('Locating\u2026')
+    navigator.geolocation.getCurrentPosition(
+      p => { setCoords({ lat: +p.coords.latitude.toFixed(6), lng: +p.coords.longitude.toFixed(6) }); setGeoMsg('') },
+      () => setGeoMsg('Location permission denied. You can proceed without it.'),
+      { enableHighAccuracy: true, timeout: 10000 }
+    )
+  }
+  function addMember() { if (!nm.trim()) return; setTeam(t => t.concat([{ name: nm.trim(), role: nr.trim() || 'Field Monitor' }])); setNm(''); setNr('') }
+  function removeMember(i) { setTeam(t => t.filter((_, x) => x !== i)) }
+
+  async function save() {
+    if (!greeted) { setMsg('Confirm the greeting to continue.'); return }
+    setBusy(true); setMsg('')
+    try {
+      await VIS.add({
+        facility_id: facility.id, facility_name: facility.name, area: facility.area || 'Unassigned',
+        status: 'engaged', arrival_time: (arrival || new Date()).toISOString(),
+        lat: coords ? coords.lat : null, lng: coords ? coords.lng : null,
+        team, person_in_charge: pic, greeting_confirmed: true
+      }, userId)
+      setDone(true)
+    } catch (e) { setMsg(e.message || 'Could not save the check-in.') } finally { setBusy(false) }
+  }
+  function reset() { setStep(0); setFacility(null); setArrival(null); setCoords(null); setGeoMsg(''); setTeam([{ name: identity.name, role: roleLabel }]); setPic({ name: '', role: '', phone: '' }); setGreeted(false); setDone(false); setMsg('') }
+
+  if (done) {
+    return (<div className="page"><div className="engage-done anim">
+      <span className="done-badge">Engaged</span>
+      <h2>Check-in complete</h2>
+      <p>{facility.name} &middot; {dateStr}</p>
+      <p className="muted">The assessment checklist unlocks in Stage 5. This visit is saved and ready.</p>
+      <button className="btn primary" onClick={reset}>New check-in</button>
+    </div></div>)
+  }
+
+  const steps = ['Facility', 'Check-in', 'Present', 'Greeting']
+  return (<div className="page engage">
+    <div className="ptitle"><div><p className="eyebrow">Engage</p><h2>Arrival check-in</h2></div></div>
+    <ol className="stepper">{steps.map((s, i) => (<li key={s} className={'stp' + (i === step ? ' on' : '') + (i < step ? ' done' : '')}><span>{i + 1}</span>{s}</li>))}</ol>
+    {msg && <p className="auth-msg block">{msg}</p>}
+
+    {step === 0 && (<div className="engage-pick">
+      {list.length === 0 ? <p className="empty">No facilities yet. Add them on the Facilities tab first.</p> :
+        areaKeys.map(a => (<div className="cluster" key={a}>
+          <div className="cluster-head"><h3>{a}</h3><span className="cluster-count">{groups[a].length}</span></div>
+          <div className="frows">{groups[a].map(f => (<button className="frow pickable" key={f.id} onClick={() => chooseFacility(f)}>
+            <div className="fmain"><span className="fname">{f.name}</span><span className="fmeta">{[f.category, f.address].filter(Boolean).join(' \u00b7 ') || 'No details'}</span></div>
+            <span className="mini">Select</span>
+          </button>))}</div>
+        </div>))}
+    </div>)}
+
+    {step === 1 && facility && (<div className="engage-card">
+      <p className="eyebrow">Confirm arrival</p>
+      <h3 className="fbig">{facility.name}</h3>
+      <p className="fsub">{[facility.category, facility.area, facility.address].filter(Boolean).join(' \u00b7 ')}</p>
+      <div className="ci-row"><span>Arrival time</span><em>{new Date().toLocaleTimeString('en-GB')}</em></div>
+      <div className="ci-row"><span>Location</span><em>{coords ? (coords.lat + ', ' + coords.lng) : 'Not captured'}</em></div>
+      {geoMsg && <p className="hintline">{geoMsg}</p>}
+      <div className="btnrow"><button className="btn small ghost" onClick={capture}>Capture location</button>
+        <button className="btn small ghost" onClick={() => setStep(0)}>Back</button>
+        <button className="btn small primary" onClick={checkIn}>Confirm and continue</button></div>
+    </div>)}
+
+    {step === 2 && facility && (<div className="engage-present">
+      <div className="letter">
+        <div className="letter-head"><img src="/rhsc-mark.png" alt="RHSC" /><div><strong>REALMS HEALTHCARE SERVICES CONSULTING LIMITED</strong><span>In collaboration with HEFAMAA, Lagos State</span></div></div>
+        <div className="letter-meta"><span>Ref: {ref}</span><span>{dateStr}</span></div>
+        <p className="letter-to">The Proprietor / Person in Charge<br />{facility.name}<br />{[facility.area, 'Lagos State'].filter(Boolean).join(', ')}</p>
+        <p className="letter-sub"><strong>RE: ROUTINE HEALTH FACILITY MONITORING</strong></p>
+        <p>This is to introduce the REALMS Healthcare Services Consulting Limited monitoring team, authorised to conduct routine monitoring of this facility in collaboration with the Health Facility Monitoring and Accreditation Agency (HEFAMAA), Lagos State, as mandated by law.</p>
+        <p>Your cooperation in supporting a safe, standard and quality assessment is appreciated.</p>
+        <p className="letter-sign">{lead ? lead.name : ''}<br /><span>{lead ? lead.role : ''}, for RHSC</span></p>
       </div>
-      <nav className="nav">
-        <span className="who">{identity.name}</span>
-        {role && <button className="tab" onClick={onChangeRole}>Change role</button>}
-        <button className="signin" onClick={onSignOut}>Sign out</button>
-      </nav>
-    </header>
-  )
+      <div className="present-side">
+        <p className="pick-label">Team identification</p>
+        <div className="idcards">{team.map((m, i) => (<div key={i} className="idwrap"><IdCard name={m.name} role={i === 0 ? (m.role + ' (Lead)') : m.role} />{i > 0 && <button className="mini danger" onClick={() => removeMember(i)}>Remove</button>}</div>))}</div>
+        <div className="addmember"><input placeholder="Name" value={nm} onChange={e => setNm(e.target.value)} /><input placeholder="Role" value={nr} onChange={e => setNr(e.target.value)} /><button className="mini" onClick={addMember}>Add</button></div>
+        <p className="pick-label">Introduction script</p>
+        <blockquote className="script">{intro}</blockquote>
+        <div className="btnrow"><button className="btn small ghost" onClick={() => setStep(1)}>Back</button><button className="btn small primary" onClick={() => setStep(3)}>Continue</button></div>
+      </div>
+    </div>)}
+
+    {step === 3 && facility && (<div className="engage-card">
+      <p className="eyebrow">Person in charge</p>
+      <div className="fgrid">
+        <label className="field sm"><span>Name</span><input value={pic.name} onChange={e => setPic({ ...pic, name: e.target.value })} /></label>
+        <label className="field sm"><span>Role / title</span><input value={pic.role} onChange={e => setPic({ ...pic, role: e.target.value })} placeholder="e.g. Matron" /></label>
+        <label className="field sm"><span>Phone</span><input value={pic.phone} onChange={e => setPic({ ...pic, phone: e.target.value })} /></label>
+      </div>
+      <label className="greet"><input type="checkbox" checked={greeted} onChange={e => setGreeted(e.target.checked)} /><span>I have introduced the team and completed a cordial greeting with the person in charge.</span></label>
+      <div className="btnrow"><button className="btn small ghost" onClick={() => setStep(2)}>Back</button><button className="btn small primary" onClick={save} disabled={busy || !greeted}>{busy ? 'Saving\u2026' : 'Complete check-in'}</button></div>
+    </div>)}
+  </div>)
+}
+
+/* ---------- monitor (Stage 5) ---------- */
+const CHECKLIST = [
+  { id: 'infrastructure', label: 'Infrastructure', items: ['Cleanliness and hygiene', 'Ventilation and lighting', 'Water supply', 'Power supply', 'Waste disposal and sanitation'] },
+  { id: 'personnel', label: 'Personnel', items: ['Qualified staff on duty', 'Valid professional licences', 'Duty rosters displayed'] },
+  { id: 'equipment', label: 'Equipment', items: ['Essential equipment available', 'Equipment functional and maintained'] },
+  { id: 'records', label: 'Records', items: ['Patient registers', 'Admission and discharge books', 'Laboratory registers'] },
+  { id: 'compliance', label: 'Compliance', items: ['Valid HEFAMAA licence', 'Required permits displayed', 'Price list displayed'] },
+  { id: 'services', label: 'Services', items: ['Services match the licensed category'] }
+]
+function ragWeight(r) { return r === 'green' ? 2 : r === 'amber' ? 1 : 0 }
+function ragFromPct(pct) { return pct == null ? null : pct >= 80 ? 'green' : pct >= 50 ? 'amber' : 'red' }
+function computeScore(data) {
+  let sum = 0, max = 0, rated = 0
+  CHECKLIST.forEach(cat => cat.items.forEach((_, i) => { const it = data[cat.id + '_' + i]; if (it && it.rating) { rated++; max += 2; sum += ragWeight(it.rating) } }))
+  const pct = max ? Math.round(sum / max * 100) : null
+  return { pct, rag: ragFromPct(pct), rated }
+}
+function categoryScore(data, cat) {
+  let sum = 0, max = 0, rated = 0
+  cat.items.forEach((_, i) => { const it = data[cat.id + '_' + i]; if (it && it.rating) { rated++; max += 2; sum += ragWeight(it.rating) } })
+  const pct = max ? Math.round(sum / max * 100) : null
+  return { pct, rag: ragFromPct(pct), rated, total: cat.items.length }
+}
+function downscaleImage(file, maxW = 1100, quality = 0.6) {
+  return new Promise((res, rej) => {
+    const img = new Image(); const url = URL.createObjectURL(file)
+    img.onload = () => {
+      const scale = Math.min(1, maxW / img.width); const w = Math.round(img.width * scale), h = Math.round(img.height * scale)
+      const c = document.createElement('canvas'); c.width = w; c.height = h; c.getContext('2d').drawImage(img, 0, 0, w, h)
+      URL.revokeObjectURL(url); res(c.toDataURL('image/jpeg', quality))
+    }
+    img.onerror = () => { URL.revokeObjectURL(url); rej(new Error('image error')) }
+    img.src = url
+  })
+}
+
+function Rag({ value, onChange }) {
+  return (<div className="rag">{[['green', 'G'], ['amber', 'A'], ['red', 'R']].map(([v, l]) => (
+    <button key={v} type="button" aria-label={v} title={v[0].toUpperCase() + v.slice(1)} aria-pressed={value === v} className={'ragb ' + v + (value === v ? ' on' : '')} onClick={() => onChange(value === v ? null : v)}>{l}</button>
+  ))}</div>)
+}
+function Chip({ rag, pct }) {
+  const label = rag ? (rag === 'green' ? 'Green' : rag === 'amber' ? 'Amber' : 'Red') : 'Not rated'
+  return (<span className={'chip ' + (rag || 'none')}>{label}{pct != null ? ' \u00b7 ' + pct + '%' : ''}</span>)
+}
+function VoiceButton({ onClip }) {
+  const [rec, setRec] = useState(false); const mrRef = useRef(null); const chunks = useRef([])
+  async function toggle() {
+    if (rec) { if (mrRef.current) mrRef.current.stop(); return }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      const mr = new MediaRecorder(stream); mrRef.current = mr; chunks.current = []
+      mr.ondataavailable = e => { if (e.data && e.data.size) chunks.current.push(e.data) }
+      mr.onstop = () => { const blob = new Blob(chunks.current, { type: 'audio/webm' }); const fr = new FileReader(); fr.onload = () => onClip(fr.result); fr.readAsDataURL(blob); stream.getTracks().forEach(t => t.stop()); setRec(false) }
+      mr.start(); setRec(true)
+    } catch (e) { window.alert('Microphone not available on this device.') }
+  }
+  return <button type="button" className={'ev-btn' + (rec ? ' recording' : '')} onClick={toggle}>{rec ? 'Stop' : 'Voice'}</button>
+}
+
+function MonitorPage({ userId }) {
+  const [visits, setVisits] = useState([])
+  const [active, setActive] = useState(null)
+  const [data, setData] = useState({})
+  const [online, setOnline] = useState(typeof navigator !== 'undefined' ? navigator.onLine : true)
+  const [saveState, setSaveState] = useState('')
+  const [busy, setBusy] = useState(false); const [msg, setMsg] = useState('')
+  const [geo, setGeo] = useState(null)
+
+  useEffect(() => { VIS.list().then(setVisits).catch(() => {}) }, [])
+  useEffect(() => { const on = () => setOnline(true), off = () => setOnline(false); window.addEventListener('online', on); window.addEventListener('offline', off); return () => { window.removeEventListener('online', on); window.removeEventListener('offline', off) } }, [])
+  useEffect(() => { if (navigator.geolocation) navigator.geolocation.getCurrentPosition(p => setGeo({ lat: +p.coords.latitude.toFixed(6), lng: +p.coords.longitude.toFixed(6) }), () => {}) }, [])
+
+  const draftKey = active ? 'realms_monitor_' + active.id : ''
+  useEffect(() => { if (!active) return; try { localStorage.setItem(draftKey, JSON.stringify({ items: data })) } catch (e) {} }, [data, active])
+
+  function open(v) {
+    setMsg(''); let d = (v.monitoring && v.monitoring.items) || {}
+    try { const raw = localStorage.getItem('realms_monitor_' + v.id); if (raw) { const p = JSON.parse(raw); if (p && p.items) d = p.items } } catch (e) {}
+    setActive(v); setData(d); setSaveState('')
+  }
+  function setItem(key, patch) { setData(d => ({ ...d, [key]: { ...(d[key] || { rating: null, note: '', evidence: [] }), ...patch } })); setSaveState('draft') }
+  function addEvidence(key, type, url) { setData(d => { const it = d[key] || { rating: null, note: '', evidence: [] }; const ev = (it.evidence || []).concat([{ type, data: url, at: new Date().toISOString(), lat: geo ? geo.lat : null, lng: geo ? geo.lng : null }]); return { ...d, [key]: { ...it, evidence: ev } } }); setSaveState('draft') }
+  function removeEvidence(key, idx) { setData(d => { const it = d[key]; if (!it) return d; return { ...d, [key]: { ...it, evidence: it.evidence.filter((_, i) => i !== idx) } } }); setSaveState('draft') }
+  async function onPickImage(key, type, file) { if (!file) return; try { const dataUrl = await downscaleImage(file); const stored = await uploadEvidence(active.id, type, dataUrl); addEvidence(key, type, stored) } catch (e) { setMsg('Could not process the image.') } }
+
+  const score = computeScore(data)
+  const totalItems = CHECKLIST.reduce((n, c) => n + c.items.length, 0)
+
+  async function save() {
+    if (!active) return
+    setBusy(true); setMsg('')
+    const payload = { items: data, score: score.pct, overallRating: score.rag, updatedAt: new Date().toISOString() }
+    try {
+      await VIS.update(active.id, { monitoring: payload, score: score.pct, overall_rating: score.rag, status: 'monitored' })
+      try { localStorage.removeItem(draftKey) } catch (e) {}
+      setSaveState('saved'); setMsg('Assessment saved.')
+      setVisits(vs => vs.map(v => v.id === active.id ? { ...v, monitoring: payload, score: score.pct, overall_rating: score.rag, status: 'monitored' } : v))
+    } catch (e) { setSaveState('pending'); setMsg('Saved locally. It will sync when you are back online; use Sync now to retry.') }
+    finally { setBusy(false) }
+  }
+
+  if (!active) {
+    const monVisits = visits
+    return (<div className="page">
+      <div className="ptitle"><div><p className="eyebrow">Monitor</p><h2>Assessments</h2></div>
+        <span className={'net ' + (online ? 'on' : 'off')}>{online ? 'Online' : 'Offline'}</span></div>
+      {monVisits.length === 0 ? <p className="empty">No visits yet. Complete an Engage check-in first.</p> :
+        <div className="mon-list">{monVisits.map(v => (
+          <button className="mon-row" key={v.id} onClick={() => open(v)}>
+            <div><span className="fname">{v.facility_name}</span><span className="fmeta">{v.area} &middot; {(v.arrival_time || v.created_at || '').slice(0, 10)}</span></div>
+            <div className="mon-right">{v.score != null ? <Chip rag={v.overall_rating} pct={v.score} /> : <span className={'chip ' + (v.status || 'engaged')}>{v.status === 'monitored' ? 'Assessed' : 'Ready'}</span>}<span className="mini">{v.status === 'monitored' ? 'Review' : 'Assess'}</span></div>
+          </button>
+        ))}</div>}
+    </div>)
+  }
+
+  return (<div className="page monitor">
+    <div className="mon-head">
+      <div className="mon-head-l">
+        <button className="linkbtn subtle" onClick={() => setActive(null)}>&larr; All assessments</button>
+        <h2>{active.facility_name}</h2>
+        <p className="fsub">{active.area} &middot; arrival {(active.arrival_time || '').slice(11, 16) || 'logged'}</p>
+      </div>
+      <div className="mon-head-r">
+        <span className={'net ' + (online ? 'on' : 'off')}>{online ? 'Online' : 'Offline'}</span>
+        <Chip rag={score.rag} pct={score.pct} />
+        <span className="rated">{score.rated}/{totalItems} rated</span>
+      </div>
+    </div>
+    {msg && <p className="auth-msg block">{msg}</p>}
+
+    {CHECKLIST.map(cat => {
+      const cs = categoryScore(data, cat)
+      return (<div className="mcat" key={cat.id}>
+        <div className="mcat-head"><h3>{cat.label}</h3><Chip rag={cs.rag} pct={cs.pct} /></div>
+        <div className="mitems">{cat.items.map((label, i) => {
+          const key = cat.id + '_' + i; const it = data[key] || { rating: null, note: '', evidence: [] }
+          return (<div className="mitem" key={key}>
+            <div className="mitem-top"><span className="mlabel">{label}</span><Rag value={it.rating} onChange={r => setItem(key, { rating: r })} /></div>
+            <textarea className="mnote" rows="1" placeholder="Note (optional)" value={it.note || ''} onChange={e => setItem(key, { note: e.target.value })} />
+            <div className="evrow">
+              <label className="ev-btn">Photo<input type="file" accept="image/*" capture="environment" onChange={e => { onPickImage(key, 'photo', e.target.files[0]); e.target.value = '' }} /></label>
+              <label className="ev-btn">Scan<input type="file" accept="image/*" onChange={e => { onPickImage(key, 'scan', e.target.files[0]); e.target.value = '' }} /></label>
+              <VoiceButton onClip={async url => { const stored = await uploadEvidence(active.id, 'voice', url); addEvidence(key, 'voice', stored) }} />
+              {geo && <span className="geotag">geotag on</span>}
+            </div>
+            {it.evidence && it.evidence.length > 0 && (<div className="evstrip">{it.evidence.map((ev, ei) => (
+              <div className="evthumb" key={ei}>
+                {ev.type === 'voice' ? <audio controls src={ev.data} /> : <img src={ev.data} alt={ev.type} />}
+                <button className="evx" onClick={() => removeEvidence(key, ei)}>&times;</button>
+              </div>
+            ))}</div>)}
+          </div>)
+        })}</div>
+      </div>)
+    })}
+
+    <div className="mon-actions">
+      <button className="btn primary" onClick={save} disabled={busy}>{busy ? 'Saving\u2026' : 'Save assessment'}</button>
+      {saveState === 'pending' && <button className="btn ghost" onClick={save}>Sync now</button>}
+      <span className="save-note">{saveState === 'saved' ? 'Saved' : saveState === 'pending' ? 'Pending sync' : 'Draft saved on this device'}</span>
+    </div>
+    <p className="hintline">The debrief, e-signature and report generation follow in Stage 6.</p>
+  </div>)
+}
+
+/* ---------- debrief (Stage 6) ---------- */
+const REINSPECT = ['1 week', '2 weeks', '1 month', '3 months']
+function itemMeta(key) { const idx = key.lastIndexOf('_'); const catId = key.slice(0, idx); const i = +key.slice(idx + 1); const cat = CHECKLIST.find(c => c.id === catId); return { category: cat ? cat.label : catId, label: cat ? cat.items[i] : key } }
+function ragText(r) { return r === 'green' ? 'Green' : r === 'amber' ? 'Amber' : r === 'red' ? 'Red' : 'Not rated' }
+
+function deriveDebrief(v) {
+  const data = (v.monitoring && v.monitoring.items) || {}
+  const strengths = [], gaps = []
+  Object.keys(data).forEach(k => { const it = data[k]; if (!it || !it.rating) return; const m = itemMeta(k)
+    if (it.rating === 'green') strengths.push(m.category + ': ' + m.label)
+    else gaps.push({ key: k, category: m.category, label: m.label, rating: it.rating, action: it.note || '', timeline: '2 weeks' })
+  })
+  return { strengths, gaps }
+}
+
+const DOC_CSS = "@import url('https://fonts.googleapis.com/css2?family=Lora:ital,wght@0,400;0,600;1,400&display=swap');*{font-family:'Lora',Georgia,serif;color:#241536;box-sizing:border-box}body{max-width:760px;margin:36px auto;padding:0 24px;line-height:1.6}h1{color:#642C90;font-size:23px;margin:14px 0 6px}h2{color:#642C90;font-size:15px;margin:22px 0 8px}p{margin:0 0 10px}table{width:100%;border-collapse:collapse;margin:8px 0 14px}th,td{border:1px solid #E9DCF6;padding:8px 10px;text-align:left;font-size:12.5px;vertical-align:top}th{background:#F7F1FD;color:#642C90}ul,ol{margin:6px 0 14px;padding-left:20px}li{font-size:13px;margin-bottom:4px}.head{display:flex;align-items:center;gap:12px;border-bottom:2px solid #EEE1F9;padding-bottom:12px;margin-bottom:8px}.chip{display:inline-block;padding:2px 10px;border-radius:12px;font-size:12px;border:1px solid #ccc}.g{background:#E6F4EA;color:#2E7D46;border-color:#BFE3CB}.a{background:#FBF3E6;color:#9A5B12;border-color:#F0D9B5}.r{background:#FBE9E6;color:#B4442E;border-color:#F0C9BF}.muted{color:#7A6A93;font-size:12px}.sig{height:80px;margin:6px 0}.right{text-align:right}@media print{body{margin:0}}"
+function chipCls(r) { return r === 'green' ? 'g' : r === 'amber' ? 'a' : r === 'red' ? 'r' : '' }
+function printDoc(title, inner) {
+  const w = window.open('', '_blank'); if (!w) { window.alert('Please allow pop-ups to open the document, then try again.'); return }
+  w.document.write('<html><head><title>' + title + '</title><meta charset="utf-8"><style>' + DOC_CSS + '</style></head><body>' + inner + '</body></html>')
+  w.document.close(); w.focus(); setTimeout(() => { try { w.print() } catch (e) {} }, 400)
+}
+function docHead(origin) {
+  return '<div class="head"><img src="' + origin + '/rhsc-mark.png" style="height:44px"><div><strong>REALMS HEALTHCARE SERVICES CONSULTING LIMITED</strong><br><span class="muted">In collaboration with HEFAMAA, Lagos State</span></div></div>'
+}
+function buildReport(v, d, origin) {
+  const data = (v.monitoring && v.monitoring.items) || {}
+  const date = (v.arrival_time || v.created_at || '').slice(0, 10)
+  const cats = CHECKLIST.map(c => { const cs = categoryScore(data, c); return '<tr><td>' + c.label + '</td><td><span class="chip ' + chipCls(cs.rag) + '">' + ragText(cs.rag) + (cs.pct != null ? ' ' + cs.pct + '%' : '') + '</span></td></tr>' }).join('')
+  const strengths = d.strengths.length ? '<ul>' + d.strengths.map(s => '<li>' + s + '</li>').join('') + '</ul>' : '<p class="muted">None recorded.</p>'
+  const gaps = d.gaps.length ? '<table><tr><th>Finding</th><th>Rating</th><th>Required action</th><th>Timeline</th></tr>' + d.gaps.map(g => '<tr><td>' + g.category + ': ' + g.label + '</td><td>' + ragText(g.rating) + '</td><td>' + (g.action || '\u2014') + '</td><td>' + (g.timeline || '\u2014') + '</td></tr>').join('') + '</table>' : '<p class="muted">No gaps recorded.</p>'
+  const sig = d.signature ? '<img class="sig" src="' + d.signature + '">' : '<p class="muted">Not signed.</p>'
+  return docHead(origin) + '<h1>Health Facility Monitoring Report</h1>' +
+    '<p><strong>Facility:</strong> ' + v.facility_name + ' &middot; <strong>Area:</strong> ' + (v.area || '') + '<br><strong>Visit date:</strong> ' + date + ' &middot; <strong>Overall:</strong> <span class="chip ' + chipCls(v.overall_rating) + '">' + ragText(v.overall_rating) + (v.score != null ? ' ' + v.score + '%' : '') + '</span></p>' +
+    '<h2>Assessment by category</h2><table><tr><th>Category</th><th>Rating</th></tr>' + cats + '</table>' +
+    '<h2>Strengths</h2>' + strengths +
+    '<h2>Gaps and required corrective actions</h2>' + gaps +
+    '<h2>Next steps</h2><p>Remediation deadline: ' + (d.remediation_deadline || 'to be set') + '. Re-inspection: ' + (d.reinspection || 'to be scheduled') + '. Compliance letter issued: ' + (d.letter_issued ? 'Yes' : 'No') + '.</p>' +
+    '<h2>Debrief and sign-off</h2><p>Person in charge: ' + (d.proprietor_name || '\u2014') + '. Acknowledged: ' + (d.proprietor_ack ? 'Yes' : 'No') + '.</p>' + sig + (d.signed_at ? '<p class="muted">Signed ' + d.signed_at.slice(0, 16).replace('T', ' ') + '</p>' : '') +
+    '<p class="muted">Prepared by REALMS Healthcare Services Consulting Limited in support of the HEFAMAA regulatory mandate. This report is not legal advice.</p>'
+}
+function buildLetter(v, d, origin) {
+  const date = (v.arrival_time || v.created_at || '').slice(0, 10)
+  const ref = 'RHSC/' + (v.area || 'LAG').slice(0, 3).toUpperCase() + '/' + date.replace(/-/g, '')
+  const strengthsP = d.strengths.length ? 'Your facility demonstrated good practice in areas including ' + d.strengths.slice(0, 4).map(s => s.split(': ').pop().toLowerCase()).join(', ') + '.' : 'Areas of strength were noted during the visit.'
+  const gapsL = d.gaps.length ? '<ol>' + d.gaps.map(g => '<li>' + g.category + ' &mdash; ' + g.label + '. Required action: ' + (g.action || 'address the non-compliance') + '. Timeline: ' + (g.timeline || 'as advised') + '.</li>').join('') + '</ol>' : '<p>No significant non-compliance was recorded.</p>'
+  return docHead(origin) + '<p class="right">Ref: ' + ref + '<br>' + date + '</p>' +
+    '<p>The Proprietor / Person in Charge<br>' + v.facility_name + '<br>' + (v.area || '') + ', Lagos State</p>' +
+    '<p><strong>Dear Sir/Ma,</strong></p>' +
+    '<p><strong>RE: OUTCOME OF ROUTINE HEALTH FACILITY MONITORING AT ' + (v.facility_name || '').toUpperCase() + '</strong></p>' +
+    '<p>Following the routine monitoring visit conducted at your facility on ' + date + ' by REALMS Healthcare Services Consulting Limited, in collaboration with the Health Facility Monitoring and Accreditation Agency (HEFAMAA), Lagos State, please find below a summary of our assessment and the actions required.</p>' +
+    '<p>The overall outcome of the visit is <strong>' + ragText(v.overall_rating) + '</strong>, with a compliance score of <strong>' + (v.score != null ? v.score + '%' : 'not scored') + '</strong>.</p>' +
+    '<p><strong>Areas of strength.</strong> ' + strengthsP + '</p>' +
+    '<p><strong>Areas requiring correction.</strong></p>' + gapsL +
+    '<p>You are required to complete the corrective actions above by <strong>' + (d.remediation_deadline || 'the date advised') + '</strong>. A re-inspection is scheduled within ' + (d.reinspection || 'the coming weeks') + ' to confirm the required corrections. Continued non-compliance may result in escalation to HEFAMAA for regulatory action.</p>' +
+    '<p>Yours Sincerely,<br>For: REALMS Healthcare Services Consulting Limited</p>' +
+    '<p class="muted">Issued in support of the HEFAMAA regulatory mandate. This letter is not legal advice.</p>'
+}
+
+function SignaturePad({ value, onChange }) {
+  const ref = useRef(null); const drawing = useRef(false); const last = useRef(null)
+  useEffect(() => { const c = ref.current; if (!c) return; const ctx = c.getContext('2d'); ctx.lineWidth = 2.2; ctx.lineCap = 'round'; ctx.strokeStyle = '#241536' }, [])
+  function pos(e) { const c = ref.current; const r = c.getBoundingClientRect(); const t = e.touches ? e.touches[0] : e; return { x: (t.clientX - r.left) * (c.width / r.width), y: (t.clientY - r.top) * (c.height / r.height) } }
+  function start(e) { e.preventDefault(); drawing.current = true; last.current = pos(e) }
+  function move(e) { if (!drawing.current) return; e.preventDefault(); const p = pos(e); const ctx = ref.current.getContext('2d'); ctx.beginPath(); ctx.moveTo(last.current.x, last.current.y); ctx.lineTo(p.x, p.y); ctx.stroke(); last.current = p }
+  function end() { if (!drawing.current) return; drawing.current = false; onChange(ref.current.toDataURL('image/png')) }
+  function clear() { const c = ref.current; c.getContext('2d').clearRect(0, 0, c.width, c.height); onChange('') }
+  return (<div className="sigwrap"><canvas ref={ref} width="600" height="170" className="sigpad" onMouseDown={start} onMouseMove={move} onMouseUp={end} onMouseLeave={end} onTouchStart={start} onTouchMove={move} onTouchEnd={end} /><button type="button" className="mini" onClick={clear}>Clear signature</button></div>)
+}
+
+function DebriefPage({ userId }) {
+  const [visits, setVisits] = useState([])
+  const [active, setActive] = useState(null)
+  const [strengths, setStrengths] = useState([])
+  const [gaps, setGaps] = useState([])
+  const [deadline, setDeadline] = useState('')
+  const [reinspection, setReinspection] = useState('2 weeks')
+  const [letterIssued, setLetterIssued] = useState(true)
+  const [propName, setPropName] = useState('')
+  const [ack, setAck] = useState(false)
+  const [signature, setSignature] = useState('')
+  const [online, setOnline] = useState(typeof navigator !== 'undefined' ? navigator.onLine : true)
+  const [busy, setBusy] = useState(false); const [msg, setMsg] = useState(''); const [saveState, setSaveState] = useState('')
+
+  useEffect(() => { VIS.list().then(setVisits).catch(() => {}) }, [])
+  useEffect(() => { const on = () => setOnline(true), off = () => setOnline(false); window.addEventListener('online', on); window.addEventListener('offline', off); return () => { window.removeEventListener('online', on); window.removeEventListener('offline', off) } }, [])
+
+  function open(v) {
+    setActive(v); setMsg(''); setSaveState('')
+    const existing = v.debrief
+    if (existing) {
+      setStrengths(existing.strengths || []); setGaps(existing.gaps || []); setDeadline(existing.remediation_deadline || '')
+      setReinspection(existing.reinspection || '2 weeks'); setLetterIssued(existing.letter_issued !== false)
+      setPropName(existing.proprietor_name || (v.person_in_charge && v.person_in_charge.name) || ''); setAck(!!existing.proprietor_ack); setSignature(existing.signature || '')
+    } else {
+      const d = deriveDebrief(v); setStrengths(d.strengths); setGaps(d.gaps); setDeadline(''); setReinspection('2 weeks'); setLetterIssued(true)
+      setPropName((v.person_in_charge && v.person_in_charge.name) || ''); setAck(false); setSignature('')
+    }
+  }
+  function setGap(i, patch) { setGaps(gs => gs.map((g, x) => x === i ? { ...g, ...patch } : g)); setSaveState('draft') }
+
+  function payload() { return { strengths, gaps, remediation_deadline: deadline, reinspection, letter_issued: letterIssued, proprietor_name: propName.trim(), proprietor_ack: ack, signature, signed_at: signature ? new Date().toISOString() : '', updatedAt: new Date().toISOString() } }
+
+  async function save() {
+    if (!active) return
+    if (!ack) { setMsg('Confirm the proprietor acknowledgement to complete the debrief.'); return }
+    setBusy(true); setMsg('')
+    const d = payload()
+    try {
+      await VIS.update(active.id, { debrief: d, status: 'debriefed' })
+      setSaveState('saved'); setMsg('Debrief saved.')
+      setVisits(vs => vs.map(v => v.id === active.id ? { ...v, debrief: d, status: 'debriefed' } : v))
+    } catch (e) { setSaveState('pending'); setMsg('Saved locally. It will sync when you are back online; use Sync now to retry.') }
+    finally { setBusy(false) }
+  }
+  const origin = (typeof window !== 'undefined' && window.location) ? window.location.origin : ''
+
+  if (!active) {
+    const ready = visits.filter(v => v.status === 'monitored' || v.status === 'debriefed')
+    return (<div className="page">
+      <div className="ptitle"><div><p className="eyebrow">Debrief</p><h2>Close out visits</h2></div><span className={'net ' + (online ? 'on' : 'off')}>{online ? 'Online' : 'Offline'}</span></div>
+      {ready.length === 0 ? <p className="empty">No assessed visits yet. Complete a Monitor assessment first.</p> :
+        <div className="mon-list">{ready.map(v => (
+          <button className="mon-row" key={v.id} onClick={() => open(v)}>
+            <div><span className="fname">{v.facility_name}</span><span className="fmeta">{v.area} &middot; {(v.arrival_time || v.created_at || '').slice(0, 10)}</span></div>
+            <div className="mon-right"><Chip rag={v.overall_rating} pct={v.score} /><span className={'chip ' + (v.status === 'debriefed' ? 'green' : 'monitored')}>{v.status === 'debriefed' ? 'Debriefed' : 'To debrief'}</span></div>
+          </button>
+        ))}</div>}
+    </div>)
+  }
+
+  return (<div className="page debrief">
+    <div className="mon-head">
+      <div className="mon-head-l"><button className="linkbtn subtle" onClick={() => setActive(null)}>&larr; All visits</button><h2>{active.facility_name}</h2><p className="fsub">{active.area} &middot; {(active.arrival_time || '').slice(0, 10)}</p></div>
+      <div className="mon-head-r"><span className={'net ' + (online ? 'on' : 'off')}>{online ? 'Online' : 'Offline'}</span><Chip rag={active.overall_rating} pct={active.score} /></div>
+    </div>
+    {msg && <p className="auth-msg block">{msg}</p>}
+
+    <div className="dsec"><h3>Strengths</h3>
+      {strengths.length ? <ul className="dstr">{strengths.map((s, i) => <li key={i}>{s}</li>)}</ul> : <p className="empty sm">No green-rated items.</p>}
+    </div>
+
+    <div className="dsec"><h3>Gaps and corrective actions</h3>
+      {gaps.length === 0 ? <p className="empty sm">No amber or red items. Nothing to correct.</p> : gaps.map((g, i) => (
+        <div className="gap" key={g.key}>
+          <div className="gap-top"><span className="gap-label">{g.category}: {g.label}</span><span className={'chip ' + chipCls(g.rating)}>{ragText(g.rating)}</span></div>
+          <div className="fgrid two">
+            <label className="field sm"><span>Required action</span><input value={g.action} onChange={e => setGap(i, { action: e.target.value })} /></label>
+            <label className="field sm"><span>Timeline</span><input value={g.timeline} onChange={e => setGap(i, { timeline: e.target.value })} placeholder="e.g. 2 weeks" /></label>
+          </div>
+        </div>
+      ))}
+    </div>
+
+    <div className="dsec"><h3>Next steps</h3>
+      <div className="fgrid">
+        <label className="field sm"><span>Remediation deadline</span><input type="date" value={deadline} onChange={e => { setDeadline(e.target.value); setSaveState('draft') }} /></label>
+        <label className="field sm"><span>Re-inspection within</span><select value={reinspection} onChange={e => { setReinspection(e.target.value); setSaveState('draft') }}>{REINSPECT.map(r => <option key={r} value={r}>{r}</option>)}</select></label>
+        <label className="field sm chkfield"><span>Compliance letter</span><label className="inl"><input type="checkbox" checked={letterIssued} onChange={e => { setLetterIssued(e.target.checked); setSaveState('draft') }} /> Issue letter</label></label>
+      </div>
+    </div>
+
+    <div className="dsec"><h3>Proprietor sign-off</h3>
+      <div className="fgrid two">
+        <label className="field sm"><span>Person in charge</span><input value={propName} onChange={e => { setPropName(e.target.value); setSaveState('draft') }} /></label>
+        <label className="field sm chkfield"><span>Acknowledgement</span><label className="inl"><input type="checkbox" checked={ack} onChange={e => setAck(e.target.checked)} /> Findings acknowledged</label></label>
+      </div>
+      <p className="pick-label">Signature</p>
+      <SignaturePad value={signature} onChange={s => { setSignature(s); setSaveState('draft') }} />
+    </div>
+
+    <div className="mon-actions">
+      <button className="btn primary" onClick={save} disabled={busy}>{busy ? 'Saving\u2026' : 'Save debrief'}</button>
+      {saveState === 'pending' && <button className="btn ghost" onClick={save}>Sync now</button>}
+      <button className="btn ghost" onClick={() => printDoc('Monitoring Report', buildReport(active, payload(), origin))}>Monitoring report</button>
+      {letterIssued && <button className="btn ghost" onClick={() => printDoc('Compliance Letter', buildLetter(active, payload(), origin))}>Corrective letter</button>}
+      <span className="save-note">{saveState === 'saved' ? 'Saved' : saveState === 'pending' ? 'Pending sync' : ''}</span>
+    </div>
+    <p className="hintline">Reports open in a new tab; use your browser's Print or Save as PDF. Human review before issue is expected.</p>
+  </div>)
+}
+
+/* ---------- reports (Stage 7) & analytics (Stage 8) ---------- */
+function download(name, content, type) {
+  const blob = new Blob([content], { type }); const url = URL.createObjectURL(blob)
+  const a = document.createElement('a'); a.href = url; a.download = name; document.body.appendChild(a); a.click(); document.body.removeChild(a)
+  setTimeout(() => URL.revokeObjectURL(url), 1000)
+}
+function csvCell(v) { const s = String(v == null ? '' : v); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s }
+function exportVisitsCSV(rows) {
+  const header = ['Facility', 'Area', 'Date', 'Status', 'Score', 'Rating', 'Remediation deadline', 'Re-inspection']
+  const lines = [header].concat(rows.map(v => [v.facility_name, v.area, (v.arrival_time || v.created_at || '').slice(0, 10), v.status, v.score == null ? '' : v.score, v.overall_rating || '', (v.debrief && v.debrief.remediation_deadline) || '', (v.debrief && v.debrief.reinspection) || '']))
+  download('realms-visits.csv', lines.map(l => l.map(csvCell).join(',')).join('\n'), 'text/csv')
+}
+function mailtoLink(subject, body, to) { return 'mailto:' + encodeURIComponent(to || '') + '?subject=' + encodeURIComponent(subject) + '&body=' + encodeURIComponent(body) }
+function smsLink(phone, body) { return 'sms:' + (phone || '') + '?&body=' + encodeURIComponent(body) }
+function daysUntil(d) { if (!d) return null; const ms = new Date(d + 'T00:00:00').getTime() - Date.now(); return Math.ceil(ms / 86400000) }
+
+function NotifyPanel({ v, summary }) {
+  const [email, setEmail] = useState('')
+  const [st, setSt] = useState({})
+  const phone = (v.person_in_charge && v.person_in_charge.phone) || ''
+  const smsMsg = 'RHSC: monitoring completed at ' + v.facility_name + '. A summary and any required actions will follow.'
+  async function send(channel) {
+    setSt(s => ({ ...s, [channel]: 'sending' }))
+    const payload = channel === 'sms'
+      ? { channel: 'sms', to: phone, message: smsMsg }
+      : { channel: 'email', to: email, subject: 'RHSC monitoring outcome: ' + v.facility_name, message: summary(v) }
+    const r = await sendNotify(payload)
+    setSt(s => ({ ...s, [channel]: r.ok ? 'sent' : (r.reason || 'failed') }))
+  }
+  function lbl(x) { return x === 'sending' ? 'Sending\u2026' : x === 'sent' ? 'Sent' : x ? ('Not sent: ' + x) : '' }
+  return (<div className="notify">
+    <div className="notify-row">
+      <button className="mini" onClick={() => send('sms')} disabled={!phone}>Send SMS</button>
+      <a className="mini ghosted" href={smsLink(phone, smsMsg)}>open SMS app</a>
+      <span className="nstat">{lbl(st.sms)}</span>
+    </div>
+    <div className="notify-row">
+      <input className="ninput" type="email" placeholder="email address" value={email} onChange={e => setEmail(e.target.value)} />
+      <button className="mini" onClick={() => send('email')} disabled={!email}>Send email</button>
+      <a className="mini ghosted" href={mailtoLink('RHSC monitoring outcome: ' + v.facility_name, summary(v), email)}>open mail app</a>
+      <span className="nstat">{lbl(st.email)}</span>
+    </div>
+    <span className="hintline">Automated send uses the connected provider; if none is configured, use the open-app links. See the guide.</span>
+  </div>)
+}
+
+function ReportsPage({ facilities, userId }) {
+  const [visits, setVisits] = useState([])
+  const [area, setArea] = useState('all'); const [status, setStatus] = useState('all')
+  const [notifyId, setNotifyId] = useState(null)
+  useEffect(() => { VIS.list().then(setVisits).catch(() => {}) }, [])
+  const origin = (typeof window !== 'undefined' && window.location) ? window.location.origin : ''
+  const areas = Array.from(new Set(visits.map(v => v.area || 'Unassigned'))).sort()
+  const rows = visits.filter(v => (area === 'all' || (v.area || 'Unassigned') === area) && (status === 'all' || v.status === status))
+  const due = visits.filter(v => v.debrief && v.debrief.remediation_deadline).map(v => ({ v, date: v.debrief.remediation_deadline, days: daysUntil(v.debrief.remediation_deadline) })).sort((a, b) => (a.date < b.date ? -1 : 1))
+
+  function doc(v, kind) { const d = v.debrief || deriveDebrief(v); if (kind === 'report') printDoc('Monitoring Report', buildReport(v, d, origin)); else printDoc('Compliance Letter', buildLetter(v, d, origin)) }
+  function summary(v) { return v.facility_name + ' (' + v.area + '): outcome ' + ragText(v.overall_rating) + (v.score != null ? ' ' + v.score + '%' : '') + ', visit ' + (v.arrival_time || v.created_at || '').slice(0, 10) + '.' }
+
+  return (<div className="page">
+    <div className="ptitle"><div><p className="eyebrow">Reports</p><h2>{rows.length} visit{rows.length === 1 ? '' : 's'}</h2></div>
+      <div className="ptools">
+        <select className="sel" value={area} onChange={e => setArea(e.target.value)}><option value="all">All areas</option>{areas.map(a => <option key={a} value={a}>{a}</option>)}</select>
+        <select className="sel" value={status} onChange={e => setStatus(e.target.value)}><option value="all">All statuses</option><option value="engaged">Engaged</option><option value="monitored">Monitored</option><option value="debriefed">Debriefed</option></select>
+        <button className="btn small ghost" onClick={() => exportVisitsCSV(rows)}>Export CSV</button>
+      </div>
+    </div>
+
+    {due.length > 0 && (<div className="dsec"><h3>Re-inspections due</h3>
+      <div className="frows">{due.map(({ v, date, days }) => (
+        <div className="frow" key={v.id}><div className="fmain"><span className="fname">{v.facility_name}</span><span className="fmeta">{v.area} &middot; due {date}</span></div>
+          <span className={'chip ' + (days != null && days < 0 ? 'red' : days != null && days <= 7 ? 'amber' : 'none')}>{days == null ? '' : days < 0 ? Math.abs(days) + ' days overdue' : 'in ' + days + ' days'}</span></div>
+      ))}</div>
+    </div>)}
+
+    {rows.length === 0 ? <p className="empty">No visits match these filters.</p> :
+      <div className="rep-rows">{rows.map(v => (
+        <div className="rep-row" key={v.id}>
+          <div className="rep-main"><span className="fname">{v.facility_name}</span><span className="fmeta">{v.area} &middot; {(v.arrival_time || v.created_at || '').slice(0, 10)}</span></div>
+          <div className="rep-mid">{v.score != null ? <Chip rag={v.overall_rating} pct={v.score} /> : <span className={'chip ' + (v.status || 'engaged')}>{v.status === 'monitored' ? 'Assessed' : v.status === 'debriefed' ? 'Debriefed' : 'Engaged'}</span>}</div>
+          <div className="rep-actions">
+            <button className="mini" onClick={() => doc(v, 'report')}>Report</button>
+            <button className="mini" onClick={() => doc(v, 'letter')}>Letter</button>
+            <button className="mini" onClick={() => setNotifyId(notifyId === v.id ? null : v.id)}>Notify</button>
+          </div>
+          {notifyId === v.id && <NotifyPanel v={v} summary={summary} />}
+        </div>
+      ))}</div>}
+  </div>)
+}
+
+function HeatMap({ points }) {
+  const ref = useRef(null); const obj = useRef(null); const layer = useRef(null)
+  useEffect(() => {
+    if (!ref.current || obj.current) return
+    const m = L.map(ref.current, { scrollWheelZoom: false }).setView([6.5244, 3.3792], 10)
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '\u00a9 OpenStreetMap contributors' }).addTo(m)
+    layer.current = L.layerGroup().addTo(m); obj.current = m; setTimeout(() => m.invalidateSize(), 200)
+    return () => { m.remove(); obj.current = null }
+  }, [])
+  useEffect(() => {
+    const m = obj.current, lg = layer.current; if (!m || !lg) return
+    lg.clearLayers(); const col = { green: '#2E7D46', amber: '#C77D0A', red: '#B4442E', none: '#9C86B8' }
+    points.forEach(p => { L.circleMarker([p.lat, p.lng], { radius: 9, color: '#fff', weight: 2, fillColor: col[p.rag || 'none'], fillOpacity: .9 }).bindPopup('<strong>' + p.name + '</strong><br>' + (p.rag ? ragText(p.rag) : 'Not assessed')).addTo(lg) })
+    if (points.length) { try { m.fitBounds(points.map(p => [p.lat, p.lng]), { padding: [40, 40], maxZoom: 13 }) } catch (e) {} }
+  }, [points])
+  return <div className="map-frame"><div ref={ref} className="leaflet-holder" /></div>
+}
+
+function AnalyticsPage({ facilities }) {
+  const [visits, setVisits] = useState([])
+  useEffect(() => { VIS.list().then(setVisits).catch(() => {}) }, [])
+  const areas = Array.from(new Set(facilities.map(f => f.area || 'Unassigned')))
+  const assessed = visits.filter(v => v.score != null)
+  const avg = assessed.length ? Math.round(assessed.reduce((a, v) => a + v.score, 0) / assessed.length) : null
+  const compliant = assessed.filter(v => v.overall_rating === 'green').length
+  const complianceRate = assessed.length ? Math.round(compliant / assessed.length * 100) : null
+  const rag = { green: 0, amber: 0, red: 0 }; assessed.forEach(v => { if (v.overall_rating && rag[v.overall_rating] != null) rag[v.overall_rating]++ })
+  const byArea = {}; visits.forEach(v => { const a = v.area || 'Unassigned'; byArea[a] = (byArea[a] || 0) + 1 })
+  const areaRows = Object.keys(byArea).sort().map(a => ({ a, n: byArea[a] })); const maxArea = Math.max(1, ...areaRows.map(r => r.n))
+  const latest = {}; visits.forEach(v => { const id = v.facility_id; if (!id) return; if (!latest[id] || (v.created_at || '') > (latest[id].created_at || '')) latest[id] = v })
+  const points = facilities.filter(hasCoords).map(f => ({ lat: f.lat, lng: f.lng, name: f.name, rag: latest[f.id] ? latest[f.id].overall_rating : null }))
+  const cards = [
+    { v: facilities.length, l: 'Facilities' }, { v: areas.length, l: 'Areas covered' }, { v: visits.length, l: 'Visits' },
+    { v: assessed.length, l: 'Assessed' }, { v: avg == null ? '\u2014' : avg + '%', l: 'Average score' }, { v: complianceRate == null ? '\u2014' : complianceRate + '%', l: 'Green rate' }
+  ]
+  const ragMax = Math.max(1, rag.green, rag.amber, rag.red)
+
+  return (<div className="page">
+    <div className="ptitle"><div><p className="eyebrow">Analytics</p><h2>Oversight dashboard</h2></div></div>
+    <div className="an-cards">{cards.map(c => (<div className="an-card" key={c.l}><span className="an-v">{c.v}</span><span className="an-l">{c.l}</span></div>))}</div>
+
+    <div className="an-two">
+      <div className="an-panel"><h3>Visits by area</h3>
+        {areaRows.length === 0 ? <p className="empty sm">No visits yet.</p> : <div className="bars">{areaRows.map(r => (
+          <div className="bar-row" key={r.a}><span className="bar-lab">{r.a}</span><div className="bar-track"><div className="bar-fill" style={{ width: (r.n / maxArea * 100) + '%' }} /></div><span className="bar-n">{r.n}</span></div>
+        ))}</div>}
+      </div>
+      <div className="an-panel"><h3>Compliance outcomes</h3>
+        {assessed.length === 0 ? <p className="empty sm">No assessments yet.</p> : <div className="bars">
+          {[['green', 'Green', rag.green], ['amber', 'Amber', rag.amber], ['red', 'Red', rag.red]].map(([k, lab, n]) => (
+            <div className="bar-row" key={k}><span className="bar-lab">{lab}</span><div className="bar-track"><div className={'bar-fill ' + k} style={{ width: (n / ragMax * 100) + '%' }} /></div><span className="bar-n">{n}</span></div>
+          ))}
+        </div>}
+      </div>
+    </div>
+
+    <div className="an-panel"><h3>Geographic outcomes</h3>
+      <p className="hintline">Each facility is coloured by its most recent visit outcome. Grey means not yet assessed.</p>
+      {points.length === 0 ? <p className="empty sm">No mapped facilities yet.</p> : <HeatMap points={points} />}
+    </div>
+  </div>)
+}
+
+/* ---------- bars ---------- */
+function SiteBar({ tab, setTab, onSignIn }) {
+  return (<header className="bar">
+    <button className="wordmark" onClick={() => setTab('home')} aria-label="REALMS home"><img className="mark" src="/rhsc-mark.png" alt="RHSC" /><span className="wm-text"><strong>REALMS</strong><em>Healthcare Services Consulting</em></span></button>
+    <nav className="nav"><div className="tabs">{SITE_TABS.map(t => (<button key={t.id} className={'tab' + (tab === t.id ? ' active' : '')} onClick={() => setTab(t.id)}>{t.label}</button>))}</div><button className="signin" onClick={onSignIn}>Staff sign-in</button></nav>
+  </header>)
+}
+function AppBar({ identity, role, appTab, setAppTab, onSignOut }) {
+  const r = roleById(role); const tabs = ROLE_TABS[role] || ['dashboard']
+  return (<header className="bar app-bar">
+    <div className="wordmark"><img className="mark" src="/rhsc-mark.png" alt="RHSC" /><span className="wm-text"><strong>REALMS FIELD</strong><em>{r ? r.label : 'Staff workspace'}</em></span></div>
+    <nav className="nav">
+      <div className="tabs">{tabs.map(t => (<button key={t} className={'tab' + (appTab === t ? ' active' : '')} onClick={() => setAppTab(t)}>{TAB_LABEL[t]}</button>))}</div>
+      <span className="who">{identity.name}</span>
+      <button className="signin" onClick={onSignOut}>Sign out</button>
+    </nav>
+  </header>)
 }
 
 /* ---------- root ---------- */
 export default function App() {
   const [tab, setTab] = useState('home')
-  const [view, setView] = useState('site') // 'site' | 'auth' | 'app'
-  const [user, setUser] = useState(null)   // { email, id? }
+  const [view, setView] = useState('site')
+  const [user, setUser] = useState(null)
   const [role, setRole] = useState(null)
+  const [appTab, setAppTab] = useState('dashboard')
+  const [facs, setFacs] = useState([])
 
-  // session bootstrap
   useEffect(() => {
     if (MODE === 'supabase') {
       let subscription
@@ -349,86 +1050,73 @@ export default function App() {
       return () => { if (subscription) subscription.unsubscribe() }
     } else {
       try {
-        const raw = localStorage.getItem('realms_demo_user')
-        const dr = localStorage.getItem('realms_demo_role')
+        const raw = localStorage.getItem('realms_demo_user'); const dr = localStorage.getItem('realms_demo_role')
         if (raw) { setUser(JSON.parse(raw)); if (dr) setRole(dr); setView('app') }
       } catch (e) { /* ignore */ }
     }
   }, [])
 
+  // load facilities whenever we enter the app with a role
+  useEffect(() => { if (view === 'app' && user && role) reloadFacs() }, [view, role])
+
+  async function reloadFacs() { try { setFacs(await FAC.list()) } catch (e) { setFacs([]) } }
+
   async function loadRole(uid) {
     if (MODE !== 'supabase') return
-    try {
-      const { data } = await supabase.from('kv').select('v').eq('user_id', uid).eq('k', 'role').maybeSingle()
-      if (data && data.v) setRole(typeof data.v === 'string' ? data.v : data.v.role)
-    } catch (e) { /* leave role unset; role picker will show */ }
+    try { const { data } = await supabase.from('kv').select('v').eq('user_id', uid).eq('k', 'role').maybeSingle(); if (data && data.v) setRole(typeof data.v === 'string' ? data.v : data.v.role) }
+    catch (e) { /* role picker will show */ }
   }
-
   async function pickRole(id) {
-    setRole(id)
-    if (MODE === 'supabase' && user) {
-      await supabase.from('kv').upsert({ user_id: user.id, k: 'role', v: id, updated_at: new Date().toISOString() })
-    } else {
-      localStorage.setItem('realms_demo_role', id)
-    }
+    setRole(id); setAppTab('dashboard')
+    if (MODE === 'supabase' && user) { try { await supabase.from('kv').upsert({ user_id: user.id, k: 'role', v: id, updated_at: new Date().toISOString() }) } catch (e) {} }
+    else localStorage.setItem('realms_demo_role', id)
   }
-
   function afterAuth(u) { setUser(u); setView('app') }
-
   async function signOut() {
-    if (MODE === 'supabase') { await supabase.auth.signOut() }
+    if (MODE === 'supabase') { try { await supabase.auth.signOut() } catch (e) {} }
     else { localStorage.removeItem('realms_demo_user'); localStorage.removeItem('realms_demo_role') }
-    setUser(null); setRole(null); setView('site'); setTab('home')
+    setUser(null); setRole(null); setView('site'); setTab('home'); setAppTab('dashboard')
   }
 
   const identity = user ? identityFor(user.email) : { name: 'Staff', title: '' }
+  const canEdit = CAN_EDIT.includes(role)
 
   let body
-  if (view === 'auth') {
-    body = <AuthPanel onDone={afterAuth} onCancel={() => setView('site')} />
-  } else if (view === 'app' && user) {
-    body = !role
-      ? <RolePicker identity={identity} onPick={pickRole} onSignOut={signOut} />
-      : <Dashboard identity={identity} role={role} onSignOut={signOut} onChangeRole={() => setRole(null)} />
+  if (view === 'auth') body = <AuthPanel onDone={afterAuth} onCancel={() => setView('site')} />
+  else if (view === 'app' && user) {
+    if (!role) body = <RolePicker identity={identity} onPick={pickRole} onSignOut={signOut} />
+    else if (appTab === 'facilities') body = <FacilitiesPage list={facs} canEdit={canEdit} userId={user.id} reload={reloadFacs} />
+    else if (appTab === 'map') body = <MapRoutePage list={facs} />
+    else if (appTab === 'engage') body = <EngagePage list={facs} identity={identity} role={role} userId={user.id} />
+    else if (appTab === 'monitor') body = <MonitorPage userId={user.id} />
+    else if (appTab === 'debrief') body = <DebriefPage userId={user.id} />
+    else if (appTab === 'reports') body = <ReportsPage facilities={facs} userId={user.id} />
+    else if (appTab === 'analytics') body = <AnalyticsPage facilities={facs} />
+    else if (appTab === 'assign') body = <AssignPage list={facs} userId={user.id} />
+    else body = <Dashboard identity={identity} role={role} onOpen={setAppTab} />
   } else {
-    body = (
-      tab === 'home' ? <HomePage onSignIn={() => setView('auth')} go={setTab} />
-      : tab === 'process' ? <ProcessPage />
-      : tab === 'services' ? <ServicesPage />
-      : tab === 'about' ? <AboutPage />
-      : <ContactPage />
-    )
+    body = tab === 'home' ? <HomePage onSignIn={() => setView('auth')} go={setTab} />
+      : tab === 'process' ? <ProcessPage /> : tab === 'services' ? <ServicesPage /> : tab === 'about' ? <AboutPage /> : <ContactPage />
   }
 
-  const showAppBar = view === 'app' && user
+  const showAppBar = view === 'app' && user && role
   const showAuthBare = view === 'auth'
 
-  return (
-    <div className="realms">
-      <style>{css}</style>
-      {!showAuthBare && (showAppBar
-        ? <AppBar identity={identity} role={role} onSignOut={signOut} onChangeRole={() => setRole(null)} />
-        : <SiteBar tab={tab} setTab={(t) => { setView('site'); setTab(t) }} onSignIn={() => setView('auth')} />)}
-
-      <main id="top" className={showAuthBare ? 'main-auth' : ''}>
-        {body}
-      </main>
-
-      {!showAppBar && !showAuthBare && (
-        <footer className="foot">
-          <div className="foot-inner">
-            <div className="foot-brand"><img className="foot-mark" src="/rhsc-mark.png" alt="RHSC" /><span>REALMS Healthcare Services Consulting Limited</span></div>
-            <p>In collaboration with HEFAMAA, Lagos State.</p>
-            <p className="foot-tag">Professional. Educational. Enforcement-driven.</p>
-          </div>
-        </footer>
-      )}
-    </div>
-  )
+  return (<div className="realms">
+    <style>{css}</style>
+    {!showAuthBare && (showAppBar
+      ? <AppBar identity={identity} role={role} appTab={appTab} setAppTab={setAppTab} onSignOut={signOut} />
+      : <SiteBar tab={tab} setTab={(t) => { setView('site'); setTab(t) }} onSignIn={() => setView('auth')} />)}
+    <main id="top" className={showAuthBare ? 'main-auth' : ''}>{body}</main>
+    {!showAppBar && !showAuthBare && (<footer className="foot"><div className="foot-inner">
+      <div className="foot-brand"><img className="foot-mark" src="/rhsc-mark.png" alt="RHSC" /><span>REALMS Healthcare Services Consulting Limited</span></div>
+      <p>In collaboration with HEFAMAA, Lagos State.</p><p className="foot-tag">Professional. Educational. Enforcement-driven.</p>
+    </div></footer>)}
+  </div>)
 }
 
 const css = `
-.realms { --ink:#3A2B54; --p:#7A34A8; --p-deep:#642C90; --p-mid:#8E44C0; --v:#A66BD4; --lav1:#F7F1FD; --lav2:#EEE1F9; --line:#E9DCF6; --wave:#3E86C9; --white:#ffffff; color:var(--ink); min-height:100vh; display:flex; flex-direction:column; }
+.realms { --ink:#3A2B54; --p:#7A34A8; --p-deep:#642C90; --p-mid:#8E44C0; --v:#A66BD4; --lav1:#F7F1FD; --lav2:#EEE1F9; --line:#E9DCF6; --white:#ffffff; color:var(--ink); min-height:100vh; display:flex; flex-direction:column; }
 .realms h1,.realms h2,.realms h3 { font-weight:600; letter-spacing:.01em; margin:0; }
 .realms p { margin:0; }
 .realms a { color:inherit; text-decoration:none; }
@@ -437,13 +1125,11 @@ const css = `
 .realms .eyebrow { font-size:12px; letter-spacing:.2em; text-transform:uppercase; color:var(--v); font-weight:600; margin:0 0 14px; }
 .realms .accent { color:var(--p); }
 .realms :focus-visible { outline:2.5px solid var(--p); outline-offset:3px; border-radius:6px; }
-
 @keyframes fadeUp { from { opacity:0; transform:translateY(16px); } to { opacity:1; transform:none; } }
 .realms .anim { animation: fadeUp .6s ease both; }
 @media (prefers-reduced-motion: reduce){ .realms .anim { animation:none; } }
 
-/* top bar + tabs */
-.realms .bar { position:sticky; top:0; z-index:20; display:flex; align-items:center; justify-content:space-between; gap:16px; padding:12px clamp(18px,4vw,56px); background:rgba(255,255,255,.92); backdrop-filter:blur(8px); border-bottom:1px solid var(--line); }
+.realms .bar { position:sticky; top:0; z-index:1000; display:flex; align-items:center; justify-content:space-between; gap:16px; padding:12px clamp(18px,4vw,56px); background:rgba(255,255,255,.94); backdrop-filter:blur(8px); border-bottom:1px solid var(--line); }
 .realms .wordmark { display:flex; align-items:center; gap:12px; background:none; border:0; padding:0; }
 .realms .bar .mark { height:42px; width:auto; }
 .realms .wm-text { display:flex; flex-direction:column; line-height:1.05; text-align:left; }
@@ -451,28 +1137,26 @@ const css = `
 .realms .wm-text em { font-style:normal; font-size:10px; letter-spacing:.12em; text-transform:uppercase; color:#8A7AA6; }
 .realms .nav { display:flex; align-items:center; gap:12px; }
 .realms .tabs { display:flex; align-items:center; gap:4px; background:var(--lav1); border:1px solid var(--line); border-radius:30px; padding:4px; }
-.realms .tab { border:0; background:none; color:#5A4C74; font-size:14.5px; padding:8px 16px; border-radius:22px; transition:.16s; }
+.realms .tab { border:0; background:none; color:#5A4C74; font-size:14.5px; padding:8px 15px; border-radius:22px; transition:.16s; white-space:nowrap; }
 .realms .tab:hover { color:var(--p); }
 .realms .tab.active { background:#fff; color:var(--p-deep); box-shadow:0 2px 8px rgba(122,52,168,.14); font-weight:600; }
 .realms .signin { padding:9px 18px; border:1.5px solid var(--p); background:none; border-radius:24px; color:var(--p); font-weight:500; font-size:14.5px; transition:.16s; }
 .realms .signin:hover { background:var(--p); color:#fff; }
 .realms .app-bar .who { font-size:14.5px; color:#5A4C74; }
-.realms .who + .tab { border:1px solid var(--line); border-radius:22px; }
 
-/* generic page frame — limits scroll, keeps each tab self-contained */
 .realms main { flex:1; }
-.realms .page { max-width:1160px; margin:0 auto; padding:clamp(30px,4vw,58px) clamp(18px,4vw,56px) clamp(40px,5vw,70px); min-height:56vh; }
+.realms .page { max-width:1160px; margin:0 auto; padding:clamp(28px,4vw,54px) clamp(18px,4vw,56px) clamp(40px,5vw,70px); min-height:56vh; }
 .realms .section-head { text-align:center; max-width:720px; margin:0 auto clamp(26px,3.4vw,44px); }
 .realms .section-head h2 { font-size:clamp(28px,3.3vw,40px); color:var(--p-deep); }
 .realms .btn { display:inline-block; font-size:16px; padding:14px 26px; border-radius:30px; font-weight:500; transition:.16s; border:0; }
+.realms .btn.small { font-size:14px; padding:10px 18px; }
 .realms .btn.primary { background:var(--p); color:#fff; }
-.realms .btn.primary:hover { background:var(--p-deep); transform:translateY(-1px); }
-.realms .btn.primary:disabled { opacity:.6; cursor:default; transform:none; }
+.realms .btn.primary:hover { background:var(--p-deep); }
+.realms .btn.primary:disabled { opacity:.55; cursor:default; }
 .realms .btn.ghost { border:1.5px solid var(--line); color:var(--p); background:#fff; }
 .realms .btn.ghost:hover { border-color:var(--v); background:var(--lav1); }
 .realms .btn.wide { width:100%; }
 
-/* hero (home) */
 .realms .hero { display:grid; grid-template-columns:1.12fr .88fr; gap:44px; align-items:center; }
 .realms .hero h1 { font-size:clamp(36px,5vw,62px); line-height:1.05; color:var(--p-deep); margin-bottom:20px; }
 .realms .lede { font-size:clamp(16px,1.4vw,19px); line-height:1.6; color:#54466E; max-width:38ch; }
@@ -485,7 +1169,6 @@ const css = `
 .realms .mini-value { display:block; font-size:34px; font-weight:700; color:var(--p); line-height:1; margin-bottom:8px; }
 .realms .mini-label { font-size:12.5px; color:#5A4C74; }
 
-/* process */
 .realms .wave-wrap { position:relative; max-width:1100px; margin:0 auto; }
 .realms .wave { position:absolute; top:34px; left:0; width:100%; height:90px; pointer-events:none; opacity:.6; }
 .realms .stages { list-style:none; margin:0; padding:0; display:grid; grid-template-columns:repeat(4,1fr); gap:26px; }
@@ -495,22 +1178,19 @@ const css = `
 .realms .stage h3 { font-size:21px; color:var(--p-deep); margin-bottom:10px; }
 .realms .stage p { font-size:14.5px; line-height:1.58; color:#5A4C74; }
 
-/* services */
 .realms .pillars { display:grid; grid-template-columns:1fr 1fr; gap:22px; }
-.realms .pillar { background:#fff; border:1px solid var(--line); border-radius:16px; padding:28px 28px 32px; transition:box-shadow .2s ease, border-color .2s ease, transform .2s ease; }
+.realms .pillar { background:#fff; border:1px solid var(--line); border-radius:16px; padding:28px 28px 32px; transition:.2s; }
 .realms .pillar:hover { box-shadow:0 18px 44px rgba(122,52,168,.12); border-color:var(--v); transform:translateY(-3px); }
 .realms .pillar-rule { display:block; width:44px; height:4px; border-radius:3px; background:linear-gradient(90deg,var(--p),var(--v)); margin-bottom:18px; }
 .realms .pillar h3 { font-size:21px; color:var(--p-deep); margin-bottom:11px; }
 .realms .pillar p { font-size:15px; line-height:1.6; color:#4A3B66; }
 
-/* about */
 .realms .mandate-grid { display:grid; grid-template-columns:1fr 1fr; gap:32px; font-size:clamp(16px,1.3vw,18px); line-height:1.68; color:#4A3B66; margin-bottom:clamp(30px,4vw,48px); }
 .realms .principles { display:grid; grid-template-columns:repeat(3,1fr); gap:26px; }
 .realms .principle { border-top:3px solid var(--p); padding-top:18px; }
 .realms .principle h3 { font-size:18px; color:var(--p-deep); margin-bottom:9px; }
 .realms .principle p { font-size:14.5px; line-height:1.58; color:#4A3B66; }
 
-/* contact */
 .realms .enquiry-card { max-width:900px; margin:0 auto; background:linear-gradient(135deg,var(--p),var(--p-mid)); color:#fff; border-radius:22px; padding:clamp(30px,4vw,48px); display:grid; grid-template-columns:1.1fr 1fr; gap:30px; align-items:center; }
 .realms .enquiry-card h2 { font-size:clamp(24px,3vw,32px); margin-bottom:10px; }
 .realms .enquiry-copy p { color:#F1E5FB; font-size:16px; line-height:1.55; }
@@ -519,25 +1199,25 @@ const css = `
 .realms .contacts span { font-size:11px; letter-spacing:.16em; text-transform:uppercase; color:#E1CCF6; }
 .realms .contacts em { font-style:normal; font-size:16px; }
 
-/* auth */
 .realms .main-auth { display:flex; align-items:center; justify-content:center; padding:clamp(24px,5vw,60px) 18px; }
 .realms .auth-shell { width:100%; display:flex; justify-content:center; }
 .realms .auth-card { width:min(430px,94vw); background:#fff; border:1px solid var(--line); border-radius:20px; padding:clamp(28px,4vw,40px); box-shadow:0 24px 60px rgba(122,52,168,.14); text-align:center; }
 .realms .auth-mark { height:56px; width:auto; margin:0 auto 16px; }
-.realms .auth-card h2 { font-size:23px; color:var(--p-deep); margin-bottom:6px; }
+.realms .auth-card h2 { font-size:22px; color:var(--p-deep); margin-bottom:6px; }
 .realms .auth-sub { color:#7A6A93; font-size:14.5px; margin-bottom:22px; }
 .realms .field { display:block; text-align:left; margin-bottom:14px; }
+.realms .field.sm { margin-bottom:0; }
 .realms .field span { display:block; font-size:12px; letter-spacing:.08em; text-transform:uppercase; color:#7A6A93; margin-bottom:6px; }
-.realms .field input { width:100%; font-family:inherit; font-size:16px; padding:12px 14px; border:1.5px solid var(--line); border-radius:12px; color:var(--ink); background:#fff; }
-.realms .field input:focus { outline:none; border-color:var(--p); }
+.realms .field input, .realms .field select { width:100%; font-family:inherit; font-size:15px; padding:11px 13px; border:1.5px solid var(--line); border-radius:12px; color:var(--ink); background:#fff; }
+.realms .field input:focus, .realms .field select:focus { outline:none; border-color:var(--p); }
 .realms .auth-msg { background:var(--lav1); color:var(--p-deep); border:1px solid var(--line); border-radius:10px; padding:10px 12px; font-size:14px; margin-bottom:14px; }
+.realms .auth-msg.block { max-width:none; margin:0 0 16px; }
 .realms .linkbtn { display:block; width:100%; background:none; border:0; color:var(--p); font-size:14.5px; padding:12px 0 2px; }
 .realms .linkbtn:hover { text-decoration:underline; }
 .realms .linkbtn.subtle { color:#8A7AA6; font-size:13.5px; }
 .realms .linkbtn.center { max-width:200px; margin:20px auto 0; }
 .realms .demo-note { margin-top:16px; font-size:12.5px; color:#8A7AA6; font-style:italic; }
 
-/* role picker */
 .realms .role-page { min-height:64vh; }
 .realms .role-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:18px; max-width:900px; margin:0 auto; }
 .realms .role-card { text-align:left; background:#fff; border:1.5px solid var(--line); border-radius:18px; padding:24px 22px; display:flex; flex-direction:column; gap:10px; transition:.18s; }
@@ -547,7 +1227,6 @@ const css = `
 .realms .role-label { font-size:19px; font-weight:600; color:var(--p-deep); }
 .realms .role-blurb { font-size:14px; line-height:1.5; color:#5A4C74; }
 
-/* dashboard */
 .realms .dash-head { border-bottom:1px solid var(--line); padding-bottom:22px; margin-bottom:22px; }
 .realms .dash-hello { display:flex; align-items:center; gap:18px; }
 .realms .dash-icon { width:58px; height:58px; border-radius:14px; background:linear-gradient(135deg,var(--p),var(--p-mid)); color:#fff; display:grid; place-items:center; }
@@ -556,12 +1235,62 @@ const css = `
 .realms .dash-title { color:#7A6A93; font-size:14.5px; margin-top:2px; }
 .realms .dash-intro { color:#5A4C74; font-size:16px; margin-bottom:24px; }
 .realms .tool-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:16px; }
-.realms .tool-card { display:flex; align-items:center; justify-content:space-between; gap:12px; background:#fff; border:1px solid var(--line); border-radius:14px; padding:20px; }
+.realms .tool-card { text-align:left; display:flex; align-items:center; justify-content:space-between; gap:12px; background:#fff; border:1px solid var(--line); border-radius:14px; padding:20px; transition:.16s; }
+.realms .tool-card.live:hover { border-color:var(--p); box-shadow:0 12px 30px rgba(122,52,168,.12); transform:translateY(-2px); }
+.realms .tool-card:disabled { opacity:.75; cursor:default; }
 .realms .tool-name { font-size:16px; color:var(--p-deep); font-weight:500; }
 .realms .tool-stage { font-size:11.5px; letter-spacing:.06em; text-transform:uppercase; color:var(--v); background:var(--lav1); border:1px solid var(--line); border-radius:20px; padding:4px 10px; white-space:nowrap; }
-.realms .loading { text-align:center; color:#8A7AA6; padding:60px 0; }
+.realms .tool-stage.ready { color:#fff; background:var(--p); border-color:var(--p); }
 
-/* footer */
+.realms .ptitle { display:flex; align-items:flex-end; justify-content:space-between; gap:16px; flex-wrap:wrap; margin-bottom:14px; }
+.realms .ptitle h2 { font-size:clamp(22px,2.6vw,30px); color:var(--p-deep); }
+.realms .ptools { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+.realms .sel { font-family:inherit; font-size:14px; padding:10px 14px; border:1.5px solid var(--line); border-radius:22px; background:#fff; color:var(--ink); }
+.realms .hintline { font-size:13px; color:#8A7AA6; margin-bottom:12px; }
+.realms .warnline { font-size:13.5px; color:#9A5B12; background:#FBF3E6; border:1px solid #F0D9B5; border-radius:10px; padding:10px 12px; margin-bottom:14px; }
+.realms .empty { color:#8A7AA6; font-style:italic; padding:24px 0; text-align:center; }
+.realms .empty.sm { padding:12px 0; text-align:left; }
+
+.realms .addform { background:var(--lav1); border:1px solid var(--line); border-radius:16px; padding:20px; margin-bottom:20px; }
+.realms .fgrid { display:grid; grid-template-columns:repeat(3,1fr); gap:14px; margin-bottom:16px; }
+.realms .fgrid.two { grid-template-columns:1fr 1fr; }
+
+.realms .cluster { margin-bottom:20px; }
+.realms .cluster-head { display:flex; align-items:center; gap:10px; margin-bottom:10px; }
+.realms .area-dot { width:12px; height:12px; border-radius:50%; }
+.realms .cluster-head h3 { font-size:17px; color:var(--p-deep); }
+.realms .cluster-count { font-size:12px; color:#8A7AA6; background:var(--lav1); border:1px solid var(--line); border-radius:20px; padding:2px 10px; }
+.realms .frows { display:grid; gap:8px; }
+.realms .frow { display:flex; align-items:center; justify-content:space-between; gap:12px; background:#fff; border:1px solid var(--line); border-radius:12px; padding:14px 16px; }
+.realms .fmain { display:flex; flex-direction:column; }
+.realms .fname { font-size:15.5px; color:var(--p-deep); font-weight:500; }
+.realms .fmeta { font-size:13px; color:#7A6A93; }
+.realms .factions { display:flex; align-items:center; gap:8px; }
+.realms .pin.ok { color:#5FA35A; }
+.realms .pin.no { font-size:12px; color:#B08; opacity:.6; }
+.realms .mini { font-family:inherit; font-size:12.5px; padding:6px 12px; border-radius:18px; border:1px solid var(--line); background:#fff; color:var(--p); }
+.realms .mini:hover { border-color:var(--p); }
+.realms .mini.danger { color:#B4442E; }
+
+.realms .map-page .map-frame { border:1px solid var(--line); border-radius:16px; overflow:hidden; }
+.realms .leaflet-holder { height:min(60vh,540px); width:100%; }
+.realms .route-list { list-style:none; margin:18px 0 0; padding:0; display:grid; gap:8px; }
+.realms .route-list li { display:flex; align-items:center; gap:12px; background:#fff; border:1px solid var(--line); border-radius:12px; padding:12px 14px; }
+.realms .route-list .rn { width:26px; height:26px; border-radius:50%; background:var(--p); color:#fff; display:grid; place-items:center; font-size:13px; font-weight:700; }
+.realms .route-list em { margin-left:auto; font-style:normal; font-size:13px; color:#8A7AA6; }
+
+.realms .assign-grid { display:grid; grid-template-columns:1.3fr 1fr; gap:24px; }
+.realms .assign-form, .realms .assign-saved { background:#fff; border:1px solid var(--line); border-radius:16px; padding:20px; }
+.realms .pick-label { font-size:12px; letter-spacing:.08em; text-transform:uppercase; color:#7A6A93; margin:14px 0 8px; }
+.realms .pick-list { display:grid; gap:6px; max-height:260px; overflow:auto; margin-bottom:8px; }
+.realms .pick-row { display:flex; align-items:center; gap:10px; font-size:14.5px; padding:8px 10px; border:1px solid var(--line); border-radius:10px; }
+.realms .pick-row .nocoord { margin-left:auto; font-style:normal; font-size:11px; color:#B08; opacity:.7; }
+.realms .saved-card { border:1px solid var(--line); border-radius:12px; padding:12px 14px; margin-bottom:10px; }
+.realms .saved-card strong { color:var(--p-deep); margin-right:8px; }
+.realms .saved-card span { font-size:13px; color:#7A6A93; }
+.realms .saved-card em { display:block; font-style:normal; font-size:12.5px; color:#8A7AA6; margin-top:2px; }
+.realms .saved-card p { font-size:13px; color:#5A4C74; margin-top:4px; }
+
 .realms .foot { background:#4A2A73; color:#EADAF7; padding:clamp(32px,4vw,52px) clamp(18px,4vw,56px); }
 .realms .foot-inner { max-width:1080px; margin:0 auto; text-align:center; display:grid; gap:8px; justify-items:center; }
 .realms .foot-brand { display:flex; align-items:center; justify-content:center; gap:12px; font-size:15px; color:#fff; }
@@ -569,7 +1298,6 @@ const css = `
 .realms .foot p { font-size:14px; }
 .realms .foot-tag { font-style:italic; color:#CDA9EC; margin-top:4px; }
 
-/* responsive */
 @media (max-width:920px){
   .realms .hero { grid-template-columns:1fr; text-align:center; }
   .realms .lede { max-width:none; margin:0 auto; }
@@ -578,21 +1306,153 @@ const css = `
   .realms .home-strip { grid-template-columns:1fr 1fr; }
   .realms .stages { grid-template-columns:1fr 1fr; gap:32px; }
   .realms .wave { display:none; }
-  .realms .pillars { grid-template-columns:1fr; }
-  .realms .mandate-grid { grid-template-columns:1fr; gap:20px; }
-  .realms .principles { grid-template-columns:1fr; }
+  .realms .pillars, .realms .mandate-grid, .realms .principles { grid-template-columns:1fr; }
   .realms .enquiry-card { grid-template-columns:1fr; text-align:center; }
   .realms .contacts { justify-items:center; }
-  .realms .role-grid { grid-template-columns:1fr 1fr; }
-  .realms .tool-grid { grid-template-columns:1fr; }
+  .realms .role-grid, .realms .tool-grid { grid-template-columns:1fr 1fr; }
+  .realms .fgrid { grid-template-columns:1fr 1fr; }
+  .realms .assign-grid { grid-template-columns:1fr; }
 }
 @media (max-width:680px){
   .realms .bar { flex-wrap:wrap; }
   .realms .nav { width:100%; justify-content:space-between; }
   .realms .tabs { overflow-x:auto; -webkit-overflow-scrolling:touch; max-width:100%; }
-  .realms .tab { white-space:nowrap; padding:8px 13px; }
   .realms .home-strip { grid-template-columns:1fr; }
-  .realms .stages { grid-template-columns:1fr; }
-  .realms .role-grid { grid-template-columns:1fr; }
+  .realms .stages, .realms .role-grid, .realms .tool-grid, .realms .fgrid, .realms .fgrid.two { grid-template-columns:1fr; }
 }
+
+.realms .stepper { list-style:none; display:flex; gap:8px; padding:0; margin:0 0 22px; flex-wrap:wrap; }
+.realms .stepper .stp { display:flex; align-items:center; gap:8px; font-size:13.5px; color:#8A7AA6; background:var(--lav1); border:1px solid var(--line); border-radius:22px; padding:7px 14px; }
+.realms .stepper .stp span { width:22px; height:22px; border-radius:50%; background:#fff; border:1px solid var(--line); display:grid; place-items:center; font-size:12px; font-weight:700; color:#8A7AA6; }
+.realms .stepper .stp.on { color:var(--p-deep); border-color:var(--p); background:#fff; font-weight:600; }
+.realms .stepper .stp.on span { background:var(--p); color:#fff; border-color:var(--p); }
+.realms .stepper .stp.done span { background:var(--v); color:#fff; border-color:var(--v); }
+.realms .frow.pickable { width:100%; text-align:left; cursor:pointer; }
+.realms .frow.pickable:hover { border-color:var(--p); }
+.realms .engage-card { background:#fff; border:1px solid var(--line); border-radius:16px; padding:24px; max-width:640px; }
+.realms .fbig { font-size:22px; color:var(--p-deep); margin:6px 0 4px; }
+.realms .fsub { color:#7A6A93; font-size:14px; margin-bottom:16px; }
+.realms .ci-row { display:flex; justify-content:space-between; padding:12px 0; border-top:1px solid var(--line); font-size:15px; }
+.realms .ci-row span { color:#7A6A93; }
+.realms .ci-row em { font-style:normal; color:var(--p-deep); }
+.realms .btnrow { display:flex; gap:10px; flex-wrap:wrap; margin-top:18px; }
+.realms .engage-present { display:grid; grid-template-columns:1.1fr .9fr; gap:22px; align-items:start; }
+.realms .letter { background:#fff; border:1px solid var(--line); border-radius:16px; padding:26px; box-shadow:0 10px 30px rgba(122,52,168,.08); }
+.realms .letter-head { display:flex; align-items:center; gap:12px; border-bottom:2px solid var(--lav2); padding-bottom:14px; margin-bottom:14px; }
+.realms .letter-head img { height:44px; }
+.realms .letter-head strong { display:block; font-size:12.5px; letter-spacing:.04em; color:var(--p-deep); }
+.realms .letter-head span { font-size:11.5px; color:#8A7AA6; }
+.realms .letter-meta { display:flex; justify-content:space-between; font-size:12.5px; color:#8A7AA6; margin-bottom:16px; }
+.realms .letter-to { font-size:14px; line-height:1.5; margin-bottom:14px; color:#4A3B66; }
+.realms .letter-sub { margin-bottom:12px; color:var(--p-deep); }
+.realms .letter p { font-size:14px; line-height:1.6; color:#4A3B66; margin-bottom:12px; }
+.realms .letter-sign { margin-top:18px; font-size:14px; color:var(--p-deep); }
+.realms .letter-sign span { color:#8A7AA6; font-size:13px; }
+.realms .idcards { display:grid; gap:10px; margin-bottom:12px; }
+.realms .idwrap { display:flex; align-items:center; gap:8px; }
+.realms .idcard { flex:1; display:flex; align-items:center; gap:12px; background:linear-gradient(135deg,#fff,var(--lav1)); border:1px solid var(--line); border-left:4px solid var(--p); border-radius:12px; padding:12px 14px; }
+.realms .idmark { height:36px; }
+.realms .idbody { display:flex; flex-direction:column; }
+.realms .idname { font-size:15px; font-weight:600; color:var(--p-deep); }
+.realms .idrole { font-size:13px; color:#5A4C74; }
+.realms .idorg { font-size:10.5px; letter-spacing:.08em; text-transform:uppercase; color:#9C86B8; margin-top:2px; }
+.realms .addmember { display:flex; gap:8px; margin-bottom:16px; }
+.realms .addmember input { flex:1; font-family:inherit; font-size:13.5px; padding:9px 11px; border:1.5px solid var(--line); border-radius:10px; min-width:0; }
+.realms .script { margin:0 0 4px; background:var(--lav1); border-left:3px solid var(--v); border-radius:0 10px 10px 0; padding:14px 16px; font-style:italic; color:#4A3B66; font-size:14px; line-height:1.6; }
+.realms .greet { display:flex; align-items:flex-start; gap:10px; margin:18px 0 4px; font-size:14.5px; color:#4A3B66; }
+.realms .greet input { margin-top:3px; }
+.realms .engage-done { text-align:center; max-width:520px; margin:6vh auto 0; }
+.realms .done-badge { display:inline-block; background:#E6F4EA; color:#2E7D46; border:1px solid #BFE3CB; border-radius:20px; padding:5px 16px; font-size:12.5px; letter-spacing:.08em; text-transform:uppercase; margin-bottom:16px; }
+.realms .engage-done h2 { font-size:28px; color:var(--p-deep); margin-bottom:8px; }
+.realms .engage-done .muted { color:#8A7AA6; margin:8px 0 20px; }
+@media (max-width:920px){ .realms .engage-present { grid-template-columns:1fr; } }
+
+.realms .net { font-size:11.5px; letter-spacing:.06em; text-transform:uppercase; padding:5px 12px; border-radius:20px; border:1px solid var(--line); }
+.realms .net.on { color:#2E7D46; background:#E6F4EA; border-color:#BFE3CB; }
+.realms .net.off { color:#B4442E; background:#FBE9E6; border-color:#F0C9BF; }
+.realms .chip { display:inline-block; font-size:12px; letter-spacing:.04em; padding:4px 12px; border-radius:20px; border:1px solid var(--line); white-space:nowrap; }
+.realms .chip.green { color:#2E7D46; background:#E6F4EA; border-color:#BFE3CB; }
+.realms .chip.amber { color:#9A5B12; background:#FBF3E6; border-color:#F0D9B5; }
+.realms .chip.red { color:#B4442E; background:#FBE9E6; border-color:#F0C9BF; }
+.realms .chip.none, .realms .chip.engaged, .realms .chip.monitored { color:#7A6A93; background:var(--lav1); }
+.realms .mon-list { display:grid; gap:10px; }
+.realms .mon-row { display:flex; align-items:center; justify-content:space-between; gap:12px; background:#fff; border:1px solid var(--line); border-radius:12px; padding:14px 16px; text-align:left; cursor:pointer; }
+.realms .mon-row:hover { border-color:var(--p); }
+.realms .mon-right { display:flex; align-items:center; gap:12px; }
+.realms .mon-head { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; flex-wrap:wrap; border-bottom:1px solid var(--line); padding-bottom:16px; margin-bottom:18px; }
+.realms .mon-head h2 { font-size:clamp(22px,2.6vw,28px); color:var(--p-deep); margin-top:6px; }
+.realms .mon-head-r { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+.realms .rated { font-size:12.5px; color:#8A7AA6; }
+.realms .mcat { border:1px solid var(--line); border-radius:14px; padding:16px 18px; margin-bottom:14px; background:#fff; }
+.realms .mcat-head { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:12px; }
+.realms .mcat-head h3 { font-size:17px; color:var(--p-deep); }
+.realms .mitems { display:grid; gap:14px; }
+.realms .mitem { border-top:1px solid var(--lav2); padding-top:12px; }
+.realms .mitem:first-child { border-top:0; padding-top:0; }
+.realms .mitem-top { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+.realms .mlabel { font-size:15px; color:#3A2B54; }
+.realms .rag { display:flex; gap:6px; }
+.realms .ragb { width:34px; height:34px; border-radius:9px; border:1.5px solid var(--line); background:#fff; font-weight:700; font-size:13px; color:#8A7AA6; }
+.realms .ragb.green.on { background:#2E7D46; border-color:#2E7D46; color:#fff; }
+.realms .ragb.amber.on { background:#C77D0A; border-color:#C77D0A; color:#fff; }
+.realms .ragb.red.on { background:#B4442E; border-color:#B4442E; color:#fff; }
+.realms .mnote { width:100%; font-family:inherit; font-size:14px; padding:8px 11px; border:1.5px solid var(--line); border-radius:10px; margin-top:10px; resize:vertical; color:var(--ink); }
+.realms .mnote:focus { outline:none; border-color:var(--p); }
+.realms .evrow { display:flex; align-items:center; gap:8px; margin-top:10px; flex-wrap:wrap; }
+.realms .ev-btn { font-size:12.5px; padding:7px 13px; border:1px solid var(--line); border-radius:18px; background:#fff; color:var(--p); cursor:pointer; }
+.realms .ev-btn:hover { border-color:var(--p); }
+.realms .ev-btn input { display:none; }
+.realms .ev-btn.recording { background:#FBE9E6; color:#B4442E; border-color:#F0C9BF; }
+.realms .geotag { font-size:11.5px; color:#2E7D46; }
+.realms .evstrip { display:flex; gap:10px; flex-wrap:wrap; margin-top:12px; }
+.realms .evthumb { position:relative; }
+.realms .evthumb img { width:64px; height:64px; object-fit:cover; border-radius:8px; border:1px solid var(--line); }
+.realms .evthumb audio { height:34px; }
+.realms .evx { position:absolute; top:-8px; right:-8px; width:20px; height:20px; border-radius:50%; border:0; background:#B4442E; color:#fff; font-size:13px; line-height:1; cursor:pointer; }
+.realms .mon-actions { display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin-top:20px; }
+.realms .save-note { font-size:13px; color:#8A7AA6; font-style:italic; }
+@media (max-width:680px){ .realms .mitem-top { flex-direction:column; align-items:flex-start; gap:8px; } }
+
+.realms .dsec { border:1px solid var(--line); border-radius:14px; padding:18px; margin-bottom:14px; background:#fff; }
+.realms .dsec h3 { font-size:17px; color:var(--p-deep); margin-bottom:12px; }
+.realms .dstr { margin:0; padding-left:20px; }
+.realms .dstr li { font-size:14.5px; color:#3A2B54; margin-bottom:5px; }
+.realms .gap { border-top:1px solid var(--lav2); padding-top:12px; margin-top:12px; }
+.realms .gap:first-child { border-top:0; padding-top:0; margin-top:0; }
+.realms .gap-top { display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:10px; }
+.realms .gap-label { font-size:15px; color:#3A2B54; }
+.realms .chkfield .inl { display:flex; align-items:center; gap:8px; font-size:14.5px; color:#4A3B66; padding:11px 0; }
+.realms .sigwrap { display:flex; flex-direction:column; align-items:flex-start; gap:8px; }
+.realms .sigpad { width:100%; max-width:600px; height:170px; border:1.5px dashed var(--line); border-radius:12px; background:#fff; touch-action:none; cursor:crosshair; }
+
+.realms .rep-rows { display:grid; gap:10px; }
+.realms .rep-row { display:flex; align-items:center; gap:12px; flex-wrap:wrap; background:#fff; border:1px solid var(--line); border-radius:12px; padding:14px 16px; }
+.realms .rep-main { display:flex; flex-direction:column; flex:1 1 200px; }
+.realms .rep-actions { display:flex; gap:8px; flex-wrap:wrap; }
+.realms .notify { flex-basis:100%; display:flex; align-items:center; gap:10px; flex-wrap:wrap; border-top:1px solid var(--lav2); margin-top:6px; padding-top:12px; }
+.realms .notify .hintline { margin:0; }
+.realms .an-cards { display:grid; grid-template-columns:repeat(6,1fr); gap:14px; margin-bottom:18px; }
+.realms .an-card { background:var(--lav1); border:1px solid var(--line); border-radius:14px; padding:18px 14px; text-align:center; }
+.realms .an-v { display:block; font-size:28px; font-weight:700; color:var(--p); line-height:1; margin-bottom:8px; }
+.realms .an-l { font-size:12px; color:#5A4C74; }
+.realms .an-two { display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-bottom:16px; }
+.realms .an-panel { background:#fff; border:1px solid var(--line); border-radius:14px; padding:18px; margin-bottom:16px; }
+.realms .an-panel h3 { font-size:16px; color:var(--p-deep); margin-bottom:14px; }
+.realms .bars { display:grid; gap:12px; }
+.realms .bar-row { display:flex; align-items:center; gap:12px; }
+.realms .bar-lab { width:110px; font-size:13.5px; color:#5A4C74; flex-shrink:0; }
+.realms .bar-track { flex:1; height:14px; background:var(--lav1); border-radius:8px; overflow:hidden; }
+.realms .bar-fill { height:100%; background:linear-gradient(90deg,var(--p),var(--v)); border-radius:8px; }
+.realms .bar-fill.green { background:#2E7D46; } .realms .bar-fill.amber { background:#C77D0A; } .realms .bar-fill.red { background:#B4442E; }
+.realms .bar-n { width:34px; text-align:right; font-size:13.5px; color:var(--p-deep); font-weight:600; }
+@media (max-width:920px){ .realms .an-cards { grid-template-columns:repeat(3,1fr); } .realms .an-two { grid-template-columns:1fr; } }
+@media (max-width:560px){ .realms .an-cards { grid-template-columns:1fr 1fr; } }
+
+.realms .app-bar .tabs { overflow-x:auto; max-width:min(64vw,760px); scrollbar-width:thin; }
+.realms .notify { flex-basis:100%; display:flex; flex-direction:column; gap:8px; border-top:1px solid var(--lav2); margin-top:6px; padding-top:12px; }
+.realms .notify-row { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+.realms .ninput { font-family:inherit; font-size:13px; padding:8px 11px; border:1.5px solid var(--line); border-radius:10px; min-width:180px; }
+.realms .ninput:focus { outline:none; border-color:var(--p); }
+.realms .mini.ghosted { color:#8A7AA6; border-style:dashed; }
+.realms .nstat { font-size:12.5px; color:#7A6A93; font-style:italic; }
 `
