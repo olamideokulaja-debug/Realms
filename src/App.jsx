@@ -4,7 +4,7 @@ import 'leaflet/dist/leaflet.css'
 import { supabase, MODE } from './supabaseClient.js'
 import { facilities as FAC, assignments as ASG, visits as VIS, notifications as NOTIF, calls as CALLS, facilitiesFromCSV, orderRoute, googleMapsDirUrl, geocode, uploadEvidence, sendNotify, askAI, seedSampleData, clearAllData } from './data.js'
 
-const BUILD = 'field-2026-07-14p'
+const BUILD = 'field-2026-07-14q'
 
 /*
   REALMS FIELD — Stages 1 to 3 (single-file App.jsx + supabaseClient.js + data.js)
@@ -462,7 +462,8 @@ function AuthPanel({ onDone, onCancel }) {
     <button className="btn primary wide" onClick={submit} disabled={busy}>{busy ? 'Please wait\u2026' : (mode === 'signup' ? 'Create account' : 'Sign in')}</button>
     <button className="linkbtn" onClick={() => setMode(mode === 'signup' ? 'signin' : 'signup')}>{mode === 'signup' ? 'Already have an account? Sign in' : 'Need an account? Create one'}</button>
     <button className="linkbtn subtle" onClick={onCancel}>Back to site</button>
-    {MODE === 'demo' && <p className="demo-note">Demo mode: add Supabase keys to enable real accounts. See the deploy guide.</p>}
+    {MODE === 'demo' && <p className="demo-note">Running in DEMO mode. Supabase keys were NOT detected when this version was built. Real accounts and your live data need the two keys present at build time, then a fresh deploy.</p>}
+    <p className="hintline" style={{ marginTop: 10, fontSize: 11, opacity: 0.65 }}>build {BUILD} &middot; {MODE === 'supabase' ? 'connected to database' : 'demo mode (not connected)'}</p>
   </div></div>)
 }
 
