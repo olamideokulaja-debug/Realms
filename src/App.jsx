@@ -4,7 +4,7 @@ import 'leaflet/dist/leaflet.css'
 import { supabase, MODE } from './supabaseClient.js'
 import { facilities as FAC, assignments as ASG, visits as VIS, notifications as NOTIF, calls as CALLS, access as ACC, facilitiesFromCSV, orderRoute, googleMapsDirUrl, geocode, uploadEvidence, sendNotify, askAI, seedSampleData, clearAllData } from './data.js'
 
-const BUILD = 'field-2026-07-14v'
+const BUILD = 'field-2026-07-14w'
 
 /*
   REALMS FIELD — Stages 1 to 3 (single-file App.jsx + supabaseClient.js + data.js)
@@ -2484,6 +2484,11 @@ export default function App() {
       if (r === 'rhsc_hq' && !isOwner(u)) {
         let req = null
         try { req = await ACC.mine(uid, 'rhsc_hq') } catch (e) {}
+        if (!req) {
+          // Role was saved before the gate existed. Raise the request now, so it reaches the executive office.
+          try { req = await ACC.request({ user_id: uid, email: (u && u.email) || '', name: (u && u.name) || '', role: 'rhsc_hq' }) } catch (e) {}
+          try { sendNotify({ channel: 'email', to: OWNER_EMAIL, subject: 'HQ access request', message: ((u && (u.name || u.email)) || 'A user') + ' has requested RHSC HQ access on Realms Field.' }) } catch (e) {}
+        }
         if (!req || req.status !== 'approved') { setPendKind('rhsc_hq'); setHqPending(true); setRole(null); return }
       }
       if (r === 'facility_proprietor') {
