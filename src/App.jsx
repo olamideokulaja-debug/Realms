@@ -4,7 +4,7 @@ import 'leaflet/dist/leaflet.css'
 import { supabase, MODE } from './supabaseClient.js'
 import { facilities as FAC, assignments as ASG, visits as VIS, notifications as NOTIF, calls as CALLS, facilitiesFromCSV, orderRoute, googleMapsDirUrl, geocode, uploadEvidence, sendNotify, askAI, seedSampleData, clearAllData } from './data.js'
 
-const BUILD = 'field-2026-07-14l'
+const BUILD = 'field-2026-07-14o'
 
 /*
   REALMS FIELD — Stages 1 to 3 (single-file App.jsx + supabaseClient.js + data.js)
@@ -47,10 +47,10 @@ const GENESYS_URL = 'https://www.genesys-health.com/'
 
 const SERVICES = [
   { t: 'Strategy & advisory', d: 'Growth, market-entry and operational strategy for health providers, investors and government, grounded in evidence and delivered to implementation.', img: '/photos/g-boardroom.jpg' },
-  { t: 'Quality & accreditation', d: 'Readiness assessments and hands-on support that help facilities meet and hold the standards required for licensing and accreditation.', img: '/photos/g-corridor.jpg?v=3' },
+  { t: 'Quality & accreditation', d: 'Readiness assessments and hands-on support that help facilities meet and hold the standards required for licensing and accreditation.', img: '/photos/g-corridor.jpg?v=4' },
   { t: 'Facility Monitoring & Accreditation', d: 'As a licensed HEFAMAA monitoring operator, we carry out routine, evidence-based monitoring of health facilities across Lagos State.', img: '/photos/team.jpg', to: 'monitoring' },
   { t: 'Training & capacity building', d: 'Practical training and mentoring for facility teams, regulators and operators, building the knowledge that prevents non-compliance.', img: '/photos/meeting.jpg' },
-  { t: 'Health financing', d: 'Advisory on health financing, insurance design and sustainable funding models for providers, programmes and the public sector.', img: '/photos/g-handshake.jpg?v=3' },
+  { t: 'Health financing', d: 'Advisory on health financing, insurance design and sustainable funding models for providers, programmes and the public sector.', img: '/photos/g-handshake.jpg?v=4' },
   { t: 'Digital health & technology', d: 'Digital transformation for healthcare, powered by Genesys, our own Electronic Medical Records (EMR) platform, from patient records to real-time monitoring.', img: '/photos/g-health.jpg', href: GENESYS_URL }
 ]
 
@@ -494,12 +494,12 @@ function Dashboard({ identity, role, onOpen, facilities, onSeed, onClear, dbErro
       </div>
     </div>
     {dbError ? (<div className="db-error anim">
-      <strong>The sample data could not load.</strong>
+      <strong>The facilities could not load.</strong>
       <span className="db-msg">{dbError}</span>
       <span>If you just updated the app, make sure the new version finished deploying, then tap Try again. Running build: {BUILD}.</span>
       <button className="btn small primary" onClick={onSeed}>Try again</button>
-    </div>) : (!hasData && onSeed && (<div className="seed-card anim"><div><strong>No data yet.</strong><span>Loading sample facilities and visits so you can see the maps, charts and reports.</span></div><button className="btn small primary" onClick={onSeed}>Load sample data</button></div>))}
-    {hasData && onClear && (<div className="clear-row anim"><span>Demo data is loaded. Clear it all before going live.</span><button className="mini danger" onClick={onClear}>Clear all data</button></div>)}
+    </div>) : (!hasData && onSeed && (<div className="seed-card anim"><div><strong>No facilities yet.</strong><span>Load the live facility register (Alimosho &amp; Ifako-Ijaiye) to begin.</span></div><button className="btn small primary" onClick={onSeed}>Load live facilities</button></div>))}
+    {hasData && onClear && (<div className="clear-row anim"><span>To reset, you can clear all facilities and visits.</span><button className="mini danger" onClick={onClear}>Clear all data</button></div>)}
     {showAnalytics
       ? (<div className="dash-analytics anim"><AnalyticsBody facilities={facilities} /></div>)
       : (<div className="dash-quick anim">{quick.map(q => (<div className="dq" key={q.l}><span className="dq-v">{q.v}</span><span className="dq-l">{q.l}</span></div>))}</div>)}
@@ -664,6 +664,9 @@ function MapRoutePage({ list, role }) {
   const [routed, setRouted] = useState(false)
   const [visits, setVisits] = useState([])
   const [q, setQ] = useState('')
+  const [perDay, setPerDay] = useState(12)
+  const [plan, setPlan] = useState(null)
+  const [planBusy, setPlanBusy] = useState(false)
   const isHQ = role === 'rhsc_hq'
   useEffect(() => { if (isHQ) VIS.list().then(setVisits).catch(() => {}) }, [isHQ])
 
@@ -680,6 +683,29 @@ function MapRoutePage({ list, role }) {
   const assessedCount = list.filter(f => { const v = facVisit(f); return v && (v.status === 'monitored' || v.status === 'debriefed') }).length
   const dueCount = visits.filter(v => v.debrief && v.debrief.remediation_deadline && daysUntil(v.debrief.remediation_deadline) != null && daysUntil(v.debrief.remediation_deadline) < 7).length
   const tableRows = list.filter(f => matchQ(f, q))
+
+  function facByName(n) { return list.find(f => f.name === n) || list.find(f => (f.name || '').toLowerCase() === (n || '').toLowerCase()) }
+  function dayMapsUrl(names) {
+    const stops = (names || []).map(n => { const f = facByName(n); if (f && hasCoords(f)) return f.lat + ',' + f.lng; return encodeURIComponent((n || '') + ((f && f.address) ? ', ' + f.address : '') + ', Lagos') }).filter(Boolean)
+    return stops.length ? 'https://www.google.com/maps/dir/' + stops.join('/') : ''
+  }
+  async function planRoutes() {
+    const pool = filtered
+    if (!pool.length) { toast('No facilities in this view to plan.', 'warn'); return }
+    setPlanBusy(true); setPlan(null)
+    const facs = pool.map(f => ({ name: f.name, address: f.address || '', area: f.area || '', lat: hasCoords(f) ? f.lat : null, lng: hasCoords(f) ? f.lng : null }))
+    const sys = 'You are a routing planner for a Lagos health-facility monitoring team. Group the facilities into daily batches of about ' + perDay + ' that are close to each other (same neighbourhoods, streets or localities), so each day is quick to cover and, across all the days, every facility is visited with the least travel. Order each day from a sensible start to finish. Judge proximity from the address localities, and from coordinates when present. Return ONLY JSON, no prose: {"days":[{"day":1,"area":"locality label","facilities":["exact facility name","..."]}]}. Use the exact facility names provided and include every facility exactly once.'
+    const r = await askAI({ system: sys, prompt: JSON.stringify(facs), max_tokens: 4000 })
+    setPlanBusy(false)
+    if (!r.ok) { toast(r.reason === 'ai_not_configured' ? 'AI is not set up yet. Add ANTHROPIC_API_KEY in Vercel to enable it.' : 'The planner could not respond. Please try again.', 'warn'); return }
+    try {
+      const txt = (r.text || '').replace(/```json/gi, '').replace(/```/g, '').trim()
+      const obj = JSON.parse(txt)
+      const days = Array.isArray(obj) ? obj : (obj.days || [])
+      if (!days.length) { toast('The planner returned nothing usable. Try again.', 'warn'); return }
+      setPlan(days)
+    } catch (e) { toast('Could not read the plan. Please try again.', 'warn') }
+  }
 
   useEffect(() => {
     if (!mapRef.current || mapObj.current) return
@@ -715,6 +741,23 @@ function MapRoutePage({ list, role }) {
     {plotted.length === 0 && <p className="warnline">No mapped facilities in this view. Add coordinates on the Facilities tab.</p>}
     <div className="map-frame"><div ref={mapRef} className="leaflet-holder" /></div>
     {routed && ordered.length > 0 && (<ol className="route-list">{ordered.map((f, i) => (<li key={f.id || i}><span className="rn">{i + 1}</span><span>{f.name}</span><em>{f.area}</em></li>))}</ol>)}
+
+    <div className="planner">
+      <SectionHead eyebrow="AI" title="Daily route planner" />
+      <p className="hintline">Groups the facilities in this view into day-by-day routes by proximity, so the team finishes faster each day and covers everywhere with less travel.</p>
+      <div className="planner-controls">
+        <label className="field sm inline"><span>Facilities per day</span><input type="number" min="4" max="30" value={perDay} onChange={e => setPerDay(Math.max(4, Math.min(30, parseInt(e.target.value, 10) || 12)))} /></label>
+        <button className="btn small primary" onClick={planRoutes} disabled={planBusy}><span className="ai-spark" aria-hidden="true">✦</span>{planBusy ? 'Planning\u2026' : 'Plan daily routes'}</button>
+        <span className="hintline">{filtered.length} facilities in {area === 'all' ? 'all areas' : area}</span>
+      </div>
+      {plan && plan.length > 0 && <div className="plan-days">{plan.map((d, i) => {
+        const url = dayMapsUrl(d.facilities || [])
+        return (<div className="plan-day" key={i}>
+          <div className="plan-day-head"><h4>Day {d.day || i + 1}{d.area ? ' \u00b7 ' + d.area : ''}</h4><span className="plan-count">{(d.facilities || []).length} stops</span>{url && <a className="mini" href={url} target="_blank" rel="noreferrer">Open in Google Maps</a>}</div>
+          <ol className="plan-list">{(d.facilities || []).map((n, j) => { const f = facByName(n); return <li key={j}><span className="pf-name">{n}</span>{f && f.address && <em>{f.address}</em>}</li> })}</ol>
+        </div>)
+      })}</div>}
+    </div>
 
     {isHQ && (<div className="hq-oversight">
       <SectionHead eyebrow="Oversight" title="Coverage & status" />
@@ -845,6 +888,7 @@ function EngagePage({ list, identity, role, userId }) {
     try {
       await VIS.add({
         facility_id: facility.id, facility_name: facility.name, area: facility.area || 'Unassigned',
+        address: facility.address || '', category: facility.category || '',
         status: 'engaged', arrival_time: (arrival || new Date()).toISOString(),
         lat: coords ? coords.lat : null, lng: coords ? coords.lng : null,
         team, person_in_charge: pic, greeting_confirmed: true
@@ -1013,7 +1057,11 @@ const HEFAMAA_FORM = [
   { id: 'staffing', title: 'O. Staffing', fields: [
     ['qip', 'Quality improvement programme', 'yn'], ['update_training', 'Regular update training', 'yn'], ['duty_roster', 'Duty roster available', 'yn'], ['adequate_staff', 'Adequate number of qualified personnel', 'yn'], ['staff_shortfall', 'If no, personnel type lacking', 'txt'],
     ['doctors_ft', 'Doctors (full time)', 'num'], ['doctors_pt', 'Doctors (part time)', 'num'], ['nurses_ft', 'Nurses (full time)', 'num'], ['nurses_pt', 'Nurses (part time)', 'num'], ['others_ft', 'Other staff (full time)', 'num'], ['others_pt', 'Other staff (part time)', 'num'],
-    ['staff_complement', 'Staff complement (name, reg no, designation, specialty)', 'ta'], ['staffing_comment', 'Comment', 'ta'] ] }
+    ['staff_complement', 'Staff complement (name, reg no, designation, specialty)', 'ta'], ['staffing_comment', 'Comment', 'ta'] ] },
+  { id: 'submission', title: 'Inspection report (for HEFAMAA submission)', fields: [
+    ['address', 'Facility address', 'txt'], ['schedule', 'Facility schedule (category)', 'txt'], ['opening', 'Opening schedule', 'txt'],
+    ['services_rendered', 'Services rendered', 'ta'], ['total_staff', 'Total staff strength & breakdown', 'ta'], ['staff_on_duty', 'Staff met on duty', 'ta'], ['basic_equipment', 'Basic equipment available', 'ta'],
+    ['wards_no', '# of Wards', 'txt'], ['treatment_room', 'Treatment room', 'txt'], ['environment', 'Environment', 'txt'], ['waste_mgmt', 'Waste management', 'txt'], ['observation', 'Observation (gaps)', 'ta'], ['other_notes', 'Others', 'ta'] ] }
 ]
 const HEF_TYPES = { yn: ['Yes', 'No'], ai: ['Adequate', 'Inadequate'], fn: ['Functional', 'Non-functional'], av: ['Available', 'Not available'] }
 function ragWeight(r) { return r === 'green' ? 2 : r === 'amber' ? 1 : 0 }
@@ -1288,7 +1336,32 @@ function printDoc(title, inner) {
   w.document.close(); w.focus(); setTimeout(() => { try { w.print() } catch (e) {} }, 400)
 }
 function docHead(origin) {
-  return '<div class="head"><img src="' + origin + '/rhsc-mark.png" style="height:44px"><div><strong>REALMS HEALTHCARE SERVICES CONSULTING LIMITED</strong><br><span class="muted">In collaboration with HEFAMAA, Lagos State</span></div></div>'
+  return '<div class="head"><img src="' + origin + '/rhsc-mark.png" style="height:44px"><div><strong>REALMS HEALTHCARE SERVICES CONSULTING LIMITED</strong><br><span class="muted">Licensed HEFAMAA monitoring operator, Lagos State</span></div></div>'
+}
+function inspHead(origin) {
+  return '<div class="head" style="justify-content:space-between"><div style="display:flex;align-items:center;gap:12px"><img src="' + origin + '/rhsc-mark.png" style="height:54px"><div><strong style="font-size:14px">HEALTH FACILITY MONITORING AND ACCREDITATION AGENCY (HEFAMAA)</strong><br><span style="color:#574277">Inspection Report (Realms Consulting)</span></div></div><img src="' + origin + '/hefamaa-logo.png" style="height:54px" onerror="this.style.display=\'none\'"></div>'
+}
+function firstVal() { for (let i = 0; i < arguments.length; i++) { const v = arguments[i]; if (v != null && String(v).trim() !== '') return String(v) } return '' }
+function buildInspectionReport(v, d, origin) {
+  const hef = (v.monitoring && v.monitoring.hefamaa) || {}
+  const date = firstVal(hef.assess_date, (v.arrival_time || v.created_at || '').slice(0, 10))
+  const svcList = [].concat(Array.isArray(hef.svc_primary) ? hef.svc_primary : [], Array.isArray(hef.svc_support) ? hef.svc_support : []).join(', ')
+  const staffAuto = [hef.doctors_ft && (hef.doctors_ft + ' doctor(s)'), hef.nurses_ft && (hef.nurses_ft + ' nurse(s)'), hef.others_ft && (hef.others_ft + ' other staff')].filter(Boolean).join(', ')
+  const renewal = firstVal(hef.hefamaa_renewal ? (hef.hefamaa_renewal + (hef.hefamaa_last_renewal ? ' (' + hef.hefamaa_last_renewal + ')' : '')) : '')
+  const gapsText = (d && d.gaps && d.gaps.length) ? d.gaps.map(g => (g.category ? g.category + ': ' : '') + g.label).join('; ') : ''
+  const observation = firstVal(hef.observation, d && d.narrative, gapsText)
+  const rows = [
+    ['General', ''],
+    ['Date', date], ['Facility Name', v.facility_name || ''], ['Facility Address', firstVal(hef.address, v.address)],
+    ['LGA', v.area || ''], ['Facility Schedule', firstVal(hef.schedule, v.category)], ['Opening Schedule', firstVal(hef.opening, hef.hours)], ['Registration Status', firstVal(hef.registration, hef.hefamaa_reg)],
+    ['Findings', ''],
+    ['Renewal Status', renewal], ['Services Rendered', firstVal(hef.services_rendered, svcList)], ['Total Staff Strength and Breakdown', firstVal(hef.total_staff, staffAuto)], ['Staff met on duty', firstVal(hef.staff_on_duty)],
+    ['Basic Equipment Available', firstVal(hef.basic_equipment)], ['# of Wards', firstVal(hef.wards_no)], ['# of Beds', firstVal(hef.beds_no)], ['# of Toilets', firstVal(hef.toilets_available)],
+    ['Observation (Gaps)', observation], ['Environment', firstVal(hef.environment, hef.gen_ventilation)], ['Waste Management', firstVal(hef.waste_mgmt, hef.medical_waste)], ['Treatment Room', firstVal(hef.treatment_room)], ['Others', firstVal(hef.other_notes)]
+  ]
+  const esc = s => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/\n/g, '<br>')
+  const body = rows.map(r => r[1] === '' && (r[0] === 'General' || r[0] === 'Findings') ? '<tr><th colspan="2" style="font-size:13px">' + r[0] + '</th></tr>' : '<tr><td style="width:34%;font-weight:600;color:#574277">' + r[0] + '</td><td>' + esc(r[1]) + '</td></tr>').join('')
+  return inspHead(origin) + '<table style="margin-top:10px">' + body + '</table>' + (d && d.signature ? '<p class="muted">Proprietor sign-off:</p><img class="sig" src="' + d.signature + '">' : '') + '<p class="muted">Prepared by REALMS Healthcare Services Consulting Limited for HEFAMAA, Lagos State.</p>'
 }
 function buildReport(v, d, origin) {
   const data = (v.monitoring && v.monitoring.items) || {}
@@ -1445,8 +1518,8 @@ function DebriefPage({ userId }) {
   const origin = (typeof window !== 'undefined' && window.location) ? window.location.origin : ''
 
   if (!active) {
-    const ready = visits.filter(v => (v.status === 'monitored' || v.status === 'debriefed') && matchQ(v, q))
-    const anyReady = visits.some(v => v.status === 'monitored' || v.status === 'debriefed')
+    const ready = visits.filter(v => (v.status === 'monitored' || (v.status === 'debriefed' && !(v.debrief && v.debrief.first_visit))) && matchQ(v, q))
+    const anyReady = visits.some(v => v.status === 'monitored' || (v.status === 'debriefed' && !(v.debrief && v.debrief.first_visit)))
     return (<div className="page">
       <div className="ptitle"><div><p className="eyebrow">Debrief</p><h2>Close out visits</h2></div><span className={'net ' + (online ? 'on' : 'off')}>{online ? 'Online' : 'Offline'}</span></div>
       {anyReady && <div className="list-tools"><SearchBox value={q} onChange={setQ} placeholder="Search facilities…" /></div>}
@@ -1525,6 +1598,7 @@ function DebriefPage({ userId }) {
       <button className="btn primary" onClick={save} disabled={busy}>{busy ? 'Saving\u2026' : 'Save debrief'}</button>
       {saveState === 'pending' && <button className="btn ghost" onClick={save}>Sync now</button>}
       <button className="btn ghost" onClick={() => printDoc('Monitoring Report', buildReport(active, payload(), origin))}>Monitoring report</button>
+      <button className="btn primary" onClick={() => printDoc('HEFAMAA Inspection Report', buildInspectionReport(active, payload(), origin))}>Inspection report</button>
       <button className="btn ghost" onClick={() => printDoc('HEFAMAA Form', buildHefamaaDoc(active, origin))}>HEFAMAA form</button>
       {letterIssued && <button className="btn ghost" onClick={() => printDoc('Compliance Letter', buildLetter(active, payload(), origin))}>Corrective letter</button>}
       {closure && <button className="btn ghost" onClick={() => printDoc('Closure Notice', buildClosure(active, payload(), origin))}>Closure notice</button>}
@@ -1579,8 +1653,8 @@ function FollowUpsPage({ userId, identity }) {
     try { setCallLog(await CALLS.list()) } catch (e) {}
   }
   useEffect(() => { refresh() }, [])
-  const anyDone = visits.some(v => v.status === 'debriefed')
-  const done = visits.filter(v => v.status === 'debriefed' && matchQ(v, q))
+  const anyDone = visits.some(v => v.status === 'debriefed' && !(v.debrief && v.debrief.first_visit))
+  const done = visits.filter(v => v.status === 'debriefed' && !(v.debrief && v.debrief.first_visit) && matchQ(v, q))
   function callsFor(id) { return callLog.filter(c => c.visit_id === id) }
   function openForm(v) { setOpenId(v.id); setForm({ outcome: 'Reached', notes: '', caller: (identity && identity.name) || '' }) }
   async function saveCall(v) {
@@ -1773,6 +1847,7 @@ function ReportsPage({ facilities, userId, scope, role }) {
           <div className="rep-actions">
             <button className="mini" onClick={() => doc(v, 'report')}>Report</button>
             <button className="mini" onClick={() => doc(v, 'letter')}>Letter</button>
+            <button className="mini" onClick={() => printDoc('HEFAMAA Inspection Report', buildInspectionReport(v, v.debrief || deriveDebrief(v), origin))}>Inspection</button>
             <button className="mini" onClick={() => printDoc('HEFAMAA Form', buildHefamaaDoc(v, origin))}>HEFAMAA</button>
             {!readOnly && <button className="mini" onClick={() => setNotifyId(notifyId === v.id ? null : v.id)}>Notify</button>}
           </div>
@@ -2053,7 +2128,7 @@ export default function App() {
   async function loadSample() {
     setDbError(''); seedTriedRef.current = true
     const res = await seedSampleData(user && user.id)
-    try { const list = await FAC.list(); setFacs(list); if (list.length === 0 && res && res.error) setDbError(res.error) }
+    try { const list = await FAC.list(); setFacs(list); if (list.length === 0 && res && res.error) setDbError(res.error); else if (list.length) toast(list.length + ' live facilities loaded.') }
     catch (e) { setDbError((e && e.message) || 'Could not read the database.') }
   }
   async function clearAll() {
@@ -2370,6 +2445,19 @@ const css = `
 .realms .route-list { list-style:none; margin:18px 0 0; padding:0; display:grid; gap:8px; }
 .realms .route-list li { display:flex; align-items:center; gap:12px; background:#fff; border:1px solid var(--line); border-radius:12px; padding:12px 14px; }
 .realms .route-list .rn { width:26px; height:26px; border-radius:50%; background:var(--p); color:#fff; display:grid; place-items:center; font-size:13px; font-weight:700; }
+.realms .planner { margin-top:26px; }
+.realms .planner-controls { display:flex; flex-wrap:wrap; align-items:center; gap:12px; margin-bottom:14px; }
+.realms .field.inline { flex-direction:row; align-items:center; gap:8px; }
+.realms .field.inline input { width:70px; }
+.realms .plan-days { display:grid; grid-template-columns:repeat(auto-fill,minmax(280px,1fr)); gap:14px; }
+.realms .plan-day { background:#fff; border:1px solid var(--line); border-left:3px solid var(--p); border-radius:12px; padding:14px 16px; }
+.realms .plan-day-head { display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:8px; }
+.realms .plan-day-head h4 { color:var(--p-deep); font-size:15px; margin:0; flex:1; }
+.realms .plan-count { font-size:11.5px; color:#8A7AA6; background:var(--lav2); border-radius:10px; padding:2px 9px; }
+.realms .plan-list { margin:0; padding-left:20px; }
+.realms .plan-list li { font-size:13px; color:#4A3B66; margin-bottom:5px; }
+.realms .plan-list .pf-name { font-weight:500; color:#3A2B54; }
+.realms .plan-list em { display:block; font-style:normal; color:#8A7AA6; font-size:12px; }
 .realms .route-list em { margin-left:auto; font-style:normal; font-size:13px; color:#8A7AA6; }
 
 .realms .assign-grid { display:grid; grid-template-columns:1.3fr 1fr; gap:24px; }
@@ -2697,7 +2785,7 @@ const css = `
 .realms .svc-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:16px; margin-top:22px; }
 .realms .svc-card { background:#fff; border:1px solid var(--line); border-radius:16px; overflow:hidden; cursor:pointer; transition:.18s; display:flex; flex-direction:column; }
 .realms .svc-card:hover { transform:translateY(-4px); box-shadow:0 16px 34px rgba(58,21,96,.14); border-color:var(--v); }
-.realms .svc-img { height:180px; overflow:hidden; }
+.realms .svc-img { height:300px; overflow:hidden; }
 .realms .svc-img img { width:100%; height:100%; object-fit:cover; object-position:center top; }
 .realms .svc-card h3 { font-size:17px; color:var(--p-deep); margin:16px 18px 6px; }
 .realms .svc-card p { font-size:13.5px; color:#5A4C74; margin:0 18px 12px; line-height:1.55; flex:1; }

@@ -92,3 +92,7 @@ create table if not exists calls (
 alter table calls enable row level security;
 drop policy if exists "auth calls" on calls;
 create policy "auth calls" on calls for all using (auth.uid() is not null) with check (auth.uid() is not null);
+
+-- 7. Visit facility address & category (so the inspection report auto-fills these lines)
+alter table visits add column if not exists address text;
+alter table visits add column if not exists category text;

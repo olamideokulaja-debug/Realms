@@ -64,8 +64,12 @@ PART D — Give the website the keys
 YOU ARE LIVE
 --------------------------------------------------
 Open your Vercel website link. Click "Staff sign-in", create an account with your email,
-type your name, and pick a role. To add your real facilities, go to the Facilities tab and use
-"Import CSV" or "Google Sheet".
+type your name, and pick a role.
+
+GO LIVE WITH YOUR FACILITIES: sign in as RHSC HQ. On the Dashboard, if it shows
+"No facilities yet", tap "Load live facilities" once. This loads the 207 real facilities
+(Alimosho & Ifako-Ijaiye, first visits completed). You only do this once. To reset, use
+"Clear all data". You can also bulk-upload realms-live-facilities.csv on the Facilities tab.
 
 To install it on a phone: open the link in the phone browser, then choose "Add to Home Screen".
 
@@ -96,5 +100,21 @@ IF SOMETHING LOOKS WRONG
   no extra spaces, then Redeploy.
 - To show demo data for a walkthrough: on the Dashboard use "Load sample data".
   On the real site it starts empty on purpose so you add your own facilities.
-- The small code near the bottom of a database error box should read `field-2026-07-14l`.
+- The small code near the bottom of a database error box should read `field-2026-07-14o`.
   That confirms the newest version is live.
+
+--------------------------------------------------
+CONNECT YOUR DOMAIN (realmsconsulting.com at GoDaddy)
+--------------------------------------------------
+1. In Vercel, open your project > Settings > Domains.
+2. Type realmsconsulting.com and click Add. Accept the "add www and redirect" suggestion.
+3. Vercel shows you the exact records to add. Usually:
+   - A record:    Name @    Value 76.76.21.21   (use whatever Vercel shows)
+   - CNAME record: Name www  Value cname.vercel-dns.com   (use whatever Vercel shows)
+4. In a new tab go to GoDaddy > your profile > My Products > find realmsconsulting.com > DNS.
+5. DELETE GoDaddy's default Parked "A @" record and any Forwarding, so they don't clash.
+6. Add new record: Type A, Name @, Value (the IP Vercel showed). Save.
+7. Add new record: Type CNAME, Name www, Value (the value Vercel showed). Save.
+8. Go back to Vercel > Domains and wait. It flips from "Invalid" to "Valid" (a few minutes,
+   sometimes up to a couple of hours). Vercel adds the padlock (HTTPS) automatically.
+Done. realmsconsulting.com now shows your app.
