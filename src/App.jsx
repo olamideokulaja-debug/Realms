@@ -4,7 +4,7 @@ import 'leaflet/dist/leaflet.css'
 import { supabase, MODE } from './supabaseClient.js'
 import { facilities as FAC, assignments as ASG, visits as VIS, notifications as NOTIF, calls as CALLS, access as ACC, facilitiesFromCSV, orderRoute, googleMapsDirUrl, geocode, uploadEvidence, sendNotify, askAI, seedSampleData, clearAllData } from './data.js'
 
-const BUILD = 'field-2026-07-14w'
+const BUILD = 'field-2026-07-14x'
 
 /*
   REALMS FIELD — Stages 1 to 3 (single-file App.jsx + supabaseClient.js + data.js)
@@ -92,7 +92,10 @@ function AIButton({ label, busyLabel, build, onText, className }) {
 /* ---------- global toasts + confirm ---------- */
 const uiListeners = new Set()
 function toast(message, kind = 'ok') { uiListeners.forEach(l => l({ t: 'toast', message, kind })) }
-function confirmAction(message, opts = {}) { return new Promise(res => { let done = false; const resolve = v => { if (!done) { done = true; res(v) } }; uiListeners.forEach(l => l({ t: 'confirm', message, opts, resolve })) }) }
+function confirmAction(message, opts = {}) {
+  if (!uiListeners.size) { try { return Promise.resolve(window.confirm(((opts.title ? opts.title + '\n\n' : '') + message))) } catch (e) { return Promise.resolve(false) } }
+  return new Promise(res => { let done = false; const resolve = v => { if (!done) { done = true; res(v) } }; uiListeners.forEach(l => l({ t: 'confirm', message, opts, resolve })) })
+}
 function Overlays() {
   const [toasts, setToasts] = useState([])
   const [confirm, setConfirm] = useState(null)
@@ -2558,6 +2561,7 @@ export default function App() {
   if (showAppShell) {
     return (<div className="realms app-mode">
       <style>{css}</style>
+      <Overlays />
       <TopBarApp identity={effId} realRole={role} viewAsName={viewAs ? viewAs.name : ''} onViewAs={doViewAs} onEditName={editName} onSignOut={signOut} onToggleNav={() => setNavOpen(o => !o)} />
       {viewAs && (<div className="viewas-bar">Viewing as {viewAs.name} &middot; {(roleById(viewAs.role) || {}).label}<button onClick={() => doViewAs('')}>Return to my view</button></div>)}
       <div className="shell">
