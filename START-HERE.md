@@ -96,5 +96,5 @@ IF SOMETHING LOOKS WRONG
   no extra spaces, then Redeploy.
 - To show demo data for a walkthrough: on the Dashboard use "Load sample data".
   On the real site it starts empty on purpose so you add your own facilities.
-- The small code near the bottom of a database error box should read `field-2026-07-14k`.
+- The small code near the bottom of a database error box should read `field-2026-07-14l`.
   That confirms the newest version is live.
