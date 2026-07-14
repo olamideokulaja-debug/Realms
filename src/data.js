@@ -167,6 +167,14 @@ export const visits = {
   }
 }
 
+/* ---------- AI (Claude proxy) ---------- */
+export async function askAI(body) {
+  try {
+    const r = await fetch('/api/ai', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body || {}) })
+    return await r.json().catch(() => ({ ok: false, reason: 'bad_response' }))
+  } catch (e) { return { ok: false, reason: 'network' } }
+}
+
 /* ---------- notifications + call logs (customer service follow-ups) ---------- */
 const LS_NOTIF = 'realms_notifications'
 export const notifications = {

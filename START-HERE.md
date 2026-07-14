@@ -80,11 +80,21 @@ then Redeploy:
 Without these, the "open SMS / WhatsApp / email app" buttons still work by hand.
 
 --------------------------------------------------
+LATER (optional) — turn on the AI features
+--------------------------------------------------
+The app has AI helpers (website assistant, report drafting, data assistant,
+photo checks, form consistency, call briefings, smart import, translations).
+They stay off until you add a key. In Vercel Environment Variables add:
+- `ANTHROPIC_API_KEY`  (your Anthropic API key from console.anthropic.com)
+- `AI_MODEL`  (optional, defaults to a sensible Claude model)
+Then Redeploy. Until then, each AI button politely says it is not set up yet.
+
+--------------------------------------------------
 IF SOMETHING LOOKS WRONG
 --------------------------------------------------
 - Blank or error page after adding keys: check the URL starts with https:// and the key has
   no extra spaces, then Redeploy.
 - To show demo data for a walkthrough: on the Dashboard use "Load sample data".
   On the real site it starts empty on purpose so you add your own facilities.
-- The small code near the bottom of a database error box should read `field-2026-07-14g`.
+- The small code near the bottom of a database error box should read `field-2026-07-14i`.
   That confirms the newest version is live.

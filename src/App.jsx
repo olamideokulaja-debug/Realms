@@ -2,9 +2,9 @@ import React, { useEffect, useRef, useState } from 'react'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
 import { supabase, MODE } from './supabaseClient.js'
-import { facilities as FAC, assignments as ASG, visits as VIS, notifications as NOTIF, calls as CALLS, facilitiesFromCSV, orderRoute, googleMapsDirUrl, geocode, uploadEvidence, sendNotify, seedSampleData, clearAllData } from './data.js'
+import { facilities as FAC, assignments as ASG, visits as VIS, notifications as NOTIF, calls as CALLS, facilitiesFromCSV, orderRoute, googleMapsDirUrl, geocode, uploadEvidence, sendNotify, askAI, seedSampleData, clearAllData } from './data.js'
 
-const BUILD = 'field-2026-07-14g'
+const BUILD = 'field-2026-07-14i'
 
 /*
   REALMS FIELD — Stages 1 to 3 (single-file App.jsx + supabaseClient.js + data.js)
@@ -72,6 +72,21 @@ const ICONS = {
   clock: 'M12 22a10 10 0 100-20 10 10 0 000 20zM12 7v5l3 2'
 }
 function Ico({ name, size = 18 }) { return (<svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={ICONS[name]} /></svg>) }
+
+/* ---------- reusable AI action button ---------- */
+function AIButton({ label, busyLabel, build, onText, className }) {
+  const [busy, setBusy] = useState(false)
+  async function go() {
+    setBusy(true)
+    try {
+      const b = await build()
+      const r = await askAI(b)
+      if (!r.ok) { toast(r.reason === 'ai_not_configured' ? 'AI is not set up yet. Add ANTHROPIC_API_KEY in Vercel to enable it.' : 'The assistant could not respond. Please try again.', 'warn'); return }
+      onText(r.text || '')
+    } catch (e) { toast('The assistant could not respond.', 'warn') } finally { setBusy(false) }
+  }
+  return <button type="button" className={(className || 'btn ghost') + ' ai-btn'} onClick={go} disabled={busy}><span className="ai-spark" aria-hidden="true">✦</span>{busy ? (busyLabel || 'Thinking\u2026') : label}</button>
+}
 
 /* ---------- global toasts + confirm ---------- */
 const uiListeners = new Set()
@@ -179,11 +194,11 @@ const ROLES = [
 const ROLE_TABS = {
   team_leader: ['dashboard', 'facilities', 'map', 'engage', 'monitor', 'debrief', 'assign', 'reports'],
   field_monitor: ['dashboard', 'facilities', 'map', 'engage', 'monitor', 'debrief'],
-  rhsc_hq: ['dashboard', 'facilities', 'map', 'reports', 'followups', 'settings'],
+  rhsc_hq: ['dashboard', 'facilities', 'map', 'reports', 'followups', 'assistant', 'settings'],
   hefamaa_reviewer: ['dashboard', 'facilities', 'reports'],
   facility_proprietor: ['dashboard', 'myfacility']
 }
-const TAB_LABEL = { dashboard: 'Dashboard', facilities: 'Facilities', map: 'Map & Route', engage: 'Engage', monitor: 'Monitor', debrief: 'Debrief', assign: 'Assign', reports: 'Reports', analytics: 'Analytics', myfacility: 'My Facility', followups: 'Follow-ups', settings: 'Settings' }
+const TAB_LABEL = { dashboard: 'Dashboard', facilities: 'Facilities', map: 'Map & Route', engage: 'Engage', monitor: 'Monitor', debrief: 'Debrief', assign: 'Assign', reports: 'Reports', analytics: 'Analytics', myfacility: 'My Facility', followups: 'Follow-ups', settings: 'Settings', assistant: 'AI Assistant' }
 const CAN_EDIT = ['team_leader', 'field_monitor', 'rhsc_hq']
 const AREA_COLORS = ['#6D4B8E', '#3E86C9', '#C7549C', '#5FA35A', '#D08A2E', '#7E63A0', '#4AA3A3', '#B0562E', '#6C6FD0', '#C0603C']
 
@@ -411,7 +426,10 @@ function ContactPage() {
             <select value={f.interest} onChange={e => set('interest', e.target.value)}>{['Book a consultation', 'Request a proposal', 'Facility monitoring & accreditation', 'Quality & accreditation', 'Training', 'Health financing', 'Digital health (Genesys)', 'Other'].map(o => <option key={o}>{o}</option>)}</select>
           </label>
           <label className="field sm"><span>Message</span><textarea rows="4" value={f.message} onChange={e => set('message', e.target.value)} placeholder="A sentence or two about what you need." /></label>
-          <button className="btn primary wide" onClick={submit}>Send enquiry</button>
+          <div className="cta-row">
+            <button className="btn primary" onClick={submit}>Send enquiry</button>
+            <AIButton className="btn ghost" label="Help me write this" build={() => ({ system: 'You help a website visitor draft a short, polite enquiry to RHSC, a Lagos healthcare consulting and HEFAMAA facility-monitoring firm. Write 2 to 4 sentences in the first person, ready to send. Output only the message.', prompt: 'Name: ' + (f.name || '(unspecified)') + '. Organisation: ' + (f.org || 'n/a') + '. Interest: ' + f.interest + '. Rough note: ' + (f.message || '(none)') + '.', max_tokens: 260 })} onText={txt => set('message', txt)} />
+          </div>
           <p className="hintline">Prefer to write directly? Use the details on the left.</p>
         </div>
       )}
@@ -502,6 +520,7 @@ function FacilitiesPage({ list, canEdit, userId, reload }) {
   const [q, setQ] = useState('')
   const [visits, setVisits] = useState([])
   const [drawer, setDrawer] = useState(null)
+  const [aiClean, setAiClean] = useState(false)
   useEffect(() => { VIS.list().then(setVisits).catch(() => {}) }, [])
   const origin = (typeof window !== 'undefined' && window.location) ? window.location.origin : ''
   function facVisits(f) { return visits.filter(v => (v.facility_id && v.facility_id === f.id) || v.facility_name === f.name) }
@@ -523,9 +542,15 @@ function FacilitiesPage({ list, canEdit, userId, reload }) {
     } catch (e) { setMsg(e.message || 'Could not save the facility.') } finally { setBusy(false) }
   }
   async function importRows(text, sourceLabel) {
-    const items = facilitiesFromCSV(text)
+    let csv = text
+    if (aiClean) {
+      const r = await askAI({ system: 'You clean a facilities CSV for a Lagos health-facility monitoring app. Return ONLY CSV with this header row: name,category,area,address,lat,lng,last_visit. Standardise area/LGA names, fix casing, remove empty or duplicate rows, keep lat/lng if present. No commentary, no code fences.', prompt: text.slice(0, 6000), max_tokens: 2000 })
+      if (r.ok && r.text && /name/i.test(r.text)) csv = r.text.replace(/```[a-z]*/gi, '').replace(/```/g, '').trim()
+      else if (!r.ok && r.reason === 'ai_not_configured') toast('AI clean is not set up; imported as-is.', 'warn')
+    }
+    const items = facilitiesFromCSV(csv)
     if (!items.length) { setMsg('No rows found. Include a header row with a name column.'); return }
-    await FAC.addMany(items, userId); await reload(); setMsg(items.length + ' facilities imported' + (sourceLabel ? ' from ' + sourceLabel : '') + '.')
+    await FAC.addMany(items, userId); await reload(); setMsg(items.length + ' facilities imported' + (sourceLabel ? ' from ' + sourceLabel : '') + (aiClean ? ', cleaned with AI' : '') + '.')
   }
   async function onFile(e) {
     const file = e.target.files && e.target.files[0]; if (!file) return
@@ -578,6 +603,7 @@ function FacilitiesPage({ list, canEdit, userId, reload }) {
         <button className="btn small ghost" onClick={downloadTemplate}>Template</button>
         <button className="btn small ghost" onClick={() => window.alert('HEFAMAA sync connects to the Agency\u2019s data feed. Share the API endpoint and we will enable it.')}>HEFAMAA sync</button>
         <button className="btn small primary" onClick={() => setAdding(a => !a)}>{adding ? 'Close' : 'Add facility'}</button>
+        <label className="ai-check"><input type="checkbox" checked={aiClean} onChange={e => setAiClean(e.target.checked)} /> <span className="ai-spark">✦</span> Clean with AI</label>
         <input ref={fileRef} type="file" accept=".csv,text/csv,.xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel" onChange={onFile} style={{ display: 'none' }} />
       </div>}
     </div>
@@ -1067,6 +1093,19 @@ function HefammaForm({ value, onChange }) {
   ))}</div>)
 }
 
+function DictateButton({ onText }) {
+  const [rec, setRec] = useState(false); const ref = useRef(null)
+  function toggle() {
+    const SR = (typeof window !== 'undefined') && (window.SpeechRecognition || window.webkitSpeechRecognition)
+    if (!SR) { toast('Voice typing is not supported on this browser. Try Chrome.', 'warn'); return }
+    if (rec && ref.current) { ref.current.stop(); return }
+    const r = new SR(); r.lang = 'en-NG'; r.interimResults = false; r.continuous = false
+    r.onresult = e => { const txt = Array.from(e.results).map(x => x[0].transcript).join(' '); onText(txt) }
+    r.onend = () => setRec(false); r.onerror = () => setRec(false)
+    ref.current = r; setRec(true); r.start()
+  }
+  return <button type="button" className={'mini dictate' + (rec ? ' rec' : '')} onClick={toggle} title="Dictate a note">{rec ? '\u25cf Listening' : '\u25cf Dictate'}</button>
+}
 function MonitorPage({ userId }) {
   const [visits, setVisits] = useState([])
   const [active, setActive] = useState(null)
@@ -1079,6 +1118,7 @@ function MonitorPage({ userId }) {
   const [hef, setHef] = useState({})
   const [q, setQ] = useState('')
   const [lightbox, setLightbox] = useState(null)
+  const [hefCheck, setHefCheck] = useState('')
 
   useEffect(() => { VIS.list().then(setVisits).catch(() => {}) }, [])
   useEffect(() => { const on = () => setOnline(true), off = () => setOnline(false); window.addEventListener('online', on); window.addEventListener('offline', off); return () => { window.removeEventListener('online', on); window.removeEventListener('offline', off) } }, [])
@@ -1177,6 +1217,8 @@ function MonitorPage({ userId }) {
     <details className="hef-wrap" open>
       <summary className="hef-title"><span>HEFAMAA facility inspection form</span><span className="hef-total">{HEFAMAA_FORM.reduce((n, s) => n + hefAnswered(s, hef), 0)}/{HEFAMAA_FORM.reduce((n, s) => n + s.fields.length, 0)}</span></summary>
       <p className="hintline">The full Lagos HEFAMAA inspection tool. Complete each section as you would on the paper form; every section is saved with the visit.</p>
+      <div className="ai-row"><AIButton label="AI consistency check" build={() => ({ system: 'You review a HEFAMAA facility inspection form for internal contradictions, missing critical items, and implausible entries. List up to 6 short, specific issues as bullets. If none, say the form looks consistent. Use only the data.', prompt: JSON.stringify(hef), max_tokens: 500 })} onText={txt => setHefCheck(txt)} /></div>
+      {hefCheck && <div className="ai-panel"><h4><span className="ai-spark">✦</span> Consistency check</h4><p className="ai-text">{hefCheck}</p><button className="linkbtn subtle" onClick={() => setHefCheck('')}>Dismiss</button></div>}
       <HefammaForm value={hef} onChange={setHef} />
     </details>
 
@@ -1193,7 +1235,7 @@ function MonitorPage({ userId }) {
           const needPhoto = it.rating === 'red' && !(it.evidence || []).some(e => e.type === 'photo')
           return (<div className={'mitem' + (needPhoto ? ' flag' : '')} key={key}>
             <div className="mitem-top"><span className="mlabel">{label}</span><Rag value={it.rating} onChange={r => setItem(key, { rating: r })} /></div>
-            <textarea className="mnote" rows="1" placeholder="Note (optional)" value={it.note || ''} onChange={e => setItem(key, { note: e.target.value })} />
+            <div className="mnote-row"><textarea className="mnote" rows="1" placeholder="Note (optional)" value={it.note || ''} onChange={e => setItem(key, { note: e.target.value })} /><DictateButton onText={txt => setItem(key, { note: ((it.note || '') + (it.note ? ' ' : '') + txt) })} /></div>
             <div className="evrow">
               <label className={'ev-btn' + (needPhoto ? ' urgent' : '')}>Photo<input type="file" accept="image/*" capture="environment" onChange={e => { onPickImage(key, 'photo', e.target.files[0]); e.target.value = '' }} /></label>
               <label className="ev-btn">Scan<input type="file" accept="image/*" onChange={e => { onPickImage(key, 'scan', e.target.files[0]); e.target.value = '' }} /></label>
@@ -1204,6 +1246,7 @@ function MonitorPage({ userId }) {
             {it.evidence && it.evidence.length > 0 && (<div className="evstrip">{it.evidence.map((ev, ei) => (
               <div className="evthumb" key={ei}>
                 {ev.type === 'voice' ? <audio controls src={ev.data} /> : <img src={ev.data} alt={ev.type} onClick={() => setLightbox(ev.data)} style={{ cursor: 'zoom-in' }} />}
+                {ev.type !== 'voice' && <AIButton className="mini ev-ai" label="AI check" busyLabel="Checking" build={() => ({ system: 'You are a HEFAMAA monitoring officer reviewing an evidence photo from a health facility. In 1 to 2 sentences note visible compliance issues (hygiene, PPE, waste, equipment, signage, cold chain) or say it looks acceptable. Be specific and cautious; do not overstate.', prompt: 'Category: ' + cat.label + '; item: ' + label + '. Note compliance-relevant observations.', image: ev.data, max_tokens: 200 })} onText={txt => setItem(key, { note: ((it.note || '') + (it.note ? '\n' : '') + 'AI: ' + txt) })} />}
                 <button className="evx" onClick={() => removeEvidence(key, ei)}>&times;</button>
               </div>
             ))}</div>)}
@@ -1266,9 +1309,11 @@ function buildReport(v, d, origin) {
     return rows ? '<h3>' + sec.title + '</h3><table>' + rows + '</table>' : ''
   }).join('')
   const hefSection = hefHtml ? '<h2>HEFAMAA inspection form</h2>' + hefHtml : ''
+  const narr = d.narrative ? '<h2>Summary &amp; recommendations</h2><p>' + String(d.narrative).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/\n/g, '<br>') + '</p>' : ''
   return docHead(origin) + '<h1>Health Facility Monitoring Report</h1>' +
     '<p><strong>Facility:</strong> ' + v.facility_name + ' &middot; <strong>Area:</strong> ' + (v.area || '') + '<br><strong>Visit date:</strong> ' + date + ' &middot; <strong>Overall:</strong> <span class="chip ' + chipCls(v.overall_rating) + '">' + ragText(v.overall_rating) + (v.score != null ? ' ' + v.score + '%' : '') + '</span></p>' +
     profileHtml +
+    narr +
     '<h2>Assessment by category</h2><table><tr><th>Category</th><th>Rating</th></tr>' + cats + '</table>' +
     '<h2>Strengths</h2>' + strengths +
     '<h2>Gaps and required corrective actions</h2>' + gaps +
@@ -1345,6 +1390,7 @@ function DebriefPage({ userId }) {
   const [genesysNote, setGenesysNote] = useState('')
   const [closure, setClosure] = useState(false)
   const [escalate, setEscalate] = useState(false)
+  const [narrative, setNarrative] = useState('')
   const [online, setOnline] = useState(typeof navigator !== 'undefined' ? navigator.onLine : true)
   const [busy, setBusy] = useState(false); const [msg, setMsg] = useState(''); const [saveState, setSaveState] = useState('')
   const [q, setQ] = useState('')
@@ -1359,16 +1405,21 @@ function DebriefPage({ userId }) {
       setStrengths(existing.strengths || []); setGaps(existing.gaps || []); setDeadline(existing.remediation_deadline || '')
       setReinspection(existing.reinspection || '2 weeks'); setLetterIssued(existing.letter_issued !== false)
       setPropName(existing.proprietor_name || (v.person_in_charge && v.person_in_charge.name) || ''); setAck(!!existing.proprietor_ack); setSignature(existing.signature || '')
-      setGenesys(!!existing.genesys_interest); setGenesysNote(existing.genesys_note || ''); setClosure(!!existing.closure_recommended); setEscalate(!!existing.escalated)
+      setGenesys(!!existing.genesys_interest); setGenesysNote(existing.genesys_note || ''); setClosure(!!existing.closure_recommended); setEscalate(!!existing.escalated); setNarrative(existing.narrative || '')
     } else {
       const d = deriveDebrief(v); setStrengths(d.strengths); setGaps(d.gaps); setDeadline(''); setReinspection(getSettings().default_reinspection || '2 weeks'); setLetterIssued(true)
       setPropName((v.person_in_charge && v.person_in_charge.name) || ''); setAck(false); setSignature('')
-      setGenesys(false); setGenesysNote(''); setClosure(false); setEscalate(false)
+      setGenesys(false); setGenesysNote(''); setClosure(false); setEscalate(false); setNarrative('')
     }
   }
   function setGap(i, patch) { setGaps(gs => gs.map((g, x) => x === i ? { ...g, ...patch } : g)); setSaveState('draft') }
 
-  function payload() { return { strengths, gaps, remediation_deadline: deadline, reinspection, letter_issued: letterIssued, proprietor_name: propName.trim(), proprietor_ack: ack, signature, signed_at: signature ? new Date().toISOString() : '', genesys_interest: genesys, genesys_note: genesysNote.trim(), closure_recommended: closure, escalated: escalate, updatedAt: new Date().toISOString() } }
+  function payload() { return { strengths, gaps, remediation_deadline: deadline, reinspection, letter_issued: letterIssued, proprietor_name: propName.trim(), proprietor_ack: ack, signature, signed_at: signature ? new Date().toISOString() : '', genesys_interest: genesys, genesys_note: genesysNote.trim(), closure_recommended: closure, escalated: escalate, narrative: narrative.trim(), updatedAt: new Date().toISOString() } }
+  function findingsText() {
+    const g = gaps.map(x => '- ' + (x.category ? x.category + ': ' : '') + (x.label || '')).join('\n')
+    const s = strengths.map(x => '- ' + (x.label || x)).join('\n')
+    return 'Facility: ' + (active ? active.facility_name : '') + ' (' + (active ? active.area : '') + '). Overall: ' + ragText(active && active.overall_rating) + (active && active.score != null ? ' ' + active.score + '%' : '') + '.\nStrengths:\n' + (s || '- none noted') + '\nGaps:\n' + (g || '- none noted')
+  }
 
   async function save() {
     if (!active) return
@@ -1438,6 +1489,14 @@ function DebriefPage({ userId }) {
         <label className="field sm"><span>Re-inspection within</span><select value={reinspection} onChange={e => { setReinspection(e.target.value); setSaveState('draft') }}>{REINSPECT.map(r => <option key={r} value={r}>{r}</option>)}</select></label>
         <label className="field sm chkfield"><span>Compliance letter</span><label className="inl"><input type="checkbox" checked={letterIssued} onChange={e => { setLetterIssued(e.target.checked); setSaveState('draft') }} /> Issue letter</label></label>
       </div>
+    </div>
+
+    <div className="dsec"><h3>AI recommendations</h3>
+      <div className="ai-row">
+        <AIButton label="Draft report narrative" build={() => ({ system: 'You are a HEFAMAA facility-monitoring officer at RHSC writing the narrative summary of a monitoring visit. Write 2 short paragraphs in professional British English: what was observed and the required improvements. Factual, non-alarmist, no invented details.', prompt: findingsText(), max_tokens: 500 })} onText={txt => { setNarrative(txt); setSaveState('draft') }} />
+        <AIButton label="Suggest corrective actions" build={() => ({ system: 'You are a HEFAMAA monitoring officer. From the gaps, list specific, practical corrective actions with realistic timelines as short bullet points. Only actions grounded in the gaps provided.', prompt: findingsText(), max_tokens: 500 })} onText={txt => { setNarrative(n => (n ? n + '\n\nCorrective actions:\n' : 'Corrective actions:\n') + txt); setSaveState('draft') }} />
+      </div>
+      <label className="field sm"><span>Narrative &amp; recommendations (editable, included in the report)</span><textarea rows="5" value={narrative} onChange={e => { setNarrative(e.target.value); setSaveState('draft') }} placeholder="Draft with AI, or write your own. Always review before issuing." /></label>
     </div>
 
     <div className="dsec"><h3>Regulatory action</h3>
@@ -1513,6 +1572,7 @@ function FollowUpsPage({ userId, identity }) {
   const [openId, setOpenId] = useState(null)
   const [form, setForm] = useState({ outcome: 'Reached', notes: '', caller: '' })
   const [busy, setBusy] = useState(false)
+  const [briefs, setBriefs] = useState({})
   async function refresh() {
     try { setVisits(await VIS.list()) } catch (e) {}
     try { setNotes(await NOTIF.list()) } catch (e) {}
@@ -1540,8 +1600,9 @@ function FollowUpsPage({ userId, identity }) {
         return (<div className="fu-card" key={v.id}>
           <div className="fu-head">
             <div><span className="fname">{v.facility_name}</span><span className="fmeta">{v.area} &middot; completed {((v.debrief && v.debrief.updatedAt) || v.arrival_time || '').slice(0, 10)}</span></div>
-            <div className="fu-right">{last ? <span className="chip green">Called: {last.outcome}</span> : <span className="chip amber">Awaiting call</span>}<button className="mini" onClick={() => openId === v.id ? setOpenId(null) : openForm(v)}>{openId === v.id ? 'Close' : 'Log call'}</button></div>
+            <div className="fu-right">{last ? <span className="chip green">Called: {last.outcome}</span> : <span className="chip amber">Awaiting call</span>}<AIButton className="mini" label="AI briefing" build={() => { const hist = visits.filter(x => x.facility_name === v.facility_name).map(x => ({ date: (x.arrival_time || x.created_at || '').slice(0, 10), rating: x.overall_rating, score: x.score, status: x.status, gaps: ((x.debrief && x.debrief.gaps) || []).map(g => g.label) })); return { system: 'You brief RHSC customer service before they call a facility about a completed monitoring visit. In 3 to 4 sentences summarise the outcome, the key gaps, and what to ask on the call. Use only the data.', prompt: JSON.stringify({ facility: v.facility_name, area: v.area, history: hist }), max_tokens: 350 } }} onText={txt => setBriefs(b => ({ ...b, [v.id]: txt }))} /><button className="mini" onClick={() => openId === v.id ? setOpenId(null) : openForm(v)}>{openId === v.id ? 'Close' : 'Log call'}</button></div>
           </div>
+          {briefs[v.id] && <div className="ai-panel"><h4><span className="ai-spark">✦</span> Call briefing</h4><p className="ai-text">{briefs[v.id]}</p></div>}
           {openId === v.id && <div className="fu-form">
             <div className="fgrid two">
               <label className="field sm"><span>Outcome</span><select value={form.outcome} onChange={e => setForm({ ...form, outcome: e.target.value })}>{['Reached', 'No answer', 'Call back', 'Escalated'].map(o => <option key={o}>{o}</option>)}</select></label>
@@ -1581,6 +1642,11 @@ function SettingsPage() {
         <label className="field sm"><span>Default re-inspection window</span><select value={s.default_reinspection || '2 weeks'} onChange={e => set('default_reinspection', e.target.value)}>{REINSPECT.map(r => <option key={r} value={r}>{r}</option>)}</select></label>
       </div>
       <button className="btn primary" onClick={save}>Save settings</button>
+    </div>
+    <div className="settings-card" style={{ marginTop: 16 }}>
+      <h3>AI translations</h3>
+      <p className="hintline">Generate first-draft Yorùbá, Hausa and Igbo for the website strings, to give a native speaker to review before use. Downloads a JSON file.</p>
+      <AIButton label="Generate translations" build={() => { const en = {}; Object.keys(TR).forEach(k => { en[k] = TR[k].en }); return { system: 'You are a professional Nigerian translator. Translate the given English UI strings into Yoruba (yo), Hausa (ha) and Igbo (ig). Return ONLY JSON of the form {"yo":{key:translation},"ha":{...},"ig":{...}} using the same keys. Natural, concise, suitable for a professional healthcare firm.', prompt: JSON.stringify(en), max_tokens: 2000 } }} onText={txt => { try { download('realms-translations.json', txt.replace(/```json|```/g, '').trim(), 'application/json'); toast('Translations generated and downloaded for review.') } catch (e) { toast('Could not save the file.', 'warn') } }} />
     </div>
   </div>)
 }
@@ -1664,6 +1730,7 @@ function ReportsPage({ facilities, userId, scope, role }) {
   const [notifyId, setNotifyId] = useState(null)
   const [q, setQ] = useState('')
   const [loading, setLoading] = useState(true)
+  const [aiSummary, setAiSummary] = useState('')
   useEffect(() => { VIS.list().then(v => { setVisits(v); setLoading(false) }).catch(() => setLoading(false)) }, [])
   const origin = (typeof window !== 'undefined' && window.location) ? window.location.origin : ''
   const readOnly = role === 'rhsc_hq' || role === 'hefamaa_reviewer'
@@ -1685,8 +1752,10 @@ function ReportsPage({ facilities, userId, scope, role }) {
         <button className="btn small ghost" onClick={() => exportVisitsXLS(rows)}>Excel</button>
         <button className="btn small ghost" onClick={() => exportVisitsPDF(rows, origin)}>PDF</button>
         <button className="btn small primary" onClick={() => buildDailyPDF(rows, origin)}>Daily report</button>
+        <AIButton className="btn small ghost" label="AI summary" build={() => { const agg = rows.map(v => ({ facility: v.facility_name, area: v.area, rating: v.overall_rating, score: v.score, status: v.status })); return { system: 'You are the RHSC monitoring analyst. Write a brief executive summary (4 to 6 sentences) of these monitoring results for HEFAMAA leadership: coverage, overall compliance picture, notable areas or facilities needing attention. Use only the data given.', prompt: JSON.stringify(agg), max_tokens: 500 } }} onText={txt => setAiSummary(txt)} />
       </div>
     </div>
+    {aiSummary && <div className="ai-panel"><h4><span className="ai-spark">✦</span> AI executive summary</h4><p className="ai-text">{aiSummary}</p><button className="linkbtn subtle" onClick={() => setAiSummary('')}>Dismiss</button></div>}
 
     {due.length > 0 && (<div className="dsec"><h3>Re-inspections due</h3>
       <div className="frows">{due.map(({ v, date, days }) => (
@@ -1876,7 +1945,8 @@ function TabIcon({ id }) {
     analytics: 'M4 20V11M10 20V4M16 20v-7M22 20H2',
     myfacility: 'M5 21h14M7 21V7l5-4 5 4v14M10 13h4M10 17h4',
     followups: 'M4 4h5l2 5-3 2a12 12 0 006 6l2-3 5 2v5a2 2 0 01-2 2A16 16 0 014 6a2 2 0 012-2',
-    settings: 'M12 15a3 3 0 100-6 3 3 0 000 6zM19 12a7 7 0 00-.1-1l2-1.6-2-3.4-2.4 1a7 7 0 00-1.7-1l-.3-2.6H9.5l-.3 2.6a7 7 0 00-1.7 1l-2.4-1-2 3.4L3.1 11a7 7 0 000 2l-2 1.6 2 3.4 2.4-1a7 7 0 001.7 1l.3 2.6h4.9l.3-2.6a7 7 0 001.7-1l2.4 1 2-3.4-2-1.6a7 7 0 00.1-1z'
+    settings: 'M12 15a3 3 0 100-6 3 3 0 000 6zM19 12a7 7 0 00-.1-1l2-1.6-2-3.4-2.4 1a7 7 0 00-1.7-1l-.3-2.6H9.5l-.3 2.6a7 7 0 00-1.7 1l-2.4-1-2 3.4L3.1 11a7 7 0 000 2l-2 1.6 2 3.4 2.4-1a7 7 0 001.7 1l.3 2.6h4.9l.3-2.6a7 7 0 001.7-1l2.4 1 2-3.4-2-1.6a7 7 0 00.1-1z',
+    assistant: 'M12 3l2 5 5 2-5 2-2 5-2-5-5-2 5-2zM19 15l1 2.5L22 19l-2 1-1 2.5-1-2.5L16 19l2-1z'
   }[id] || 'M4 4h16v16H4z'
   return (<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d={p} /></svg>)
 }
@@ -2040,6 +2110,7 @@ export default function App() {
     else if (appTab === 'myfacility') body = <ProprietorPage />
     else if (appTab === 'followups') body = <FollowUpsPage userId={user.id} identity={identity} />
     else if (appTab === 'settings') body = <SettingsPage />
+    else if (appTab === 'assistant') body = <AssistantPage facilities={facs} />
     else if (appTab === 'assign') body = <AssignPage list={facs} userId={user.id} />
     else body = <Dashboard identity={effId} role={effRole} onOpen={setAppTab} facilities={facs} onSeed={loadSample} onClear={clearAll} dbError={dbError} />
   } else {
@@ -2075,6 +2146,64 @@ export default function App() {
       <div className="foot-brand"><img className="foot-mark" src="/rhsc-mark.png" alt="RHSC" /><span>REALMS Healthcare Services Consulting Limited</span></div>
       <p className="foot-tag">{t('tagline')}</p>
     </div></footer>)}
+    {!showAuthBare && <SiteAssistant />}
+  </div>)
+}
+
+function SiteAssistant() {
+  const [open, setOpen] = useState(false)
+  const [msgs, setMsgs] = useState([{ role: 'assistant', text: 'Hello! I can help with questions about RHSC — our services, HEFAMAA monitoring, or booking a consultation. How can I help?' }])
+  const [input, setInput] = useState(''); const [busy, setBusy] = useState(false)
+  const boxRef = useRef(null)
+  useEffect(() => { if (boxRef.current) boxRef.current.scrollTop = boxRef.current.scrollHeight }, [msgs, open])
+  const SYS = 'You are the website assistant for REALMS Healthcare Services Consulting Limited (RHSC), a Lagos healthcare consulting firm and licensed HEFAMAA facility-monitoring operator. Services: strategy and advisory; quality and accreditation; facility monitoring and accreditation (HEFAMAA); training and capacity building; health financing; and digital health via the Genesys EMR. Office: 21 Fatai Arobieke Street, off Admiralty Way, Lekki Phase 1, Lagos. Answer briefly and warmly, help visitors understand the services and encourage booking a consultation on the Contact page. If asked something outside RHSC, gently redirect. Never invent specific prices, names or regulatory rulings.'
+  async function send() {
+    const q = input.trim(); if (!q || busy) return
+    const next = msgs.concat([{ role: 'user', text: q }]); setMsgs(next); setInput(''); setBusy(true)
+    const convo = next.map(m => (m.role === 'user' ? 'Visitor: ' : 'Assistant: ') + m.text).join('\n')
+    const r = await askAI({ system: SYS, prompt: convo + '\nAssistant:', max_tokens: 500 })
+    setBusy(false)
+    setMsgs(m => m.concat([{ role: 'assistant', text: r.ok ? r.text : (r.reason === 'ai_not_configured' ? 'The assistant is not enabled yet. Please use the Contact page and our team will respond.' : 'Sorry, I could not respond just now. Please try the Contact page.') }]))
+  }
+  return (<>
+    <button className="assistant-fab" onClick={() => setOpen(o => !o)} aria-label="Ask RHSC">{open ? '\u00d7' : 'Ask RHSC'}</button>
+    {open && (<div className="assistant-panel">
+      <div className="assistant-head"><span>Ask RHSC</span><button className="linkbtn subtle" onClick={() => setOpen(false)}>Close</button></div>
+      <div className="assistant-msgs" ref={boxRef}>{msgs.map((m, i) => <div key={i} className={'amsg ' + m.role}>{m.text}</div>)}{busy && <div className="amsg assistant typing">&hellip;</div>}</div>
+      <div className="assistant-input"><input value={input} onChange={e => setInput(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') send() }} placeholder="Type your question" /><button className="btn primary" onClick={send} disabled={busy}>Send</button></div>
+    </div>)}
+  </>)
+}
+function AssistantPage({ facilities }) {
+  const [visits, setVisits] = useState([])
+  const [msgs, setMsgs] = useState([{ role: 'assistant', text: 'Ask about your monitoring data: coverage, outcomes, overdue re-inspections, facilities needing attention, trends by area, and more.' }])
+  const [input, setInput] = useState(''); const [busy, setBusy] = useState(false)
+  const boxRef = useRef(null)
+  useEffect(() => { VIS.list().then(setVisits).catch(() => {}) }, [])
+  useEffect(() => { if (boxRef.current) boxRef.current.scrollTop = boxRef.current.scrollHeight }, [msgs])
+  function dataSummary() {
+    const byArea = {}, byStatus = {}, byRag = {}
+    visits.forEach(v => { const a = v.area || 'Unassigned'; byArea[a] = (byArea[a] || 0) + 1; byStatus[v.status || 'engaged'] = (byStatus[v.status || 'engaged'] || 0) + 1; if (v.overall_rating) byRag[v.overall_rating] = (byRag[v.overall_rating] || 0) + 1 })
+    const due = visits.filter(v => v.debrief && v.debrief.remediation_deadline).map(v => ({ facility: v.facility_name, area: v.area, due: v.debrief.remediation_deadline }))
+    const recent = visits.slice(0, 40).map(v => ({ facility: v.facility_name, area: v.area, date: (v.arrival_time || v.created_at || '').slice(0, 10), status: v.status, rating: v.overall_rating, score: v.score }))
+    return JSON.stringify({ facilities: facilities.length, areas: Array.from(new Set(facilities.map(f => f.area || 'Unassigned'))), visits: visits.length, byArea, byStatus, byRag, due, recent })
+  }
+  async function send() {
+    const q = input.trim(); if (!q || busy) return
+    const next = msgs.concat([{ role: 'user', text: q }]); setMsgs(next); setInput(''); setBusy(true)
+    const sys = 'You are the RHSC operations analyst. Answer questions using ONLY the JSON monitoring data provided. Be concise, use concrete numbers, and if the data does not contain the answer say so plainly. RAG ratings: green = compliant, amber = partial, red = serious gaps.'
+    const convo = next.map(m => (m.role === 'user' ? 'Q: ' : 'A: ') + m.text).join('\n')
+    const r = await askAI({ system: sys, prompt: 'DATA:\n' + dataSummary() + '\n\n' + convo + '\nA:', max_tokens: 700 })
+    setBusy(false)
+    setMsgs(m => m.concat([{ role: 'assistant', text: r.ok ? r.text : (r.reason === 'ai_not_configured' ? 'AI is not set up yet. Add ANTHROPIC_API_KEY in Vercel to enable it.' : 'Could not respond. Please try again.') }]))
+  }
+  return (<div className="page">
+    <div className="ptitle"><div><p className="eyebrow">AI</p><h2>Data assistant</h2></div></div>
+    <div className="chat-wrap">
+      <div className="chat-msgs" ref={boxRef}>{msgs.map((m, i) => <div key={i} className={'cmsg ' + m.role}>{m.text}</div>)}{busy && <div className="cmsg assistant">&hellip;</div>}</div>
+      <div className="chat-input"><input value={input} onChange={e => setInput(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') send() }} placeholder="e.g. Which areas have the most red facilities?" /><button className="btn primary" onClick={send} disabled={busy}>Ask</button></div>
+    </div>
+    <p className="hintline">Answers are generated from your monitoring data. Verify before acting.</p>
   </div>)
 }
 
@@ -2498,7 +2627,7 @@ const css = `
 
 /* pillar photos + about lead */
 .realms .pillar.photo { padding-top:0; overflow:hidden; }
-.realms .pillar-img { margin:-1px -28px 18px; height:180px; overflow:hidden; }
+.realms .pillar-img { margin:-1px -28px 20px; height:240px; overflow:hidden; }
 .realms .pillar-img img { width:100%; height:100%; object-fit:cover; object-position:center top; }
 .realms .pillar.photo .pillar-rule { margin-left:28px; }
 .realms .pillar.photo h3, .realms .pillar.photo p { padding:0 2px; }
@@ -2789,4 +2918,35 @@ const css = `
 @keyframes shimmer { 100% { transform:translateX(100%) } }
 .realms .skel-row { height:58px; margin-bottom:10px; }
 @media (prefers-reduced-motion: reduce) { .realms *, .realms *::after, .realms *::before { animation-duration:.001ms !important; transition-duration:.001ms !important; } .realms .anim { animation:none !important; opacity:1 !important; transform:none !important; } }
+
+/* ===== AI ===== */
+.realms .ai-btn { display:inline-flex; align-items:center; gap:6px; }
+.realms .ai-spark { color:var(--v); font-size:13px; }
+.realms .ai-panel { background:linear-gradient(180deg,var(--lav1),#fff); border:1px solid var(--line); border-left:3px solid var(--p); border-radius:12px; padding:14px 16px; margin-top:10px; }
+.realms .ai-panel h4 { color:var(--p-deep); font-size:13px; text-transform:uppercase; letter-spacing:.05em; margin-bottom:6px; display:flex; align-items:center; gap:6px; }
+.realms .ai-panel .ai-text { font-size:14px; color:#3A2B54; white-space:pre-wrap; line-height:1.55; }
+.realms .chat-wrap { border:1px solid var(--line); border-radius:16px; overflow:hidden; display:flex; flex-direction:column; height:min(62vh,560px); background:#fff; }
+.realms .chat-msgs { flex:1; overflow-y:auto; padding:18px; display:flex; flex-direction:column; gap:12px; }
+.realms .cmsg { max-width:80%; padding:11px 15px; border-radius:14px; font-size:14.5px; line-height:1.5; white-space:pre-wrap; }
+.realms .cmsg.user { align-self:flex-end; background:var(--p); color:#fff; border-bottom-right-radius:4px; }
+.realms .cmsg.assistant { align-self:flex-start; background:var(--lav2); color:#3A2B54; border-bottom-left-radius:4px; }
+.realms .chat-input { display:flex; gap:8px; padding:12px; border-top:1px solid var(--line); background:var(--lav1); }
+.realms .chat-input input { flex:1; font-family:inherit; font-size:14px; border:1px solid var(--line); border-radius:22px; padding:10px 16px; background:#fff; }
+.realms .assistant-fab { position:fixed; right:22px; bottom:22px; z-index:900; background:linear-gradient(135deg,var(--p-deep),var(--p-mid)); color:#fff; border:none; border-radius:26px; padding:13px 22px; font-size:15px; font-weight:600; box-shadow:0 12px 30px rgba(58,21,96,.34); }
+.realms .assistant-panel { position:fixed; right:22px; bottom:78px; z-index:900; width:min(380px,92vw); height:min(540px,74vh); background:#fff; border:1px solid var(--line); border-radius:18px; box-shadow:0 24px 60px rgba(58,21,96,.28); display:flex; flex-direction:column; overflow:hidden; animation:slideup .24s ease; }
+@keyframes slideup { from { opacity:0; transform:translateY(12px) } to { opacity:1; transform:none } }
+.realms .assistant-head { display:flex; align-items:center; justify-content:space-between; padding:14px 18px; background:linear-gradient(135deg,var(--p-deep),var(--p-mid)); color:#fff; font-weight:600; }
+.realms .assistant-head .linkbtn { color:#EBDDF8; }
+.realms .assistant-msgs { flex:1; overflow-y:auto; padding:16px; display:flex; flex-direction:column; gap:10px; background:var(--lav1); }
+.realms .amsg { max-width:88%; padding:10px 14px; border-radius:14px; font-size:14px; line-height:1.5; white-space:pre-wrap; }
+.realms .amsg.user { align-self:flex-end; background:var(--p); color:#fff; border-bottom-right-radius:4px; }
+.realms .amsg.assistant { align-self:flex-start; background:#fff; color:#3A2B54; border:1px solid var(--line); border-bottom-left-radius:4px; }
+.realms .assistant-input { display:flex; gap:8px; padding:12px; border-top:1px solid var(--line); }
+.realms .assistant-input input { flex:1; font-family:inherit; font-size:14px; border:1px solid var(--line); border-radius:20px; padding:9px 14px; }
+.realms .ai-row { display:flex; flex-wrap:wrap; gap:8px; margin-bottom:10px; }
+.realms .ai-check { display:inline-flex; align-items:center; gap:6px; font-size:13px; color:#5A4C74; white-space:nowrap; }
+.realms .mnote-row { display:flex; gap:8px; align-items:flex-start; }
+.realms .mnote-row .mnote { flex:1; }
+.realms .dictate.rec { color:#B4442E; border-color:#B4442E; }
+.realms .ev-ai { font-size:11px; padding:3px 8px; margin-top:4px; }
 `
