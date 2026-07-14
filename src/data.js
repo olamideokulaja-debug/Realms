@@ -257,7 +257,7 @@ function scoreFromItems(items) {
   const pct = max ? Math.round(sum / max * 100) : null
   return { pct, rag: pct == null ? null : pct >= 80 ? 'green' : pct >= 50 ? 'amber' : 'red' }
 }
-function sampleVisitFor(f, profile, ageDays) {
+function sampleVisitFor(f, profile, ageDays, debriefed) {
   const arrival = new Date(Date.now() - ageDays * 86400000).toISOString()
   const base = {
     facility_id: f.id, facility_name: f.name, area: f.area, lat: f.lat, lng: f.lng, arrival_time: arrival,
@@ -267,15 +267,35 @@ function sampleVisitFor(f, profile, ageDays) {
   }
   if (profile === 'engaged') return { ...base, status: 'engaged' }
   const items = sampleItems(profile); const sc = scoreFromItems(items)
-  return { ...base, status: 'monitored', monitoring: { items, score: sc.pct, overallRating: sc.rag, updatedAt: arrival }, score: sc.pct, overall_rating: sc.rag }
+  const v = { ...base, status: 'monitored', monitoring: { items, score: sc.pct, overallRating: sc.rag, updatedAt: arrival }, score: sc.pct, overall_rating: sc.rag }
+  if (!debriefed) return v
+  const gaps = Object.keys(items).filter(k => items[k].rating === 'red').slice(0, 3).map(k => ({ category: k.split('_')[0], label: 'Improve ' + k.split('_')[0], action: '', rating: 'red' }))
+  const deadline = new Date(Date.now() + 14 * 86400000).toISOString().slice(0, 10)
+  return { ...v, status: 'debriefed', debrief: { strengths: [], gaps, remediation_deadline: deadline, reinspection: '2 weeks', letter_issued: true, proprietor_name: base.person_in_charge.name, proprietor_ack: true, updatedAt: arrival } }
+}
+async function seedFollowups(created, userId) {
+  const done = (created || []).filter(v => v && (v.status === 'debriefed' || v.status === 'monitored'))
+  const samples = done.slice(0, 3)
+  for (const v of samples) {
+    try { await notifications.add({ type: 'visit_completed', visit_id: v.id, facility_name: v.facility_name, area: v.area, channel: 'customer_service', status: 'pending', message: 'Visit completed at ' + v.facility_name + ' (' + (v.area || '') + '). Customer service to call the facility to hear how the visit went.' }, userId) } catch (e) {}
+  }
+  const callSeed = [
+    { v: samples[0], outcome: 'Reached', caller: 'Ngozi (Customer Service)', notes: 'Proprietor satisfied with the visit; corrective actions understood and accepted.' },
+    { v: samples[1], outcome: 'No answer', caller: 'Ngozi (Customer Service)', notes: 'Line unavailable; will retry tomorrow morning.' }
+  ].filter(x => x.v)
+  for (const c of callSeed) {
+    try { await calls.add({ visit_id: c.v.id, facility_name: c.v.facility_name, area: c.v.area, outcome: c.outcome, notes: c.notes, caller: c.caller }, userId) } catch (e) {}
+  }
 }
 export async function seedSampleData(userId) {
   let facs = [], error = null
   try { facs = await facilities.addMany(SAMPLE_FACILITIES, userId) } catch (e) { error = (e && e.message) || String(e) }
-  const plan = [['green', 3], ['amber', 6], ['red', 9], ['green', 12], ['amber', 15], ['red', 18], ['engaged', 1]]
+  const plan = [['amber', 6, true], ['red', 9, true], ['green', 3, false], ['green', 12, false], ['amber', 15, false], ['red', 18, false], ['engaged', 1, false]]
+  const created = []
   for (let i = 0; i < Math.min(facs.length, plan.length); i++) {
-    try { await visits.add(sampleVisitFor(facs[i], plan[i][0], plan[i][1]), userId) } catch (e) { if (!error) error = (e && e.message) || String(e) }
+    try { const v = await visits.add(sampleVisitFor(facs[i], plan[i][0], plan[i][1], plan[i][2]), userId); if (v) created.push(v) } catch (e) { if (!error) error = (e && e.message) || String(e) }
   }
+  try { await seedFollowups(created, userId) } catch (e) {}
   return { count: facs.length, error }
 }
 
@@ -285,7 +305,9 @@ export async function clearAllData() {
     try { await supabase.from('visits').delete().not('id', 'is', null) } catch (e) {}
     try { await supabase.from('assignments').delete().not('id', 'is', null) } catch (e) {}
     try { await supabase.from('facilities').delete().not('id', 'is', null) } catch (e) {}
+    try { await supabase.from('notifications').delete().not('id', 'is', null) } catch (e) {}
+    try { await supabase.from('calls').delete().not('id', 'is', null) } catch (e) {}
   } else {
-    try { localStorage.removeItem(LS_FAC); localStorage.removeItem(LS_ASG); localStorage.removeItem(LS_VIS) } catch (e) {}
+    try { localStorage.removeItem(LS_FAC); localStorage.removeItem(LS_ASG); localStorage.removeItem(LS_VIS); localStorage.removeItem(LS_NOTIF); localStorage.removeItem(LS_CALL) } catch (e) {}
   }
 }

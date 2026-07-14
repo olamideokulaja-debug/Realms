@@ -4,7 +4,7 @@ import 'leaflet/dist/leaflet.css'
 import { supabase, MODE } from './supabaseClient.js'
 import { facilities as FAC, assignments as ASG, visits as VIS, notifications as NOTIF, calls as CALLS, facilitiesFromCSV, orderRoute, googleMapsDirUrl, geocode, uploadEvidence, sendNotify, askAI, seedSampleData, clearAllData } from './data.js'
 
-const BUILD = 'field-2026-07-14i'
+const BUILD = 'field-2026-07-14j'
 
 /*
   REALMS FIELD — Stages 1 to 3 (single-file App.jsx + supabaseClient.js + data.js)
@@ -2627,7 +2627,7 @@ const css = `
 
 /* pillar photos + about lead */
 .realms .pillar.photo { padding-top:0; overflow:hidden; }
-.realms .pillar-img { margin:-1px -28px 20px; height:240px; overflow:hidden; }
+.realms .pillar-img { margin:-1px -28px 20px; height:300px; overflow:hidden; }
 .realms .pillar-img img { width:100%; height:100%; object-fit:cover; object-position:center top; }
 .realms .pillar.photo .pillar-rule { margin-left:28px; }
 .realms .pillar.photo h3, .realms .pillar.photo p { padding:0 2px; }
