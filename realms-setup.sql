@@ -96,3 +96,28 @@ create policy "auth calls" on calls for all using (auth.uid() is not null) with 
 -- 7. Visit facility address & category (so the inspection report auto-fills these lines)
 alter table visits add column if not exists address text;
 alter table visits add column if not exists category text;
+
+-- 8. Approvals, monitor assignment, phone numbers, pin confirmation
+alter table facilities add column if not exists phone text;
+alter table facilities add column if not exists geo_confirmed boolean;
+alter table assignments add column if not exists monitor text;
+alter table assignments add column if not exists status text default 'planned';
+alter table visits add column if not exists approval jsonb;
+create unique index if not exists facilities_name_unique on facilities (lower(trim(name)));
+
+-- 9. HQ access requests (only exco@realmsconsulting.com admits HQ users)
+create table if not exists access_requests (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid, email text, name text, role text,
+  status text default 'pending', decided_by text, decided_at timestamptz,
+  created_at timestamptz default now()
+);
+create unique index if not exists access_requests_user_role on access_requests (user_id, role);
+alter table access_requests enable row level security;
+drop policy if exists "auth access_requests" on access_requests;
+create policy "auth access_requests" on access_requests for all using (auth.uid() is not null) with check (auth.uid() is not null);
+
+-- 10. Reminder stage + proprietor facility link
+alter table notifications add column if not exists stage text;
+alter table access_requests add column if not exists facility_id text;
+alter table access_requests add column if not exists facility_name text;

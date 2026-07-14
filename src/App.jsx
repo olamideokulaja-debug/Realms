@@ -2,9 +2,9 @@ import React, { useEffect, useRef, useState } from 'react'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
 import { supabase, MODE } from './supabaseClient.js'
-import { facilities as FAC, assignments as ASG, visits as VIS, notifications as NOTIF, calls as CALLS, facilitiesFromCSV, orderRoute, googleMapsDirUrl, geocode, uploadEvidence, sendNotify, askAI, seedSampleData, clearAllData } from './data.js'
+import { facilities as FAC, assignments as ASG, visits as VIS, notifications as NOTIF, calls as CALLS, access as ACC, facilitiesFromCSV, orderRoute, googleMapsDirUrl, geocode, uploadEvidence, sendNotify, askAI, seedSampleData, clearAllData } from './data.js'
 
-const BUILD = 'field-2026-07-14q'
+const BUILD = 'field-2026-07-14v'
 
 /*
   REALMS FIELD — Stages 1 to 3 (single-file App.jsx + supabaseClient.js + data.js)
@@ -57,19 +57,20 @@ const SERVICES = [
 const IMPACT_STATS = [ { v: '25+', l: 'Years of experience' }, { v: '1000+', l: 'Facilities monitored' }, { v: '20+', l: 'Projects delivered' } ]
 const PARTNERS = ['Vatebra Limited', 'Lagos State Ministry of Health', 'HEFAMAA']
 const CONTACT = {
-  email: '[Imade Forte email]', phone: '[Imade Forte phone]', whatsapp: '',
+  email: 'info@realmsconsulting.com', phone: '[Imade Forte phone]', whatsapp: '',
   address: '21 Fatai Arobieke Street, off Admiralty Way, Lekki Phase 1, Lagos',
   hours: 'Monday to Friday, 9am to 5pm'
 }
 function isPlaceholder(v) { return !v || /^\[/.test(v) }
-function getSettings() { try { return JSON.parse(localStorage.getItem('realms_settings') || '{}') } catch (e) { return {} } }
+function getSettings() { try { const s = JSON.parse(localStorage.getItem('realms_settings') || '{}'); if (!s.cs_email) s.cs_email = CONTACT.email; return s } catch (e) { return { cs_email: CONTACT.email } } }
 function saveSettings(s) { try { localStorage.setItem('realms_settings', JSON.stringify(s)) } catch (e) {} }
 const ICONS = {
   mail: 'M3 5h18v14H3zM3 6l9 7 9-7',
   phone: 'M4 4h5l2 5-3 2a12 12 0 006 6l2-3 5 2v5a2 2 0 01-2 2A16 16 0 014 6a2 2 0 012-2',
   chat: 'M4 4h16v11H8l-4 4z',
   pin: 'M12 22s7-6.2 7-12a7 7 0 10-14 0c0 5.8 7 12 7 12zM12 10a2.5 2.5 0 100-5 2.5 2.5 0 000 5z',
-  clock: 'M12 22a10 10 0 100-20 10 10 0 000 20zM12 7v5l3 2'
+  clock: 'M12 22a10 10 0 100-20 10 10 0 000 20zM12 7v5l3 2',
+  lock: 'M6 11h12v10H6zM9 11V7a3 3 0 016 0v4'
 }
 function Ico({ name, size = 18 }) { return (<svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={ICONS[name]} /></svg>) }
 
@@ -192,13 +193,13 @@ const ROLES = [
 ]
 
 const ROLE_TABS = {
-  team_leader: ['dashboard', 'facilities', 'map', 'engage', 'monitor', 'debrief', 'assign', 'reports'],
+  team_leader: ['dashboard', 'facilities', 'map', 'engage', 'monitor', 'debrief', 'assign', 'approvals', 'reports'],
   field_monitor: ['dashboard', 'facilities', 'map', 'engage', 'monitor', 'debrief'],
-  rhsc_hq: ['dashboard', 'facilities', 'map', 'reports', 'followups', 'assistant', 'settings'],
+  rhsc_hq: ['dashboard', 'facilities', 'map', 'reports', 'approvals', 'followups', 'assistant', 'settings'],
   hefamaa_reviewer: ['dashboard', 'facilities', 'reports'],
   facility_proprietor: ['dashboard', 'myfacility']
 }
-const TAB_LABEL = { dashboard: 'Dashboard', facilities: 'Facilities', map: 'Map & Route', engage: 'Engage', monitor: 'Monitor', debrief: 'Debrief', assign: 'Assign', reports: 'Reports', analytics: 'Analytics', myfacility: 'My Facility', followups: 'Follow-ups', settings: 'Settings', assistant: 'AI Assistant' }
+const TAB_LABEL = { dashboard: 'Dashboard', facilities: 'Facilities', map: 'Map & Route', engage: 'Engage', monitor: 'Monitor', debrief: 'Debrief', assign: 'Assign', reports: 'Reports', analytics: 'Analytics', myfacility: 'My Facility', followups: 'Follow-ups', settings: 'Settings', assistant: 'AI Assistant', approvals: 'Approvals' }
 const CAN_EDIT = ['team_leader', 'field_monitor', 'rhsc_hq']
 const AREA_COLORS = ['#6D4B8E', '#3E86C9', '#C7549C', '#5FA35A', '#D08A2E', '#7E63A0', '#4AA3A3', '#B0562E', '#6C6FD0', '#C0603C']
 
@@ -213,6 +214,9 @@ function identityFor(email, name) {
   const n = base.split(' ').map(w => w ? w[0].toUpperCase() + w.slice(1) : w).join(' ') || 'Staff'
   return { name: n, first: n.split(' ')[0], title: '', photo: '' }
 }
+const OWNER_EMAIL = 'exco@realmsconsulting.com'
+function isOwner(u) { return !!u && String(u.email || '').trim().toLowerCase() === OWNER_EMAIL }
+const MONITORS = ['Rev. Dr Solomon Nweke', 'Ojuma Joy', 'Anele Goodnews']
 const VIEW_USERS = [
   { name: 'Rev. Dr Solomon Nweke', role: 'team_leader' },
   { name: 'Ojuma Joy', role: 'field_monitor' },
@@ -260,8 +264,9 @@ function HomePage({ onSignIn, go, t }) {
       </section>
 
       <section className="clients-band anim">
-        <p className="eyebrow center">Our partners</p>
+        <p className="eyebrow center">Trusted by</p>
         <div className="clients-row">{PARTNERS.map(c => <span className="client-chip" key={c}>{c}</span>)}</div>
+        <p className="band-note">RHSC is a licensed HEFAMAA monitoring operator, appointed to carry out routine health facility monitoring and accreditation support across Lagos State.</p>
       </section>
 
       <section className="impact anim">
@@ -500,7 +505,7 @@ function Dashboard({ identity, role, onOpen, facilities, onSeed, onClear, dbErro
       <span>If you just updated the app, make sure the new version finished deploying, then tap Try again. Running build: {BUILD}.</span>
       <button className="btn small primary" onClick={onSeed}>Try again</button>
     </div>) : (!hasData && onSeed && (<div className="seed-card anim"><div><strong>No facilities yet.</strong><span>Load the live facility register (Alimosho &amp; Ifako-Ijaiye) to begin.</span></div><button className="btn small primary" onClick={onSeed}>Load live facilities</button></div>))}
-    {hasData && onClear && (<div className="clear-row anim"><span>To reset, you can clear all facilities and visits.</span><button className="mini danger" onClick={onClear}>Clear all data</button></div>)}
+
     {showAnalytics
       ? (<div className="dash-analytics anim"><AnalyticsBody facilities={facilities} /></div>)
       : (<div className="dash-quick anim">{quick.map(q => (<div className="dq" key={q.l}><span className="dq-v">{q.v}</span><span className="dq-l">{q.l}</span></div>))}</div>)}
@@ -522,6 +527,7 @@ function FacilitiesPage({ list, canEdit, userId, reload }) {
   const [visits, setVisits] = useState([])
   const [drawer, setDrawer] = useState(null)
   const [aiClean, setAiClean] = useState(false)
+  const [geoRun, setGeoRun] = useState(null)
   useEffect(() => { VIS.list().then(setVisits).catch(() => {}) }, [])
   const origin = (typeof window !== 'undefined' && window.location) ? window.location.origin : ''
   function facVisits(f) { return visits.filter(v => (v.facility_id && v.facility_id === f.id) || v.facility_name === f.name) }
@@ -591,9 +597,28 @@ function FacilitiesPage({ list, canEdit, userId, reload }) {
   }
   async function locate(f) {
     setBusy(true); setMsg('')
-    try { const g = await geocode(f.address || f.name + ' ' + (f.area || '')); if (g) { await FAC.update(f.id, g); await reload() } else setMsg('No match found. Add coordinates manually.') }
+    try { const g = await geocode(f.address || f.name + ' ' + (f.area || '')); if (g) { await FAC.update(f.id, { ...g, geo_confirmed: true }); await reload() } else setMsg('No match found. Add coordinates manually.') }
     catch (e) { setMsg('Location lookup failed. Add coordinates manually.') } finally { setBusy(false) }
   }
+  async function mapAll() {
+    const todo = list.filter(f => !hasCoords(f))
+    if (!todo.length) { toast('Every facility already has a pin.'); return }
+    if (!(await confirmAction('This looks up a map pin for ' + todo.length + ' facilities from their addresses. It takes roughly ' + Math.ceil(todo.length * 1.2 / 60) + ' minutes. Pins are marked "check" until your team confirms them.', { title: 'Map the facilities', ok: 'Start' }))) return
+    setGeoRun({ done: 0, total: todo.length, found: 0 })
+    let found = 0
+    for (let i = 0; i < todo.length; i++) {
+      const f = todo[i]
+      try {
+        const g = await geocode(f.address || (f.name + ' ' + (f.area || '')))
+        if (g) { await FAC.update(f.id, { ...g, geo_confirmed: false }); found++ }
+      } catch (e) {}
+      setGeoRun({ done: i + 1, total: todo.length, found })
+      await new Promise(r => setTimeout(r, 1150))
+    }
+    await reload(); setGeoRun(null)
+    toast(found + ' of ' + todo.length + ' facilities mapped. Ask the team to confirm the pins.')
+  }
+  async function confirmPin(f) { try { await FAC.update(f.id, { geo_confirmed: true }); await reload() } catch (e) { toast('Could not save.', 'err') } }
   async function del(f) { if (!(await confirmAction('Remove ' + f.name + ' from the facility list?', { title: 'Remove facility', ok: 'Remove', danger: true }))) return; await FAC.remove(f.id); await reload(); toast('Facility removed.') }
 
   return (<div className="page">
@@ -604,6 +629,7 @@ function FacilitiesPage({ list, canEdit, userId, reload }) {
         <button className="btn small ghost" onClick={downloadTemplate}>Template</button>
         <button className="btn small ghost" onClick={() => window.alert('HEFAMAA sync connects to the Agency\u2019s data feed. Share the API endpoint and we will enable it.')}>HEFAMAA sync</button>
         <button className="btn small primary" onClick={() => setAdding(a => !a)}>{adding ? 'Close' : 'Add facility'}</button>
+        <button className="btn small ghost" onClick={mapAll} disabled={!!geoRun}>{geoRun ? ('Mapping ' + geoRun.done + '/' + geoRun.total) : 'Map the facilities'}</button>
         <label className="ai-check"><input type="checkbox" checked={aiClean} onChange={e => setAiClean(e.target.checked)} /> <span className="ai-spark">✦</span> Clean with AI</label>
         <input ref={fileRef} type="file" accept=".csv,text/csv,.xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel" onChange={onFile} style={{ display: 'none' }} />
       </div>}
@@ -624,16 +650,18 @@ function FacilitiesPage({ list, canEdit, userId, reload }) {
       <button className="btn small primary" onClick={saveForm} disabled={busy}>{busy ? 'Saving\u2026' : 'Save facility'}</button>
     </div>)}
 
+    {geoRun && <div className="mon-meter"><div className="meter-row"><span className="meter-lab">Mapping</span><div className="meter-track"><div className="meter-fill" style={{ width: Math.round(geoRun.done / geoRun.total * 100) + '%' }} /></div><span className="meter-val">{geoRun.done}/{geoRun.total}</span></div></div>}
     {list.length > 0 && <div className="list-tools"><SearchBox value={q} onChange={setQ} placeholder="Search facilities, area, category…" /></div>}
     {list.length === 0 ? <p className="empty">No facilities yet. {canEdit ? 'Add one or import a CSV to begin.' : 'Nothing to show.'}</p> :
       areas.length === 0 ? <p className="empty">No facilities match your search.</p> :
       areas.map((a, ai) => (<div className="cluster" key={a}>
         <div className="cluster-head"><span className="area-dot" style={{ background: AREA_COLORS[ai % AREA_COLORS.length] }} /><h3>{a}</h3><span className="cluster-count">{groups[a].length}</span></div>
         <div className="frows">{groups[a].map(f => (<div className="frow" key={f.id}>
-          <div className="fmain"><span className="fname">{f.name}</span><span className="fmeta">{[f.category, f.address].filter(Boolean).join(' \u00b7 ') || 'No details'}</span></div>
+          <div className="fmain"><span className="fname">{f.name}</span><span className="fmeta">{[f.category, f.address, f.phone].filter(Boolean).join(' \u00b7 ') || 'No details'}</span></div>
           <div className="factions">
             <button className="mini" onClick={() => setDrawer(f)}>History</button>
-            {hasCoords(f) ? <span className="pin ok" title="Mapped">&#9679;</span> : (canEdit ? <button className="mini" onClick={() => locate(f)} disabled={busy}>Locate</button> : <span className="pin no">no coords</span>)}
+            {f.phone && <a className="mini" href={'tel:' + String(f.phone).replace(/[^0-9+]/g, '')}>Call</a>}
+            {hasCoords(f) ? (f.geo_confirmed === false ? (canEdit ? <button className="mini warn" onClick={() => confirmPin(f)}>Confirm pin</button> : <span className="pin no">pin unchecked</span>) : <span className="pin ok" title="Mapped">&#9679;</span>) : (canEdit ? <button className="mini" onClick={() => locate(f)} disabled={busy}>Locate</button> : <span className="pin no">no coords</span>)}
             {canEdit && <button className="mini danger" onClick={() => del(f)}>Remove</button>}
           </div>
         </div>))}</div>
@@ -657,7 +685,7 @@ function pinIcon(color, num) {
   const label = num ? '<span style="position:absolute;inset:0;display:grid;place-items:center;transform:rotate(45deg);color:#fff;font:700 11px Lora,serif">' + num + '</span>' : ''
   return L.divIcon({ className: 'rf-pin', html: '<div style="position:relative;width:24px;height:24px"><div style="width:24px;height:24px;background:' + color + ';border:2px solid #fff;border-radius:50% 50% 50% 0;transform:rotate(-45deg);box-shadow:0 2px 5px rgba(0,0,0,.35)"></div>' + label + '</div>', iconSize: [24, 24], iconAnchor: [12, 22], popupAnchor: [0, -20] })
 }
-function MapRoutePage({ list, role }) {
+function MapRoutePage({ list, role, userId }) {
   const mapRef = useRef(null); const mapObj = useRef(null); const layerRef = useRef(null)
   const areas = Array.from(new Set(list.map(f => f.area || 'Unassigned'))).sort()
   const colorMap = {}; areas.forEach((a, i) => { colorMap[a] = AREA_COLORS[i % AREA_COLORS.length] })
@@ -665,9 +693,12 @@ function MapRoutePage({ list, role }) {
   const [routed, setRouted] = useState(false)
   const [visits, setVisits] = useState([])
   const [q, setQ] = useState('')
-  const [perDay, setPerDay] = useState(12)
+  const [perDay, setPerDay] = useState(14)
   const [plan, setPlan] = useState(null)
   const [planBusy, setPlanBusy] = useState(false)
+  const [assignForm, setAssignForm] = useState({})
+  const [assignBusy, setAssignBusy] = useState('')
+  const canAssign = role === 'team_leader' || role === 'rhsc_hq'
   const isHQ = role === 'rhsc_hq'
   useEffect(() => { if (isHQ) VIS.list().then(setVisits).catch(() => {}) }, [isHQ])
 
@@ -706,6 +737,18 @@ function MapRoutePage({ list, role }) {
       if (!days.length) { toast('The planner returned nothing usable. Try again.', 'warn'); return }
       setPlan(days)
     } catch (e) { toast('Could not read the plan. Please try again.', 'warn') }
+  }
+  async function assignDay(key, d) {
+    const f = assignForm[key] || {}
+    if (!f.monitor) { toast('Choose who this day is for.', 'warn'); return }
+    if (!f.date) { toast('Choose the visit date.', 'warn'); return }
+    const ids = (d.facilities || []).map(n => { const fx = facByName(n); return fx ? fx.id : null }).filter(Boolean)
+    if (!ids.length) { toast('No matching facilities to assign.', 'warn'); return }
+    setAssignBusy(key)
+    try {
+      await ASG.add({ visit_date: f.date, area: d.area || (area === 'all' ? 'Mixed' : area), facility_ids: ids, monitor: f.monitor, note: 'AI route plan, ' + ids.length + ' stops' }, userId)
+      toast(ids.length + ' facilities assigned to ' + f.monitor + ' for ' + f.date + '.')
+    } catch (e) { toast('Could not save the assignment.', 'err') } finally { setAssignBusy('') }
   }
 
   useEffect(() => {
@@ -753,9 +796,17 @@ function MapRoutePage({ list, role }) {
       </div>
       {plan && plan.length > 0 && <div className="plan-days">{plan.map((d, i) => {
         const url = dayMapsUrl(d.facilities || [])
+        const dayKey = 'd' + i
         return (<div className="plan-day" key={i}>
           <div className="plan-day-head"><h4>Day {d.day || i + 1}{d.area ? ' \u00b7 ' + d.area : ''}</h4><span className="plan-count">{(d.facilities || []).length} stops</span>{url && <a className="mini" href={url} target="_blank" rel="noreferrer">Open in Google Maps</a>}</div>
           <ol className="plan-list">{(d.facilities || []).map((n, j) => { const f = facByName(n); return <li key={j}><span className="pf-name">{n}</span>{f && f.address && <em>{f.address}</em>}</li> })}</ol>
+          {canAssign && <div className="plan-assign">
+            <select className="sel" value={(assignForm[dayKey] || {}).monitor || ''} onChange={e => setAssignForm(s => ({ ...s, [dayKey]: { ...(s[dayKey] || {}), monitor: e.target.value } }))}>
+              <option value="">Assign to\u2026</option>{MONITORS.map(m => <option key={m} value={m}>{m}</option>)}
+            </select>
+            <input type="date" className="sel" value={(assignForm[dayKey] || {}).date || ''} onChange={e => setAssignForm(s => ({ ...s, [dayKey]: { ...(s[dayKey] || {}), date: e.target.value } }))} />
+            <button className="btn small primary" onClick={() => assignDay(dayKey, d)} disabled={assignBusy === dayKey}>{assignBusy === dayKey ? 'Saving\u2026' : 'Assign day'}</button>
+          </div>}
         </div>)
       })}</div>}
     </div>
@@ -858,6 +909,16 @@ function EngagePage({ list, identity, role, userId }) {
   const [busy, setBusy] = useState(false); const [msg, setMsg] = useState(''); const [done, setDone] = useState(false)
   const [ref] = useState(() => 'RF-' + new Date().toISOString().slice(0, 10).replace(/-/g, '') + '-' + String(Math.floor(Math.random() * 9000) + 1000))
 
+  const [asgs, setAsgs] = useState([]); const [todayVisits, setTodayVisits] = useState([])
+  const todayISO = new Date().toISOString().slice(0, 10)
+  const todayStr = new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'long' })
+  useEffect(() => { ASG.list().then(setAsgs).catch(() => {}); VIS.list().then(setTodayVisits).catch(() => {}) }, [])
+  const myIds = {}
+  asgs.filter(a => a.visit_date === todayISO && (!a.monitor || a.monitor === identity.name)).forEach(a => { (a.facility_ids || []).forEach(id => { myIds[id] = true }) })
+  const myDay = list.filter(f => myIds[f.id])
+  const visitedToday = {}
+  todayVisits.forEach(v => { if ((v.arrival_time || '').slice(0, 10) === todayISO && v.facility_id) visitedToday[v.facility_id] = true })
+
   const groups = {}; list.forEach(f => { const a = f.area || 'Unassigned'; (groups[a] = groups[a] || []).push(f) })
   const areaKeys = Object.keys(groups).sort()
   const dateStr = new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })
@@ -916,6 +977,13 @@ function EngagePage({ list, identity, role, userId }) {
     {msg && <p className="auth-msg block">{msg}</p>}
 
     {step === 0 && (<div className="engage-pick">
+      {myDay.length > 0 && (<div className="myday">
+        <div className="myday-head"><h3>Your day, {todayStr}</h3><span className="plan-count">{myDay.length} assigned</span></div>
+        <div className="frows">{myDay.map(f => (<button className="frow pickable" key={'my' + f.id} onClick={() => chooseFacility(f)}>
+          <div className="fmain"><span className="fname">{f.name}</span><span className="fmeta">{[f.category, f.address].filter(Boolean).join(' \u00b7 ') || 'No details'}{visitedToday[f.id] ? ' \u00b7 checked in' : ''}</span></div>
+          <span className={'mini' + (visitedToday[f.id] ? ' ok' : '')}>{visitedToday[f.id] ? 'Done' : 'Start'}</span>
+        </button>))}</div>
+      </div>)}
       {list.length === 0 ? <p className="empty">No facilities yet. Add them on the Facilities tab first.</p> :
         areaKeys.map(a => (<div className="cluster" key={a}>
           <div className="cluster-head"><h3>{a}</h3><span className="cluster-count">{groups[a].length}</span></div>
@@ -1362,7 +1430,13 @@ function buildInspectionReport(v, d, origin) {
   ]
   const esc = s => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/\n/g, '<br>')
   const body = rows.map(r => r[1] === '' && (r[0] === 'General' || r[0] === 'Findings') ? '<tr><th colspan="2" style="font-size:13px">' + r[0] + '</th></tr>' : '<tr><td style="width:34%;font-weight:600;color:#574277">' + r[0] + '</td><td>' + esc(r[1]) + '</td></tr>').join('')
-  return inspHead(origin) + '<table style="margin-top:10px">' + body + '</table>' + (d && d.signature ? '<p class="muted">Proprietor sign-off:</p><img class="sig" src="' + d.signature + '">' : '') + '<p class="muted">Prepared by REALMS Healthcare Services Consulting Limited for HEFAMAA, Lagos State.</p>'
+  const stamp = (v.approval && v.approval.status === 'approved') ? '<p class="muted" style="border:1px solid #BFE3CB;background:#E6F4EA;color:#2E7D46;border-radius:6px;padding:6px 10px;display:inline-block">Approved for submission by ' + esc(v.approval.by || 'Team Lead') + ' on ' + String(v.approval.at || '').slice(0, 10) + '</p>' : ''
+  return inspHead(origin) + '<table style="margin-top:10px">' + body + '</table>' + stamp + (d && d.signature ? '<p class="muted">Proprietor sign-off:</p><img class="sig" src="' + d.signature + '">' : '') + '<p class="muted">Prepared by REALMS Healthcare Services Consulting Limited for HEFAMAA, Lagos State.</p>'
+}
+function buildWeeklyBatch(visits, origin, from, to) {
+  const parts = visits.map((v, i) => '<div style="' + (i ? 'page-break-before:always;' : '') + '">' + buildInspectionReport(v, v.debrief || deriveDebrief(v), origin) + '</div>')
+  const idx = '<h1>HEFAMAA submission: ' + from + ' to ' + to + '</h1><p>REALMS Healthcare Services Consulting Limited. ' + visits.length + ' approved inspection report' + (visits.length === 1 ? '' : 's') + '.</p><table><tr><th>#</th><th>Facility</th><th>LGA</th><th>Date</th></tr>' + visits.map((v, i) => '<tr><td>' + (i + 1) + '</td><td>' + v.facility_name + '</td><td>' + (v.area || '') + '</td><td>' + (v.arrival_time || '').slice(0, 10) + '</td></tr>').join('') + '</table>'
+  return docHead(origin) + idx + '<div style="page-break-before:always">' + parts.join('') + '</div>'
 }
 function buildReport(v, d, origin) {
   const data = (v.monitoring && v.monitoring.items) || {}
@@ -1610,15 +1684,16 @@ function DebriefPage({ userId }) {
 }
 
 /* ---------- proprietor view ---------- */
-function ProprietorPage() {
+function ProprietorPage({ facilityId, facilities }) {
   const [visits, setVisits] = useState([])
   const [q, setQ] = useState('')
   useEffect(() => { VIS.list().then(setVisits).catch(() => {}) }, [])
   const origin = (typeof window !== 'undefined' && window.location) ? window.location.origin : ''
-  const all = visits.filter(v => v.status === 'monitored' || v.status === 'debriefed')
+  const mineFac = (facilities || []).find(f => f.id === facilityId)
+  const all = visits.filter(v => (v.status === 'monitored' || v.status === 'debriefed') && (!facilityId || v.facility_id === facilityId || (mineFac && v.facility_name === mineFac.name)))
   const mine = all.filter(v => matchQ(v, q))
   return (<div className="page">
-    <div className="ptitle"><div><p className="eyebrow">My facility</p><h2>Monitoring outcomes</h2></div></div>
+    <div className="ptitle"><div><p className="eyebrow">My facility</p><h2>{mineFac ? mineFac.name : 'Monitoring outcomes'}</h2></div></div>
     <p className="page-lede">Your latest monitoring outcomes, the corrective actions required, and re-inspection timelines.</p>
     {all.length > 0 && <div className="list-tools"><SearchBox value={q} onChange={setQ} placeholder="Search facilities…" /></div>}
     {mine.length === 0 ? <p className="empty">{all.length === 0 ? 'No monitoring visits recorded yet.' : 'No visits match your search.'}</p> :
@@ -1634,7 +1709,7 @@ function ProprietorPage() {
           <div className="prop-actions"><button className="mini" onClick={() => printDoc('Monitoring Report', buildReport(v, d, origin))}>View full report</button></div>
         </div>)
       })}</div>}
-    <p className="hintline">In production this view is limited to your own facility.</p>
+    <p className="hintline">{facilityId ? 'This view is limited to your facility.' : 'No facility is linked to your account yet. Contact RHSC.'}</p>
   </div>)
 }
 
@@ -1700,11 +1775,57 @@ function FollowUpsPage({ userId, identity }) {
   </div>)
 }
 
+/* ---------- re-inspection reminders ---------- */
+function reminderStage(days) { return days == null ? null : days < 0 ? 'overdue' : days === 0 ? 'due' : days <= 7 ? 't7' : null }
+async function runReminders(visits, facilities, userId, opts) {
+  const st = getSettings()
+  const sent = []
+  let logged = []
+  try { logged = await NOTIF.list() } catch (e) {}
+  const already = {}
+  logged.forEach(n => { if (n.type === 'reminder' && n.visit_id) already[n.visit_id + ':' + (n.stage || '')] = true })
+  for (const v of visits) {
+    const d = v.debrief && v.debrief.remediation_deadline
+    if (!d) continue
+    const stage = reminderStage(daysUntil(d))
+    if (!stage) continue
+    const key = v.id + ':' + stage
+    if (already[key]) continue
+    const label = stage === 'overdue' ? 'is OVERDUE' : stage === 'due' ? 'is due today' : 'is due within 7 days'
+    const msg = 'RHSC reminder: corrective actions at ' + v.facility_name + ' (' + (v.area || '') + ') ' + label + '. Deadline ' + d + '.'
+    try { await NOTIF.add({ type: 'reminder', stage, visit_id: v.id, facility_name: v.facility_name, area: v.area, channel: 'in-app', status: 'sent', message: msg }, userId) } catch (e) { continue }
+    if (st.lead_email) { try { sendNotify({ channel: 'email', to: st.lead_email, subject: 'Re-inspection ' + stage, message: msg }) } catch (e) {} }
+    if (st.cs_email) { try { sendNotify({ channel: 'email', to: st.cs_email, subject: 'Re-inspection ' + stage, message: msg }) } catch (e) {} }
+    if (st.lead_phone) { try { sendNotify({ channel: 'sms', to: st.lead_phone, message: msg }) } catch (e) {} }
+    if (st.cs_whatsapp) { try { sendNotify({ channel: 'whatsapp', to: st.cs_whatsapp, message: msg }) } catch (e) {} }
+    if (st.notify_facility) {
+      const f = (facilities || []).find(x => x.id === v.facility_id || x.name === v.facility_name)
+      if (f && f.phone) {
+        const fm = 'RHSC/HEFAMAA: the corrective actions agreed at ' + v.facility_name + ' ' + label + ' (deadline ' + d + '). Please contact RHSC on ' + (st.cs_phone || CONTACT.email) + '.'
+        try { sendNotify({ channel: 'sms', to: f.phone, message: fm }) } catch (e) {}
+        if (st.cs_whatsapp) { try { sendNotify({ channel: 'whatsapp', to: f.phone, message: fm }) } catch (e) {} }
+      }
+    }
+    sent.push({ facility: v.facility_name, stage })
+  }
+  return sent
+}
+
 /* ---------- settings (HQ) ---------- */
-function SettingsPage() {
+function SettingsPage({ user, identity, facilities }) {
   const [s, setS] = useState(getSettings())
+  const [remBusy, setRemBusy] = useState(false); const [remMsg, setRemMsg] = useState('')
   const set = (k, v) => setS(p => ({ ...p, [k]: v }))
   function save() { saveSettings(s); toast('Settings saved.') }
+  async function sendNow() {
+    saveSettings(s); setRemBusy(true); setRemMsg('')
+    try {
+      const vs = await VIS.list()
+      const out = await runReminders(vs, facilities, user && user.id)
+      setRemMsg(out.length ? out.length + ' reminder' + (out.length === 1 ? '' : 's') + ' sent and logged.' : 'Nothing due. No reminders needed.')
+      toast(out.length ? out.length + ' reminders sent.' : 'Nothing due right now.')
+    } catch (e) { setRemMsg('Could not send reminders.') } finally { setRemBusy(false) }
+  }
   return (<div className="page">
     <div className="ptitle"><div><p className="eyebrow">Settings</p><h2>Customer service & defaults</h2></div></div>
     <div className="settings-card">
@@ -1718,11 +1839,168 @@ function SettingsPage() {
       </div>
       <button className="btn primary" onClick={save}>Save settings</button>
     </div>
+
+    <div className="settings-card" style={{ marginTop: 16 }}>
+      <h3>Re-inspection reminders</h3>
+      <p className="hintline">Sent 7 days before a deadline, on the day, and once overdue. Each reminder goes out only once and is kept in the notification log.</p>
+      <div className="fgrid two">
+        <label className="field sm"><span>Team Lead email</span><input value={s.lead_email || ''} onChange={e => set('lead_email', e.target.value)} placeholder="solomon@realmsconsulting.com" /></label>
+        <label className="field sm"><span>Team Lead phone (SMS)</span><input value={s.lead_phone || ''} onChange={e => set('lead_phone', e.target.value)} placeholder="0803..." /></label>
+      </div>
+      <label className="ai-check"><input type="checkbox" checked={!!s.notify_facility} onChange={e => set('notify_facility', e.target.checked)} /> Also remind the facility on its registered number</label>
+      <div className="cta-row" style={{ marginTop: 12 }}>
+        <button className="btn primary" onClick={save}>Save settings</button>
+        <button className="btn ghost" onClick={sendNow} disabled={remBusy}>{remBusy ? 'Sending\u2026' : 'Send due reminders now'}</button>
+      </div>
+      {remMsg && <p className="hintline">{remMsg}</p>}
+    </div>
     <div className="settings-card" style={{ marginTop: 16 }}>
       <h3>AI translations</h3>
       <p className="hintline">Generate first-draft Yorùbá, Hausa and Igbo for the website strings, to give a native speaker to review before use. Downloads a JSON file.</p>
       <AIButton label="Generate translations" build={() => { const en = {}; Object.keys(TR).forEach(k => { en[k] = TR[k].en }); return { system: 'You are a professional Nigerian translator. Translate the given English UI strings into Yoruba (yo), Hausa (ha) and Igbo (ig). Return ONLY JSON of the form {"yo":{key:translation},"ha":{...},"ig":{...}} using the same keys. Natural, concise, suitable for a professional healthcare firm.', prompt: JSON.stringify(en), max_tokens: 2000 } }} onText={txt => { try { download('realms-translations.json', txt.replace(/```json|```/g, '').trim(), 'application/json'); toast('Translations generated and downloaded for review.') } catch (e) { toast('Could not save the file.', 'warn') } }} />
     </div>
+    <AccessPanel identity={identity} user={user} />
+  </div>)
+}
+
+/* ---------- HQ access gate ---------- */
+function PendingAccess({ kind, user, facilities, identity, onSignOut, onBack }) {
+  const isProp = kind === 'facility_proprietor'
+  const [sent, setSent] = useState(false)
+  const [fid, setFid] = useState(''); const [q, setQ] = useState(''); const [busy, setBusy] = useState(false)
+  const matches = q.trim().length < 2 ? [] : (facilities || []).filter(f => matchQ(f, q)).slice(0, 8)
+  useEffect(() => { let live = true; if (!isProp) return; (async () => { try { const r = await ACC.mine(user && user.id, 'facility_proprietor'); if (live && r) setSent(true) } catch (e) {} })(); return () => { live = false } }, [isProp])
+  async function requestProp() {
+    if (!fid) { toast('Find and choose your facility first.', 'warn'); return }
+    setBusy(true)
+    try {
+      const f = (facilities || []).find(x => x.id === fid)
+      await ACC.request({ user_id: user.id, email: user.email, name: user.name || '', role: 'facility_proprietor', facility_id: fid, facility_name: f ? f.name : '' })
+      setSent(true)
+      try { sendNotify({ channel: 'email', to: getSettings().cs_email || CONTACT.email, subject: 'Facility access request', message: (user.name || user.email) + ' has requested proprietor access to ' + (f ? f.name : 'a facility') + ' on Realms Field.' }) } catch (e) {}
+    } catch (e) { toast('Could not send that request.', 'err') } finally { setBusy(false) }
+  }
+  if (isProp && !sent) {
+    return (<div className="page role-page">
+      <div className="pending-card anim" style={{ textAlign: 'left' }}>
+        <h2 style={{ textAlign: 'center' }}>Which facility is yours?</h2>
+        <p style={{ textAlign: 'center' }}>Find your facility and request access. RHSC will confirm you before your reports are shown.</p>
+        <SearchBox value={q} onChange={v => { setQ(v); setFid('') }} placeholder="Type your facility name" />
+        {matches.length > 0 && <div className="frows" style={{ marginTop: 10 }}>{matches.map(f => (
+          <button className={'frow pickable' + (fid === f.id ? ' picked' : '')} key={f.id} onClick={() => setFid(f.id)}>
+            <div className="fmain"><span className="fname">{f.name}</span><span className="fmeta">{[f.category, f.area].filter(Boolean).join(' \u00b7 ')}</span></div>
+            <span className="mini">{fid === f.id ? 'Chosen' : 'Choose'}</span>
+          </button>))}</div>}
+        {q.trim().length >= 2 && matches.length === 0 && <p className="empty sm">No match. Check the spelling, or contact RHSC.</p>}
+        <div className="cta-row center" style={{ marginTop: 16 }}>
+          <button className="btn ghost" onClick={onBack}>Back</button>
+          <button className="btn primary" onClick={requestProp} disabled={busy || !fid}>{busy ? 'Sending\u2026' : 'Request access'}</button>
+        </div>
+      </div>
+    </div>)
+  }
+  return (<div className="page role-page">
+    <div className="pending-card anim">
+      <span className="pending-ic"><Ico name="lock" size={26} /></span>
+      <h2>{isProp ? 'Your facility access is awaiting confirmation' : 'Your HQ access is awaiting approval'}</h2>
+      <p>{isProp
+        ? 'RHSC will confirm that you represent this facility. Once approved you will see your own monitoring reports and corrective actions.'
+        : 'RHSC HQ sees every facility, report and setting, so it is granted by the executive office. Your request has gone to ' + OWNER_EMAIL + '.'}</p>
+      <p className="hintline">You will be let straight in once it is approved. Sign in again after you hear back.</p>
+      <div className="cta-row center">
+        <button className="btn ghost" onClick={onBack}>Choose a different role</button>
+        <button className="btn primary" onClick={onSignOut}>Sign out</button>
+      </div>
+    </div>
+  </div>)
+}
+function AccessPanel({ identity, user }) {
+  const [rows, setRows] = useState([]); const [busy, setBusy] = useState('')
+  async function refresh() { try { setRows(await ACC.list()) } catch (e) {} }
+  useEffect(() => { refresh() }, [])
+  async function decide(r, status) {
+    setBusy(r.id)
+    try { await ACC.decide(r.id, status, (identity && identity.name) || 'Executive office'); await refresh(); toast(status === 'approved' ? 'HQ access granted.' : 'Request declined.') }
+    catch (e) { toast('Could not save that decision.', 'err') } finally { setBusy('') }
+  }
+  const pending = rows.filter(r => r.status === 'pending')
+  function canDecide(r) { return r.role === 'rhsc_hq' ? isOwner(user) : true }
+  return (<div className="settings-card" style={{ marginTop: 16 }}>
+    <h3>Access requests</h3>
+    <p className="hintline">Only the executive office can admit an RHSC HQ user. Facility proprietors can be confirmed by HQ.</p>
+    {rows.length === 0 ? <p className="empty sm">No requests yet.</p> :
+      <div className="frows">{rows.map(r => (
+        <div className="frow" key={r.id}>
+          <div className="fmain"><span className="fname">{r.name || r.email}</span><span className="fmeta">{r.email} &middot; {r.role === 'rhsc_hq' ? 'RHSC HQ' : 'Proprietor' + (r.facility_name ? ', ' + r.facility_name : '')} &middot; {(r.created_at || '').slice(0, 10)}</span></div>
+          <div className="factions">
+            <span className={'appr-chip ' + (r.status === 'approved' ? 'approved' : r.status === 'denied' ? 'returned' : 'pending')}>{r.status === 'approved' ? 'Approved' : r.status === 'denied' ? 'Declined' : 'Pending'}</span>
+            {canDecide(r) && r.status !== 'approved' && <button className="mini ok" onClick={() => decide(r, 'approved')} disabled={busy === r.id}>Approve</button>}
+            {canDecide(r) && r.status !== 'denied' && <button className="mini danger" onClick={() => decide(r, 'denied')} disabled={busy === r.id}>Decline</button>}
+            {!canDecide(r) && <span className="hintline">Executive office only</span>}
+          </div>
+        </div>))}</div>}
+    {pending.length > 0 && <p className="hintline">{pending.length} awaiting your decision.</p>}
+  </div>)
+}
+
+/* ---------- approvals (Team Lead sign-off before HEFAMAA) ---------- */
+function needsApproval(v) { return v.status === 'debriefed' && !(v.debrief && v.debrief.first_visit) }
+function approvalState(v) { return (v.approval && v.approval.status) || 'pending' }
+function ApprovalsPage({ userId, identity, role }) {
+  const [visits, setVisits] = useState([])
+  const [q, setQ] = useState(''); const [filter, setFilter] = useState('pending')
+  const [busy, setBusy] = useState('')
+  const [noteFor, setNoteFor] = useState(null); const [note, setNote] = useState('')
+  const origin = (typeof window !== 'undefined' && window.location) ? window.location.origin : ''
+  const canApprove = role === 'team_leader' || role === 'rhsc_hq'
+  async function refresh() { try { setVisits(await VIS.list()) } catch (e) {} }
+  useEffect(() => { refresh() }, [])
+  const pool = visits.filter(needsApproval)
+  const rows = pool.filter(v => (filter === 'all' || approvalState(v) === filter) && matchQ(v, q))
+  const counts = { pending: pool.filter(v => approvalState(v) === 'pending').length, approved: pool.filter(v => approvalState(v) === 'approved').length, returned: pool.filter(v => approvalState(v) === 'returned').length }
+  async function decide(v, status) {
+    setBusy(v.id)
+    const approval = { status, by: (identity && identity.name) || 'Team Lead', at: new Date().toISOString(), note: status === 'returned' ? note.trim() : '' }
+    try {
+      await VIS.update(v.id, { approval })
+      setVisits(vs => vs.map(x => x.id === v.id ? { ...x, approval } : x))
+      setNoteFor(null); setNote('')
+      toast(status === 'approved' ? 'Report approved for submission.' : 'Returned to the monitor.')
+    } catch (e) { toast('Could not save that decision.', 'err') } finally { setBusy('') }
+  }
+  return (<div className="page">
+    <div className="ptitle"><div><p className="eyebrow">Approvals</p><h2>{counts.pending} awaiting sign-off</h2></div>
+      <div className="ptools">
+        <SearchBox value={q} onChange={setQ} placeholder="Search…" />
+        <select className="sel" value={filter} onChange={e => setFilter(e.target.value)}>
+          <option value="pending">Pending ({counts.pending})</option>
+          <option value="approved">Approved ({counts.approved})</option>
+          <option value="returned">Returned ({counts.returned})</option>
+          <option value="all">All</option>
+        </select>
+      </div>
+    </div>
+    <p className="page-lede">Every report is signed off by the Team Lead before it goes to HEFAMAA. Only approved reports appear in the weekly submission.</p>
+    {rows.length === 0 ? <p className="empty">Nothing here.</p> :
+      <div className="rep-rows">{rows.map(v => { const st = approvalState(v); return (
+        <div className="rep-row" key={v.id}>
+          <div className="rep-main"><span className="fname">{v.facility_name}</span><span className="fmeta">{v.area} &middot; {(v.arrival_time || v.created_at || '').slice(0, 10)}{v.team && v.team[0] ? ' \u00b7 ' + v.team[0].name : ''}</span></div>
+          <div className="rep-mid">
+            {v.score != null && <Chip rag={v.overall_rating} pct={v.score} />}
+            <span className={'appr-chip ' + st}>{st === 'approved' ? 'Approved' : st === 'returned' ? 'Returned' : 'Pending'}</span>
+            {v.approval && v.approval.by && st !== 'pending' && <span className="fmeta">{v.approval.by}, {(v.approval.at || '').slice(0, 10)}</span>}
+          </div>
+          <div className="rep-actions">
+            <button className="mini" onClick={() => printDoc('HEFAMAA Inspection Report', buildInspectionReport(v, v.debrief || deriveDebrief(v), origin))}>Review</button>
+            {canApprove && st !== 'approved' && <button className="mini ok" onClick={() => decide(v, 'approved')} disabled={busy === v.id}>Approve</button>}
+            {canApprove && st !== 'returned' && <button className="mini danger" onClick={() => { setNoteFor(noteFor === v.id ? null : v.id); setNote('') }}>Return</button>}
+          </div>
+          {noteFor === v.id && <div className="fu-form">
+            <label className="field sm"><span>What needs fixing?</span><input value={note} onChange={e => setNote(e.target.value)} placeholder="e.g. photo missing on waste segregation" /></label>
+            <button className="btn small danger" onClick={() => decide(v, 'returned')} disabled={busy === v.id}>Return to monitor</button>
+          </div>}
+          {st === 'returned' && v.approval && v.approval.note && <p className="hintline">Returned: {v.approval.note}</p>}
+        </div>) })}</div>}
   </div>)
 }
 
@@ -1806,6 +2084,9 @@ function ReportsPage({ facilities, userId, scope, role }) {
   const [q, setQ] = useState('')
   const [loading, setLoading] = useState(true)
   const [aiSummary, setAiSummary] = useState('')
+  const today = new Date(); const weekAgo = new Date(Date.now() - 6 * 86400000)
+  const [from, setFrom] = useState(weekAgo.toISOString().slice(0, 10))
+  const [to, setTo] = useState(today.toISOString().slice(0, 10))
   useEffect(() => { VIS.list().then(v => { setVisits(v); setLoading(false) }).catch(() => setLoading(false)) }, [])
   const origin = (typeof window !== 'undefined' && window.location) ? window.location.origin : ''
   const readOnly = role === 'rhsc_hq' || role === 'hefamaa_reviewer'
@@ -1813,6 +2094,10 @@ function ReportsPage({ facilities, userId, scope, role }) {
   const areas = Array.from(new Set(scopedVisits.map(v => v.area || 'Unassigned'))).sort()
   const rows = scopedVisits.filter(v => (area === 'all' || (v.area || 'Unassigned') === area) && (status === 'all' || v.status === status) && matchQ(v, q))
   const due = scopedVisits.filter(v => v.debrief && v.debrief.remediation_deadline).map(v => ({ v, date: v.debrief.remediation_deadline, days: daysUntil(v.debrief.remediation_deadline) })).sort((a, b) => (a.date < b.date ? -1 : 1))
+  function inRange(v) { const d = (v.arrival_time || v.created_at || '').slice(0, 10); return d && d >= from && d <= to }
+  const rangePool = scopedVisits.filter(v => needsApproval(v) && inRange(v))
+  const batch = rangePool.filter(v => approvalState(v) === 'approved')
+  const pendingCount = rangePool.length - batch.length
 
   function doc(v, kind) { const d = v.debrief || deriveDebrief(v); if (kind === 'report') printDoc('Monitoring Report', buildReport(v, d, origin)); else printDoc('Compliance Letter', buildLetter(v, d, origin)) }
   function summary(v) { return v.facility_name + ' (' + v.area + '): outcome ' + ragText(v.overall_rating) + (v.score != null ? ' ' + v.score + '%' : '') + ', visit ' + (v.arrival_time || v.created_at || '').slice(0, 10) + '.' }
@@ -1832,6 +2117,18 @@ function ReportsPage({ facilities, userId, scope, role }) {
     </div>
     {aiSummary && <div className="ai-panel"><h4><span className="ai-spark">✦</span> AI executive summary</h4><p className="ai-text">{aiSummary}</p><button className="linkbtn subtle" onClick={() => setAiSummary('')}>Dismiss</button></div>}
 
+    <div className="submit-panel">
+      <div className="submit-head"><h3>Weekly HEFAMAA submission</h3><span className="hintline">Approved inspection reports only, as one PDF to email to the agency.</span></div>
+      <div className="submit-row">
+        <label className="field sm inline"><span>From</span><input type="date" value={from} onChange={e => setFrom(e.target.value)} /></label>
+        <label className="field sm inline"><span>To</span><input type="date" value={to} onChange={e => setTo(e.target.value)} /></label>
+        <span className="chip green">{batch.length} approved</span>
+        <button className="btn small primary" onClick={() => { if (!batch.length) { toast('No approved reports in that range.', 'warn'); return } printDoc('HEFAMAA submission ' + from + ' to ' + to, buildWeeklyBatch(batch, origin, from, to)) }}>Build submission PDF</button>
+        <a className="btn small ghost" href={mailtoLink('HEFAMAA submission: ' + from + ' to ' + to + ' (Realms Consulting)', 'Dear HEFAMAA,\n\nPlease find attached the inspection reports for ' + from + ' to ' + to + ', covering ' + batch.length + ' facilities monitored by REALMS Healthcare Services Consulting Limited.\n\nKind regards,\nREALMS Healthcare Services Consulting Limited', '')}>Email to HEFAMAA</a>
+      </div>
+      {pendingCount > 0 && <p className="warnline">{pendingCount} report{pendingCount === 1 ? '' : 's'} in this range still await Team Lead approval and are not included.</p>}
+    </div>
+
     {due.length > 0 && (<div className="dsec"><h3>Re-inspections due</h3>
       <div className="frows">{due.map(({ v, date, days }) => (
         <div className="frow" key={v.id}><div className="fmain"><span className="fname">{v.facility_name}</span><span className="fmeta">{v.area} &middot; due {date}</span></div>
@@ -1844,7 +2141,7 @@ function ReportsPage({ facilities, userId, scope, role }) {
       <div className="rep-rows">{rows.map(v => (
         <div className="rep-row" key={v.id}>
           <div className="rep-main"><span className="fname">{v.facility_name}</span><span className="fmeta">{v.area} &middot; {(v.arrival_time || v.created_at || '').slice(0, 10)}</span></div>
-          <div className="rep-mid">{v.score != null ? <Chip rag={v.overall_rating} pct={v.score} /> : <span className={'chip ' + (v.status || 'engaged')}>{v.status === 'monitored' ? 'Assessed' : v.status === 'debriefed' ? 'Debriefed' : 'Engaged'}</span>}{v.debrief && v.debrief.closure_recommended && <span className="risk-badge high">Closure</span>}{v.debrief && v.debrief.escalated && <span className="risk-badge high">Escalated</span>}{v.debrief && v.debrief.genesys_interest && <span className="risk-badge low">Genesys</span>}</div>
+          <div className="rep-mid">{v.score != null ? <Chip rag={v.overall_rating} pct={v.score} /> : <span className={'chip ' + (v.status || 'engaged')}>{v.status === 'monitored' ? 'Assessed' : v.status === 'debriefed' ? 'Debriefed' : 'Engaged'}</span>}{v.debrief && v.debrief.closure_recommended && <span className="risk-badge high">Closure</span>}{v.debrief && v.debrief.escalated && <span className="risk-badge high">Escalated</span>}{v.debrief && v.debrief.genesys_interest && <span className="risk-badge low">Genesys</span>}{needsApproval(v) && <span className={'appr-chip ' + approvalState(v)}>{approvalState(v) === 'approved' ? 'Approved' : approvalState(v) === 'returned' ? 'Returned' : 'Pending'}</span>}</div>
           <div className="rep-actions">
             <button className="mini" onClick={() => doc(v, 'report')}>Report</button>
             <button className="mini" onClick={() => doc(v, 'letter')}>Letter</button>
@@ -2022,7 +2319,8 @@ function TabIcon({ id }) {
     myfacility: 'M5 21h14M7 21V7l5-4 5 4v14M10 13h4M10 17h4',
     followups: 'M4 4h5l2 5-3 2a12 12 0 006 6l2-3 5 2v5a2 2 0 01-2 2A16 16 0 014 6a2 2 0 012-2',
     settings: 'M12 15a3 3 0 100-6 3 3 0 000 6zM19 12a7 7 0 00-.1-1l2-1.6-2-3.4-2.4 1a7 7 0 00-1.7-1l-.3-2.6H9.5l-.3 2.6a7 7 0 00-1.7 1l-2.4-1-2 3.4L3.1 11a7 7 0 000 2l-2 1.6 2 3.4 2.4-1a7 7 0 001.7 1l.3 2.6h4.9l.3-2.6a7 7 0 001.7-1l2.4 1 2-3.4-2-1.6a7 7 0 00.1-1z',
-    assistant: 'M12 3l2 5 5 2-5 2-2 5-2-5-5-2 5-2zM19 15l1 2.5L22 19l-2 1-1 2.5-1-2.5L16 19l2-1z'
+    assistant: 'M12 3l2 5 5 2-5 2-2 5-2-5-5-2 5-2zM19 15l1 2.5L22 19l-2 1-1 2.5-1-2.5L16 19l2-1z',
+    approvals: 'M9 12l2 2 4-4M12 3l7 4v5c0 4.5-3 8.3-7 9-4-.7-7-4.5-7-9V7z'
   }[id] || 'M4 4h16v16H4z'
   return (<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d={p} /></svg>)
 }
@@ -2077,6 +2375,9 @@ export default function App() {
   const [view, setView] = useState('site')
   const [user, setUser] = useState(null)
   const [role, setRole] = useState(null)
+  const [hqPending, setHqPending] = useState(false)
+  const [pendKind, setPendKind] = useState('rhsc_hq')
+  const [myFacility, setMyFacility] = useState(null)
   const [appTab, setAppTab] = useState('dashboard')
   const [facs, setFacs] = useState([])
   const [navCollapsed, setNavCollapsed] = useState(false)
@@ -2095,7 +2396,7 @@ export default function App() {
       try {
         if (forceOut) { try { supabase.auth.signOut() } catch (e) {} }
         const res = supabase.auth.onAuthStateChange((_e, s) => {
-          if (s && s.user) { setUser({ email: s.user.email, id: s.user.id, name: (s.user.user_metadata && s.user.user_metadata.full_name) || '' }); loadRole(s.user.id); setView('app') }
+          if (s && s.user) { setUser({ email: s.user.email, id: s.user.id, name: (s.user.user_metadata && s.user.user_metadata.full_name) || '' }); loadRole(s.user.id, { email: s.user.email }); setView('app') }
           else { setUser(null); setRole(null); setViewAs(null); setView(prev => (prev === 'app' ? 'site' : prev)) }
         })
         subscription = res.data.subscription
@@ -2112,6 +2413,25 @@ export default function App() {
 
   // load facilities whenever we enter the app with a role
   useEffect(() => { if (view === 'app' && user && role) reloadFacs() }, [view, role])
+  // reminders: run once a day, quietly, when an oversight role opens the app
+  useEffect(() => {
+    if (!(view === 'app' && user && (role === 'rhsc_hq' || role === 'team_leader'))) return
+    const today = new Date().toISOString().slice(0, 10)
+    let last = ''
+    try { last = localStorage.getItem('realms_reminders_run') || '' } catch (e) {}
+    if (last === today) return
+    let live = true
+    const t = setTimeout(async () => {
+      try {
+        const vs = await VIS.list()
+        const out = await runReminders(vs, facs, user.id)
+        if (!live) return
+        try { localStorage.setItem('realms_reminders_run', today) } catch (e) {}
+        if (out.length) toast(out.length + ' re-inspection reminder' + (out.length === 1 ? '' : 's') + ' sent.')
+      } catch (e) {}
+    }, 4000)
+    return () => { live = false; clearTimeout(t) }
+  }, [view, role, facs.length])
 
   async function reloadFacs() {
     setDbError('')
@@ -2129,7 +2449,12 @@ export default function App() {
   async function loadSample() {
     setDbError(''); seedTriedRef.current = true
     const res = await seedSampleData(user && user.id)
-    try { const list = await FAC.list(); setFacs(list); if (list.length === 0 && res && res.error) setDbError(res.error); else if (list.length) toast(list.length + ' live facilities loaded.') }
+    try {
+      const list = await FAC.list(); setFacs(list)
+      if (list.length === 0 && res && res.error) setDbError(res.error)
+      else if (res && res.error) { setDbError('Facilities loaded, but the visit records failed: ' + res.error); toast('Facilities loaded, but visit records failed. See the message on the dashboard.', 'err') }
+      else if (list.length) toast(list.length + ' live facilities loaded.')
+    }
     catch (e) { setDbError((e && e.message) || 'Could not read the database.') }
   }
   async function clearAll() {
@@ -2150,21 +2475,43 @@ export default function App() {
     const u = VIEW_USERS.find(x => x.name === name); if (u) { setViewAs(u); setAppTab('dashboard') }
   }
 
-  async function loadRole(uid) {
+  async function loadRole(uid, u) {
     if (MODE !== 'supabase') return
-    try { const { data } = await supabase.from('kv').select('v').eq('user_id', uid).eq('k', 'role').maybeSingle(); if (data && data.v) setRole(typeof data.v === 'string' ? data.v : data.v.role) }
-    catch (e) { /* role picker will show */ }
+    try {
+      const { data } = await supabase.from('kv').select('v').eq('user_id', uid).eq('k', 'role').maybeSingle()
+      const r = data && data.v ? (typeof data.v === 'string' ? data.v : data.v.role) : null
+      if (!r) return
+      if (r === 'rhsc_hq' && !isOwner(u)) {
+        let req = null
+        try { req = await ACC.mine(uid, 'rhsc_hq') } catch (e) {}
+        if (!req || req.status !== 'approved') { setPendKind('rhsc_hq'); setHqPending(true); setRole(null); return }
+      }
+      if (r === 'facility_proprietor') {
+        let req = null
+        try { req = await ACC.mine(uid, 'facility_proprietor') } catch (e) {}
+        if (!req || req.status !== 'approved') { setPendKind('facility_proprietor'); setHqPending(true); setRole(null); return }
+        setMyFacility(req.facility_id || null)
+      }
+      setHqPending(false); setRole(r)
+    } catch (e) { /* role picker will show */ }
   }
   async function pickRole(id) {
-    setRole(id); setAppTab('dashboard')
     if (MODE === 'supabase' && user) { try { await supabase.from('kv').upsert({ user_id: user.id, k: 'role', v: id, updated_at: new Date().toISOString() }) } catch (e) {} }
     else localStorage.setItem('realms_demo_role', id)
+    if (id === 'rhsc_hq' && user && !isOwner(user)) {
+      try { await ACC.request({ user_id: user.id, email: user.email, name: user.name || '', role: 'rhsc_hq' }) } catch (e) {}
+      setPendKind('rhsc_hq'); setHqPending(true); setRole(null)
+      try { sendNotify({ channel: 'email', to: OWNER_EMAIL, subject: 'HQ access request', message: (user.name || user.email) + ' has requested RHSC HQ access on Realms Field.' }) } catch (e) {}
+      return
+    }
+    if (id === 'facility_proprietor' && user) { setPendKind('facility_proprietor'); setHqPending(true); setRole(null); return }
+    setHqPending(false); setRole(id); setAppTab('dashboard')
   }
   function afterAuth(u) { setUser(u); setView('app') }
   async function signOut() {
     if (MODE === 'supabase') { try { await supabase.auth.signOut() } catch (e) {} }
     else { localStorage.removeItem('realms_demo_user'); localStorage.removeItem('realms_demo_role') }
-    setUser(null); setRole(null); setViewAs(null); setView('site'); setTab('home'); setAppTab('dashboard')
+    setUser(null); setRole(null); setHqPending(false); setViewAs(null); setView('site'); setTab('home'); setAppTab('dashboard')
   }
 
   const identity = user ? identityFor(user.email, user.name) : { name: 'Staff', first: 'Staff', title: '' }
@@ -2176,17 +2523,19 @@ export default function App() {
   let body
   if (view === 'auth') body = <AuthPanel onDone={afterAuth} onCancel={() => setView('site')} />
   else if (view === 'app' && user) {
-    if (!role) body = <RolePicker identity={identity} onPick={pickRole} onSignOut={signOut} />
+    if (hqPending) body = <PendingAccess kind={pendKind} user={user} facilities={facs} identity={identity} onSignOut={signOut} onBack={() => setHqPending(false)} />
+    else if (!role) body = <RolePicker identity={identity} onPick={pickRole} onSignOut={signOut} />
     else if (appTab === 'facilities') body = <FacilitiesPage list={facs} canEdit={canEdit} userId={user.id} reload={reloadFacs} />
-    else if (appTab === 'map') body = <MapRoutePage list={facs} role={effRole} />
+    else if (appTab === 'map') body = <MapRoutePage list={facs} role={effRole} userId={user.id} />
     else if (appTab === 'engage') body = <EngagePage list={facs} identity={effId} role={effRole} userId={user.id} />
     else if (appTab === 'monitor') body = <MonitorPage userId={user.id} />
     else if (appTab === 'debrief') body = <DebriefPage userId={user.id} />
     else if (appTab === 'reports') body = <ReportsPage facilities={facs} userId={user.id} role={effRole} />
-    else if (appTab === 'myfacility') body = <ProprietorPage />
+    else if (appTab === 'myfacility') body = <ProprietorPage facilityId={myFacility} facilities={facs} />
     else if (appTab === 'followups') body = <FollowUpsPage userId={user.id} identity={identity} />
-    else if (appTab === 'settings') body = <SettingsPage />
+    else if (appTab === 'settings') body = <SettingsPage user={user} identity={identity} facilities={facs} />
     else if (appTab === 'assistant') body = <AssistantPage facilities={facs} />
+    else if (appTab === 'approvals') body = <ApprovalsPage userId={user.id} identity={effId} role={effRole} />
     else if (appTab === 'assign') body = <AssignPage list={facs} userId={user.id} />
     else body = <Dashboard identity={effId} role={effRole} onOpen={setAppTab} facilities={facs} onSeed={loadSample} onClear={clearAll} dbError={dbError} />
   } else {
@@ -2284,7 +2633,7 @@ function AssistantPage({ facilities }) {
 }
 
 const css = `
-.realms { --ink:#3A2B54; --p:#6D4B8E; --p-deep:#574277; --p-mid:#7E63A0; --v:#A98FC4; --lav1:#F6F3FA; --lav2:#EDE7F4; --line:#E4DCEE; --white:#ffffff; color:var(--ink); min-height:100vh; display:flex; flex-direction:column; }
+.realms { --ink:#3A2B54; --p:#6D4B8E; --p-deep:#574277; --p-mid:#7E63A0; --v:#A98FC4; --lav1:#F6F3FA; --lav2:#EDE7F4; --line:#E4DCEE; --white:#ffffff; --e1:0 1px 2px rgba(58,21,96,.05); --e2:0 4px 14px rgba(58,21,96,.07); --e3:0 14px 40px rgba(58,21,96,.11); --r-sm:10px; --r-md:14px; --r-lg:18px; --tap:44px; color:var(--ink); min-height:100vh; display:flex; flex-direction:column; }
 .realms h1,.realms h2,.realms h3 { font-weight:600; letter-spacing:.01em; margin:0; }
 .realms p { margin:0; }
 .realms a { color:inherit; text-decoration:none; }
@@ -2411,7 +2760,8 @@ const css = `
 .realms .tool-stage { font-size:11.5px; letter-spacing:.06em; text-transform:uppercase; color:var(--v); background:var(--lav1); border:1px solid var(--line); border-radius:20px; padding:4px 10px; white-space:nowrap; }
 .realms .tool-stage.ready { color:#fff; background:var(--p); border-color:var(--p); }
 
-.realms .ptitle { display:flex; align-items:flex-end; justify-content:space-between; gap:16px; flex-wrap:wrap; margin-bottom:14px; }
+.realms .ptitle { position:sticky; top:0; z-index:20; display:flex; align-items:flex-end; justify-content:space-between; gap:16px; flex-wrap:wrap; margin:-8px 0 18px; padding:14px 0 12px; background:linear-gradient(180deg,var(--lav1) 70%,rgba(246,243,250,0)); backdrop-filter:blur(6px); }
+.realms .ptitle h2 { font-size:26px; letter-spacing:-.015em; }
 .realms .ptitle h2 { font-size:clamp(22px,2.6vw,30px); color:var(--p-deep); }
 .realms .ptools { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
 .realms .sel { font-family:inherit; font-size:14px; padding:10px 14px; border:1.5px solid var(--line); border-radius:22px; background:#fff; color:var(--ink); }
@@ -2459,6 +2809,67 @@ const css = `
 .realms .plan-list li { font-size:13px; color:#4A3B66; margin-bottom:5px; }
 .realms .plan-list .pf-name { font-weight:500; color:#3A2B54; }
 .realms .plan-list em { display:block; font-style:normal; color:#8A7AA6; font-size:12px; }
+.realms .appr-chip { font-size:11.5px; border-radius:10px; padding:2px 9px; border:1px solid; }
+.realms .appr-chip.pending { background:#FBF3E6; color:#9A5B12; border-color:#F0D9B5; }
+.realms .appr-chip.approved { background:#E6F4EA; color:#2E7D46; border-color:#BFE3CB; }
+.realms .appr-chip.returned { background:#FBE9E6; color:#B4442E; border-color:#F0C9BF; }
+.realms .mini.ok { border-color:#BFE3CB; color:#2E7D46; }
+.realms .mini.warn { border-color:#F0D9B5; color:#9A5B12; background:#FBF3E6; }
+.realms .mini.ok:hover { background:#E6F4EA; }
+.realms .submit-panel { background:#fff; border:1px solid var(--line); border-left:3px solid var(--p); border-radius:12px; padding:16px 18px; margin-bottom:18px; }
+.realms .submit-head { margin-bottom:12px; }
+.realms .submit-head h3 { color:var(--p-deep); font-size:16px; margin-bottom:2px; }
+.realms .submit-row { display:flex; flex-wrap:wrap; align-items:center; gap:10px; }
+.realms .plan-assign { display:flex; flex-wrap:wrap; gap:8px; margin-top:10px; padding-top:10px; border-top:1px solid var(--lav2); }
+.realms .plan-assign .sel { font-size:13px; padding:6px 10px; }
+.realms .myday { background:var(--lav1); border:1px solid var(--line); border-left:3px solid var(--p); border-radius:12px; padding:14px 16px; margin-bottom:20px; }
+.realms .myday-head { display:flex; align-items:center; justify-content:space-between; margin-bottom:10px; }
+.realms .myday-head h3 { color:var(--p-deep); font-size:16px; margin:0; }
+.realms .pending-card { max-width:520px; margin:0 auto; text-align:center; background:#fff; border:1px solid var(--line); border-radius:18px; padding:38px 32px; box-shadow:0 12px 34px rgba(58,21,96,.08); }
+.realms .pending-ic { display:grid; place-items:center; width:60px; height:60px; border-radius:50%; background:var(--lav2); color:var(--p-deep); margin:0 auto 16px; }
+.realms .pending-card h2 { color:var(--p-deep); font-size:22px; margin-bottom:10px; }
+.realms .pending-card p { color:#5A4C74; margin-bottom:8px; }
+.realms .cta-row.center { justify-content:center; }
+.realms .frow.picked { border-color:var(--p); background:var(--lav2); }
+.realms .band-note { text-align:center; max-width:720px; margin:16px auto 0; font-size:14px; color:#5A4C74; }
+
+/* ===== UI upscale: tablet-first field ergonomics + depth ===== */
+.realms .frow, .realms .rep-row, .realms .fu-card, .realms .saved-card { border-radius:var(--r-md); box-shadow:var(--e1); transition:box-shadow .18s ease, border-color .18s ease, transform .18s ease; }
+.realms .frow:hover, .realms .rep-row:hover, .realms .fu-card:hover { box-shadow:var(--e2); border-color:var(--v); }
+.realms .frow.pickable:hover { transform:translateY(-1px); }
+.realms .mini { min-height:36px; border-radius:9px; padding:7px 13px; font-weight:500; transition:.15s; }
+.realms .btn.small { min-height:40px; border-radius:22px; }
+.realms .sel, .realms .searchbox, .realms .field input, .realms .field select, .realms .field textarea, .realms .hef-input { min-height:42px; border-radius:10px; transition:border-color .15s ease, box-shadow .15s ease; }
+.realms .sel:focus, .realms .field input:focus, .realms .field select:focus, .realms .field textarea:focus { outline:none; border-color:var(--p); box-shadow:0 0 0 3px var(--lav2); }
+.realms .cluster { margin-bottom:26px; }
+.realms .cluster-head { position:sticky; top:64px; z-index:5; background:var(--lav1); padding:8px 0; margin-bottom:8px; border-bottom:1px solid var(--lav2); }
+.realms .cluster-head h3 { font-size:15px; letter-spacing:-.01em; }
+.realms .cluster-count { background:#fff; border:1px solid var(--line); border-radius:11px; padding:2px 9px; font-size:11.5px; color:#8A7AA6; }
+.realms .an-card, .realms .settings-card, .realms .submit-panel, .realms .chat-wrap, .realms .plan-day, .realms .hq-table, .realms .enquiry { box-shadow:var(--e1); }
+.realms .settings-card, .realms .submit-panel { border-radius:var(--r-lg); }
+.realms .seg { border-radius:10px; }
+.realms .segb { min-height:var(--tap); padding:9px 18px; font-size:13.5px; }
+.realms .chkpill { min-height:40px; }
+.realms .rag-btn, .realms .ragb { min-height:var(--tap); }
+.realms .side-item, .realms .sidebar a, .realms .sidebar button { min-height:var(--tap); }
+.realms .hef-sec > summary { min-height:48px; }
+.realms .hef-sec { border-radius:var(--r-sm); }
+.realms .hef-wrap, .realms .fu-card { border-radius:var(--r-lg); }
+
+/* tablet: two-up analytics, roomier rows, larger type */
+@media (min-width:760px) and (max-width:1180px){
+  .realms .an-cards { grid-template-columns:repeat(3,1fr); }
+  .realms .frow, .realms .rep-row { padding:16px 18px; }
+  .realms .fname { font-size:15.5px; }
+  .realms .mini { min-height:40px; padding:9px 15px; font-size:13.5px; }
+  .realms .hef-fields { padding:16px; gap:16px; }
+  .realms .plan-days { grid-template-columns:1fr 1fr; }
+}
+@media (hover:none){
+  .realms .mini { min-height:var(--tap); }
+  .realms .frow:hover, .realms .rep-row:hover { transform:none; }
+}
+
 .realms .route-list em { margin-left:auto; font-style:normal; font-size:13px; color:#8A7AA6; }
 
 .realms .assign-grid { display:grid; grid-template-columns:1.3fr 1fr; gap:24px; }
@@ -2613,10 +3024,12 @@ const css = `
 .realms .rep-actions { display:flex; gap:8px; flex-wrap:wrap; }
 .realms .notify { flex-basis:100%; display:flex; align-items:center; gap:10px; flex-wrap:wrap; border-top:1px solid var(--lav2); margin-top:6px; padding-top:12px; }
 .realms .notify .hintline { margin:0; }
-.realms .an-cards { display:grid; grid-template-columns:repeat(6,1fr); gap:14px; margin-bottom:18px; }
-.realms .an-card { background:var(--lav1); border:1px solid var(--line); border-radius:14px; padding:18px 14px; text-align:center; }
-.realms .an-v { display:block; font-size:28px; font-weight:700; color:var(--p); line-height:1; margin-bottom:8px; }
-.realms .an-l { font-size:12px; color:#5A4C74; }
+.realms .an-cards { display:grid; grid-template-columns:repeat(6,1fr); gap:12px; margin-bottom:20px; }
+.realms .an-card { position:relative; overflow:hidden; background:#fff; border:1px solid var(--line); border-radius:var(--r-md); padding:18px 16px; text-align:left; box-shadow:var(--e1); transition:box-shadow .18s ease, transform .18s ease; }
+.realms .an-card:hover { box-shadow:var(--e2); transform:translateY(-2px); }
+.realms .an-card::before { content:''; position:absolute; left:0; top:0; bottom:0; width:3px; background:linear-gradient(180deg,var(--p),var(--v)); }
+.realms .an-v { display:block; font-family:Lora,serif; font-size:30px; font-weight:700; color:var(--p-deep); line-height:1; margin-bottom:6px; letter-spacing:-.02em; font-variant-numeric:tabular-nums; }
+.realms .an-l { font-size:11.5px; color:#8A7AA6; text-transform:uppercase; letter-spacing:.06em; }
 .realms .an-two { display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-bottom:16px; }
 .realms .an-panel { background:#fff; border:1px solid var(--line); border-radius:14px; padding:18px; margin-bottom:16px; }
 .realms .an-panel h3 { font-size:16px; color:var(--p-deep); margin-bottom:14px; }

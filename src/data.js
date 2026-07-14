@@ -190,6 +190,36 @@ export async function askAI(body) {
   } catch (e) { return { ok: false, reason: 'network' } }
 }
 
+/* ---------- HQ access requests (only the exco account admits HQ users) ---------- */
+const LS_ACC = 'realms_access'
+export const access = {
+  async list() {
+    if (MODE === 'supabase') { const { data, error } = await supabase.from('access_requests').select('*').order('created_at', { ascending: false }); if (error) throw error; return data || [] }
+    return lsGet(LS_ACC)
+  },
+  async mine(userId, role) {
+    if (!userId) return null
+    const r = role || 'rhsc_hq'
+    if (MODE === 'supabase') { const { data } = await supabase.from('access_requests').select('*').eq('user_id', userId).eq('role', r).maybeSingle(); return data || null }
+    return lsGet(LS_ACC).find(x => x.user_id === userId && x.role === r) || null
+  },
+  async request(r) {
+    if (MODE === 'supabase') {
+      const { data, error } = await supabase.from('access_requests').upsert({ ...cleanRow(r), status: 'pending' }, { onConflict: 'user_id,role' }).select()
+      if (error) throw error
+      return (data && data[0]) || r
+    }
+    const cur = lsGet(LS_ACC).filter(x => !(x.user_id === r.user_id && x.role === r.role))
+    const rec = { ...r, id: uid(), status: 'pending', created_at: new Date().toISOString() }
+    lsSet(LS_ACC, [rec].concat(cur)); return rec
+  },
+  async decide(id, status, by) {
+    const patch = { status, decided_by: by || null, decided_at: new Date().toISOString() }
+    if (MODE === 'supabase') { const { error } = await supabase.from('access_requests').update(patch).eq('id', id); if (error) throw error; return }
+    lsSet(LS_ACC, lsGet(LS_ACC).map(r => r.id === id ? { ...r, ...patch } : r))
+  }
+}
+
 /* ---------- notifications + call logs (customer service follow-ups) ---------- */
 const LS_NOTIF = 'realms_notifications'
 export const notifications = {
