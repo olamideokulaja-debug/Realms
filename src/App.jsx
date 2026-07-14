@@ -4,7 +4,7 @@ import 'leaflet/dist/leaflet.css'
 import { supabase, MODE } from './supabaseClient.js'
 import { facilities as FAC, assignments as ASG, visits as VIS, notifications as NOTIF, calls as CALLS, facilitiesFromCSV, orderRoute, googleMapsDirUrl, geocode, uploadEvidence, sendNotify, seedSampleData, clearAllData } from './data.js'
 
-const BUILD = 'field-2026-07-14f'
+const BUILD = 'field-2026-07-14g'
 
 /*
   REALMS FIELD — Stages 1 to 3 (single-file App.jsx + supabaseClient.js + data.js)
@@ -2498,12 +2498,12 @@ const css = `
 
 /* pillar photos + about lead */
 .realms .pillar.photo { padding-top:0; overflow:hidden; }
-.realms .pillar-img { margin:-1px -28px 18px; height:140px; overflow:hidden; }
-.realms .pillar-img img { width:100%; height:100%; object-fit:cover; }
+.realms .pillar-img { margin:-1px -28px 18px; height:180px; overflow:hidden; }
+.realms .pillar-img img { width:100%; height:100%; object-fit:cover; object-position:center top; }
 .realms .pillar.photo .pillar-rule { margin-left:28px; }
 .realms .pillar.photo h3, .realms .pillar.photo p { padding:0 2px; }
-.realms .about-lead { border-radius:18px; overflow:hidden; max-height:280px; margin-bottom:24px; }
-.realms .about-lead img { width:100%; height:100%; object-fit:cover; }
+.realms .about-lead { border-radius:18px; overflow:hidden; height:clamp(300px,42vw,470px); margin-bottom:24px; }
+.realms .about-lead img { width:100%; height:100%; object-fit:cover; object-position:center; }
 
 /* donut + ring */
 .realms .donut { display:flex; align-items:center; gap:20px; flex-wrap:wrap; }
@@ -2568,8 +2568,8 @@ const css = `
 .realms .svc-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:16px; margin-top:22px; }
 .realms .svc-card { background:#fff; border:1px solid var(--line); border-radius:16px; overflow:hidden; cursor:pointer; transition:.18s; display:flex; flex-direction:column; }
 .realms .svc-card:hover { transform:translateY(-4px); box-shadow:0 16px 34px rgba(58,21,96,.14); border-color:var(--v); }
-.realms .svc-img { height:140px; overflow:hidden; }
-.realms .svc-img img { width:100%; height:100%; object-fit:cover; }
+.realms .svc-img { height:180px; overflow:hidden; }
+.realms .svc-img img { width:100%; height:100%; object-fit:cover; object-position:center top; }
 .realms .svc-card h3 { font-size:17px; color:var(--p-deep); margin:16px 18px 6px; }
 .realms .svc-card p { font-size:13.5px; color:#5A4C74; margin:0 18px 12px; line-height:1.55; flex:1; }
 .realms .svc-more { font-size:13px; color:var(--p); font-weight:600; margin:0 18px 16px; }
