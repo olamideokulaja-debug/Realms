@@ -4,7 +4,7 @@ import 'leaflet/dist/leaflet.css'
 import { supabase, MODE } from './supabaseClient.js'
 import { facilities as FAC, assignments as ASG, visits as VIS, notifications as NOTIF, calls as CALLS, facilitiesFromCSV, orderRoute, googleMapsDirUrl, geocode, uploadEvidence, sendNotify, askAI, seedSampleData, clearAllData } from './data.js'
 
-const BUILD = 'field-2026-07-14j'
+const BUILD = 'field-2026-07-14k'
 
 /*
   REALMS FIELD — Stages 1 to 3 (single-file App.jsx + supabaseClient.js + data.js)
@@ -47,10 +47,10 @@ const GENESYS_URL = 'https://www.genesys-health.com/'
 
 const SERVICES = [
   { t: 'Strategy & advisory', d: 'Growth, market-entry and operational strategy for health providers, investors and government, grounded in evidence and delivered to implementation.', img: '/photos/g-boardroom.jpg' },
-  { t: 'Quality & accreditation', d: 'Readiness assessments and hands-on support that help facilities meet and hold the standards required for licensing and accreditation.', img: '/photos/g-corridor.jpg' },
+  { t: 'Quality & accreditation', d: 'Readiness assessments and hands-on support that help facilities meet and hold the standards required for licensing and accreditation.', img: '/photos/g-corridor.jpg?v=2' },
   { t: 'Facility Monitoring & Accreditation', d: 'As a licensed HEFAMAA monitoring operator, we carry out routine, evidence-based monitoring of health facilities across Lagos State.', img: '/photos/team.jpg', to: 'monitoring' },
   { t: 'Training & capacity building', d: 'Practical training and mentoring for facility teams, regulators and operators, building the knowledge that prevents non-compliance.', img: '/photos/meeting.jpg' },
-  { t: 'Health financing', d: 'Advisory on health financing, insurance design and sustainable funding models for providers, programmes and the public sector.', img: '/photos/g-handshake.jpg' },
+  { t: 'Health financing', d: 'Advisory on health financing, insurance design and sustainable funding models for providers, programmes and the public sector.', img: '/photos/g-handshake.jpg?v=2' },
   { t: 'Digital health & technology', d: 'Digital transformation for healthcare, powered by Genesys, our own Electronic Medical Records (EMR) platform, from patient records to real-time monitoring.', img: '/photos/g-health.jpg', href: GENESYS_URL }
 ]
 
