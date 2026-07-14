@@ -1,5 +1,5 @@
-// Realms Field service worker: offline-capable app shell.
-const CACHE = 'realms-v1'
+// Realms Field service worker: network-first so new deployments always apply.
+const CACHE = 'realms-v2'
 
 self.addEventListener('install', () => { self.skipWaiting() })
 
@@ -13,14 +13,11 @@ self.addEventListener('fetch', (e) => {
   if (req.method !== 'GET') return
   const url = new URL(req.url)
   if (url.origin !== self.location.origin) return // don't touch Supabase, tiles, APIs
+  // Network-first: fetch the latest, update the cache, fall back to cache only when offline.
   e.respondWith(
-    caches.open(CACHE).then(async (cache) => {
-      const cached = await cache.match(req)
-      const network = fetch(req).then((res) => {
-        if (res && res.status === 200) cache.put(req, res.clone())
-        return res
-      }).catch(() => cached || (req.mode === 'navigate' ? cache.match('/') : undefined))
-      return cached || network
-    })
+    fetch(req).then((res) => {
+      if (res && res.status === 200) { const clone = res.clone(); caches.open(CACHE).then(c => c.put(req, clone)) }
+      return res
+    }).catch(() => caches.open(CACHE).then(c => c.match(req).then(m => m || (req.mode === 'navigate' ? c.match('/') : undefined))))
   )
 })
