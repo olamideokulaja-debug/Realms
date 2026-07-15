@@ -4,7 +4,7 @@ import 'leaflet/dist/leaflet.css'
 import { supabase, MODE } from './supabaseClient.js'
 import { facilities as FAC, assignments as ASG, visits as VIS, notifications as NOTIF, calls as CALLS, access as ACC, facilitiesFromCSV, orderRoute, googleMapsDirUrl, geocode, uploadEvidence, sendNotify, askAI, seedSampleData, clearAllData } from './data.js'
 
-const BUILD = 'field-2026-07-15a'
+const BUILD = 'field-2026-07-15c'
 
 /*
   REALMS FIELD — Stages 1 to 3 (single-file App.jsx + supabaseClient.js + data.js)
@@ -538,8 +538,8 @@ function localityOf(f) {
   if (!loc) return f.area || ''
   return loc.replace(/\b\w/g, c => c.toUpperCase())
 }
-async function geocodeBatch(list) {
-  const r = await fetch('/api/geocode', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ list }) })
+async function geocodeCall(body) {
+  const r = await fetch('/api/geocode', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
   return await r.json().catch(() => ({ ok: false, reason: 'bad_response' }))
 }
 function FacilitiesPage({ list, canEdit, userId, reload }) {
@@ -626,36 +626,72 @@ function FacilitiesPage({ list, canEdit, userId, reload }) {
   async function mapAll() {
     const todo = list.filter(f => !hasCoords(f))
     if (!todo.length) { toast('Every facility already has a pin.'); return }
-    // Group by locality. Most addresses share a handful of neighbourhoods, so this is a few
-    // dozen lookups instead of hundreds, and it is exactly the level routing needs.
-    const groupsBy = {}
-    todo.forEach(f => { const k = localityOf(f) + '|' + (f.area || ''); (groupsBy[k] = groupsBy[k] || []).push(f) })
-    const keys = Object.keys(groupsBy)
-    if (!(await confirmAction('This looks up a map pin for ' + todo.length + ' facilities by grouping them into ' + keys.length + ' neighbourhoods. It takes a couple of minutes. Pins are marked "check" until your team confirms them.', { title: 'Map the facilities', ok: 'Start' }))) return
-    setGeoRun({ done: 0, total: keys.length, found: 0 })
-    let found = 0, mapped = 0, source = '', failed = []
-    for (let i = 0; i < keys.length; i += 20) {
-      const batch = keys.slice(i, i + 20)
-      const queries = batch.map(k => { const [loc, area] = k.split('|'); return [loc, area, 'Lagos, Nigeria'].filter(Boolean).join(', ') })
-      let r = null
-      try { r = await geocodeBatch(queries) } catch (e) { r = null }
-      if (!r || !r.ok) { setGeoRun(null); toast('The lookup service could not be reached' + (r && r.reason ? ': ' + r.reason : '') + '.', 'err'); return }
-      source = r.source || source
-      for (let b = 0; b < batch.length; b++) {
-        const hit = r.results[b]
-        if (!hit) { failed.push(batch[b].split('|')[0]); continue }
-        found++
-        for (const f of groupsBy[batch[b]]) {
-          try { await FAC.update(f.id, { lat: hit.lat, lng: hit.lng, geo_confirmed: false }); mapped++ } catch (e) {}
+    let probe = null
+    try { probe = await geocodeCall({ probe: true }) } catch (e) {}
+    if (!probe || !probe.ok) { toast('The lookup service could not be reached.', 'err'); return }
+    if (!probe.hasGoogle && !probe.hasAI) { toast('No lookup service is configured. Add GOOGLE_MAPS_KEY in Vercel.', 'warn'); return }
+
+    const how = probe.hasGoogle
+      ? 'Google will find the exact address for ' + todo.length + ' facilities' + (probe.hasAI ? ', and anything it cannot find will be estimated to its neighbourhood by AI' : '') + '.'
+      : 'AI will estimate each facility to its neighbourhood centre. Add GOOGLE_MAPS_KEY in Vercel for exact pins.'
+    if (!(await confirmAction(how + ' It takes a few minutes. Pins stay marked "check" until your team confirms them.', { title: 'Map the facilities', ok: 'Start' }))) return
+
+    let exact = 0, estimated = 0
+    const misses = []
+    setGeoRun({ done: 0, total: todo.length, found: 0 })
+
+    // Pass 1: exact addresses through Google.
+    if (probe.hasGoogle) {
+      for (let i = 0; i < todo.length; i += 25) {
+        const batch = todo.slice(i, i + 25)
+        const queries = batch.map(f => [f.name, f.address, f.area, 'Lagos, Nigeria'].filter(Boolean).join(', '))
+        let r = null
+        try { r = await geocodeCall({ list: queries, engine: 'google' }) } catch (e) { r = null }
+        if (!r || !r.ok) { setGeoRun(null); toast('Google lookup failed' + (r && r.reason ? ': ' + r.reason : '') + '.', 'err'); return }
+        for (let b = 0; b < batch.length; b++) {
+          const hit = (r.results || [])[b]
+          if (!hit) { misses.push(batch[b]); continue }
+          const solid = hit.precision === 'ROOFTOP'
+          try { await FAC.update(batch[b].id, { lat: hit.lat, lng: hit.lng, geo_confirmed: solid ? true : false }); exact++ } catch (e) {}
         }
+        setGeoRun({ done: Math.min(i + 25, todo.length), total: todo.length, found: exact })
       }
-      setGeoRun({ done: Math.min(i + 20, keys.length), total: keys.length, found })
+    } else {
+      misses.push(...todo)
     }
+
+    // Pass 2: whatever is left, estimated to its neighbourhood by AI.
+    if (misses.length && probe.hasAI) {
+      const groupsBy = {}
+      misses.forEach(f => { const k = localityOf(f) + '|' + (f.area || ''); (groupsBy[k] = groupsBy[k] || []).push(f) })
+      const keys = Object.keys(groupsBy)
+      setGeoRun({ done: 0, total: keys.length, found: exact, phase: 'Estimating neighbourhoods' })
+      for (let i = 0; i < keys.length; i += 25) {
+        const batch = keys.slice(i, i + 25)
+        const queries = batch.map(k => { const [loc, area] = k.split('|'); return [loc, area, 'Lagos, Nigeria'].filter(Boolean).join(', ') })
+        let r = null
+        try { r = await geocodeCall({ list: queries, engine: 'ai' }) } catch (e) { r = null }
+        if (!r || !r.ok) break
+        for (let b = 0; b < batch.length; b++) {
+          const hit = (r.results || [])[b]
+          if (!hit) continue
+          for (const f of groupsBy[batch[b]]) {
+            try { await FAC.update(f.id, { lat: hit.lat, lng: hit.lng, geo_confirmed: false }); estimated++ } catch (e) {}
+          }
+        }
+        setGeoRun({ done: Math.min(i + 25, keys.length), total: keys.length, found: exact + estimated, phase: 'Estimating neighbourhoods' })
+      }
+    }
+
     await reload(); setGeoRun(null)
-    setGeoMsg(mapped + ' of ' + todo.length + ' facilities now have a pin, from ' + found + ' of ' + keys.length + ' neighbourhoods'
-      + (source === 'osm' ? '. These are neighbourhood-level pins from the free map service. For exact pins, add GOOGLE_MAPS_KEY in Vercel and run this again.' : '.')
-      + (failed.length ? ' Not found: ' + failed.slice(0, 6).join(', ') + (failed.length > 6 ? ' and ' + (failed.length - 6) + ' more' : '') + '.' : ''))
-    toast(mapped + ' facilities mapped. Ask the team to confirm the pins.')
+    const left = todo.length - exact - estimated
+    setGeoMsg([
+      exact ? exact + ' pinned to their exact address by Google.' : '',
+      estimated ? estimated + ' estimated to their neighbourhood by AI, which is fine for grouping routes but not for finding the door.' : '',
+      left ? left + ' could not be placed at all.' : '',
+      'Pins marked "check" need a quick look from the team.'
+    ].filter(Boolean).join(' '))
+    toast((exact + estimated) + ' of ' + todo.length + ' facilities mapped.')
   }
   async function confirmPin(f) { try { await FAC.update(f.id, { geo_confirmed: true }); await reload() } catch (e) { toast('Could not save.', 'err') } }
   async function del(f) { if (!(await confirmAction('Remove ' + f.name + ' from the facility list?', { title: 'Remove facility', ok: 'Remove', danger: true }))) return; await FAC.remove(f.id); await reload(); toast('Facility removed.') }
@@ -690,7 +726,7 @@ function FacilitiesPage({ list, canEdit, userId, reload }) {
     </div>)}
 
     {geoMsg && <p className="warnline">{geoMsg} <button className="linkbtn subtle" onClick={() => setGeoMsg('')}>Dismiss</button></p>}
-    {geoRun && <div className="mon-meter"><div className="meter-row"><span className="meter-lab">Mapping</span><div className="meter-track"><div className="meter-fill" style={{ width: Math.round(geoRun.done / geoRun.total * 100) + '%' }} /></div><span className="meter-val">{geoRun.done}/{geoRun.total}</span></div></div>}
+    {geoRun && <div className="mon-meter"><div className="meter-row"><span className="meter-lab">{geoRun.phase || 'Mapping'}</span><div className="meter-track"><div className="meter-fill" style={{ width: Math.round(geoRun.done / geoRun.total * 100) + '%' }} /></div><span className="meter-val">{geoRun.done}/{geoRun.total}</span></div></div>}
     {list.length > 0 && <div className="list-tools"><SearchBox value={q} onChange={setQ} placeholder="Search facilities, area, category…" /></div>}
     {list.length === 0 ? <p className="empty">No facilities yet. {canEdit ? 'Add one or import a CSV to begin.' : 'Nothing to show.'}</p> :
       areas.length === 0 ? <p className="empty">No facilities match your search.</p> :
@@ -774,7 +810,8 @@ function MapRoutePage({ list, role, userId }) {
 
   function facByName(n) { return list.find(f => f.name === n) || list.find(f => (f.name || '').toLowerCase() === (n || '').toLowerCase()) }
   function dayMapsUrl(items) {
-    const stops = (items || []).map(f => { if (!f) return null; if (hasCoords(f)) return f.lat + ',' + f.lng; return encodeURIComponent(f.name + (f.address ? ', ' + f.address : '') + ', Lagos') }).filter(Boolean)
+    // An unconfirmed pin is only a neighbourhood estimate, so navigate by address instead.
+    const stops = (items || []).map(f => { if (!f) return null; if (hasCoords(f) && f.geo_confirmed !== false) return f.lat + ',' + f.lng; return encodeURIComponent(f.name + (f.address ? ', ' + f.address : '') + ', Lagos') }).filter(Boolean)
     return stops.length ? 'https://www.google.com/maps/dir/' + stops.join('/') : ''
   }
   async function planRoutes() {
