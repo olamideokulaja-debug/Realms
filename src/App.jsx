@@ -4,7 +4,7 @@ import 'leaflet/dist/leaflet.css'
 import { supabase, MODE } from './supabaseClient.js'
 import { facilities as FAC, assignments as ASG, visits as VIS, notifications as NOTIF, calls as CALLS, access as ACC, facilitiesFromCSV, orderRoute, googleMapsDirUrl, geocode, uploadEvidence, sendNotify, askAI, seedSampleData, clearAllData } from './data.js'
 
-const BUILD = 'field-2026-07-14y'
+const BUILD = 'field-2026-07-14z'
 
 /*
   REALMS FIELD — Stages 1 to 3 (single-file App.jsx + supabaseClient.js + data.js)
@@ -736,41 +736,52 @@ function MapRoutePage({ list, role, userId }) {
   const planPool = scopePool.slice(0, Math.max(1, days) * Math.max(1, perDay))
 
   function facByName(n) { return list.find(f => f.name === n) || list.find(f => (f.name || '').toLowerCase() === (n || '').toLowerCase()) }
-  function dayMapsUrl(names) {
-    const stops = (names || []).map(n => { const f = facByName(n); if (f && hasCoords(f)) return f.lat + ',' + f.lng; return encodeURIComponent((n || '') + ((f && f.address) ? ', ' + f.address : '') + ', Lagos') }).filter(Boolean)
+  function dayMapsUrl(items) {
+    const stops = (items || []).map(f => { if (!f) return null; if (hasCoords(f)) return f.lat + ',' + f.lng; return encodeURIComponent(f.name + (f.address ? ', ' + f.address : '') + ', Lagos') }).filter(Boolean)
     return stops.length ? 'https://www.google.com/maps/dir/' + stops.join('/') : ''
   }
   async function planRoutes() {
     setPlanErr('')
     if (!planPool.length) { setPlanErr(scope === 'due' ? 'Nothing is due for a visit in this view.' : 'No facilities in this view to plan.'); return }
     setPlanBusy(true); setPlan(null)
-    const facs = planPool.map(f => ({ n: f.name, a: f.address || '', lg: f.area || '', lat: hasCoords(f) ? Number(f.lat).toFixed(5) : null, lng: hasCoords(f) ? Number(f.lng).toFixed(5) : null }))
-    const sys = 'You are a routing planner for a Lagos health-facility monitoring team. Group the facilities into ' + days + ' day(s) of about ' + perDay + ' each, putting facilities that are close together (same neighbourhood, street or locality) on the same day, and ordering each day sensibly from start to finish. Judge proximity from the address locality, and from lat/lng when given. Return ONLY compact JSON, no prose and no code fences: {"days":[{"day":1,"area":"locality","facilities":["exact name","..."]}]}. Use each facility name exactly as provided, once only.'
-    const budget = Math.min(8000, 400 + facs.length * 22)
+    // Send a numbered list and ask for numbers back. Names are long, numbers are not,
+    // so the answer always fits and nothing is lost to a mis-typed facility name.
+    const facs = planPool.map((f, i) => ({ i, n: f.name, a: f.address || '', lg: f.area || '', ll: hasCoords(f) ? (Number(f.lat).toFixed(4) + ',' + Number(f.lng).toFixed(4)) : '' }))
+    const sys = 'You plan daily routes for a Lagos health-facility monitoring team. Split the numbered facilities into ' + days + ' day(s) of about ' + perDay + ' each. Put facilities that are close together (same neighbourhood, street or locality) on the same day, and order each day sensibly from start to finish. Judge proximity from the address locality (field a) and from lat/lng (field ll) when present. Reply with ONLY compact JSON, no prose, no code fences, referring to facilities by their number i: {"days":[{"day":1,"area":"locality","f":[3,7,12]}]}. Use every number exactly once.'
+    const budget = Math.min(8000, 700 + facs.length * 10)
     const r = await askAI({ system: sys, prompt: JSON.stringify(facs), max_tokens: budget })
     setPlanBusy(false)
     if (!r.ok) {
       setPlanErr(r.reason === 'ai_not_configured'
         ? 'AI is not switched on. Add ANTHROPIC_API_KEY in Vercel, then redeploy.'
-        : 'The planner could not respond (' + (r.reason || 'error') + '). Try fewer days, or one LGA at a time.')
+        : 'The planner could not respond: ' + (r.reason || 'unknown error'))
       return
     }
     try {
       let txt = (r.text || '').replace(/```json/gi, '').replace(/```/g, '').trim()
       const i = txt.indexOf('{'), j = txt.lastIndexOf('}')
-      if (i > 0 || j < txt.length - 1) txt = txt.slice(i, j + 1)
+      if (i < 0 || j <= i) throw new Error('no json')
+      txt = txt.slice(i, j + 1)
       const obj = JSON.parse(txt)
-      const out = Array.isArray(obj) ? obj : (obj.days || [])
+      const raw = Array.isArray(obj) ? obj : (obj.days || [])
+      const used = {}
+      const out = raw.map((d, k) => {
+        const src = d.f || d.facilities || []
+        const items = src.map(x => (typeof x === 'number' ? planPool[x] : facByName(x))).filter(f => f && !used[f.id] && (used[f.id] = true))
+        return { day: d.day || k + 1, area: d.area || '', items }
+      }).filter(d => d.items.length)
       if (!out.length) { setPlanErr('The planner returned nothing usable. Try again.'); return }
+      const placed = out.reduce((n, d) => n + d.items.length, 0)
       setPlan(out)
-      toast(out.length + ' day' + (out.length === 1 ? '' : 's') + ' planned.')
-    } catch (e) { setPlanErr('The plan came back incomplete. Try fewer days so the answer fits.') }
+      toast(out.length + ' day' + (out.length === 1 ? '' : 's') + ' planned, ' + placed + ' stops.')
+      if (r.truncated) setPlanErr('The answer was cut short, so ' + (planPool.length - placed) + ' facilities were left out. Plan fewer days to include them.')
+    } catch (e) { setPlanErr(r.truncated ? 'The answer was cut short. Try fewer days.' : 'Could not read the plan. Please try again.') }
   }
   async function assignDay(key, d) {
     const f = assignForm[key] || {}
     if (!f.monitor) { toast('Choose who this day is for.', 'warn'); return }
     if (!f.date) { toast('Choose the visit date.', 'warn'); return }
-    const ids = (d.facilities || []).map(n => { const fx = facByName(n); return fx ? fx.id : null }).filter(Boolean)
+    const ids = (d.items || []).map(f => f.id).filter(Boolean)
     if (!ids.length) { toast('No matching facilities to assign.', 'warn'); return }
     setAssignBusy(key)
     try {
@@ -826,11 +837,11 @@ function MapRoutePage({ list, role, userId }) {
       </div>
       {planErr && <p className="warnline">{planErr}</p>}
             {plan && plan.length > 0 && <div className="plan-days">{plan.map((d, i) => {
-        const url = dayMapsUrl(d.facilities || [])
+        const url = dayMapsUrl(d.items || [])
         const dayKey = 'd' + i
         return (<div className="plan-day" key={i}>
-          <div className="plan-day-head"><h4>Day {d.day || i + 1}{d.area ? ' \u00b7 ' + d.area : ''}</h4><span className="plan-count">{(d.facilities || []).length} stops</span>{url && <a className="mini" href={url} target="_blank" rel="noreferrer">Open in Google Maps</a>}</div>
-          <ol className="plan-list">{(d.facilities || []).map((n, j) => { const f = facByName(n); return <li key={j}><span className="pf-name">{n}</span>{f && f.address && <em>{f.address}</em>}</li> })}</ol>
+          <div className="plan-day-head"><h4>Day {d.day || i + 1}{d.area ? ' \u00b7 ' + d.area : ''}</h4><span className="plan-count">{(d.items || []).length} stops</span>{url && <a className="mini" href={url} target="_blank" rel="noreferrer">Open in Google Maps</a>}</div>
+          <ol className="plan-list">{(d.items || []).map((f, j) => (<li key={j}><span className="pf-name">{f.name}</span>{f.address && <em>{f.address}</em>}{f.phone && <em>{f.phone}</em>}</li>))}</ol>
           {canAssign && <div className="plan-assign">
             <select className="sel" value={(assignForm[dayKey] || {}).monitor || ''} onChange={e => setAssignForm(s => ({ ...s, [dayKey]: { ...(s[dayKey] || {}), monitor: e.target.value } }))}>
               <option value="">Assign to\u2026</option>{MONITORS.map(m => <option key={m} value={m}>{m}</option>)}

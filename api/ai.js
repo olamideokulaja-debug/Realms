@@ -17,7 +17,7 @@ export default async function handler(req, res) {
       if (m) content.push({ type: 'image', source: { type: 'base64', media_type: m[1], data: m[2] } })
     }
     content.push({ type: 'text', text: String(prompt || '') })
-    const mt = Math.min(Math.max(parseInt(max_tokens, 10) || 1024, 64), 4096)
+    const mt = Math.min(Math.max(parseInt(max_tokens, 10) || 1024, 64), 8192)
     const r = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-api-key': key, 'anthropic-version': '2023-06-01' },
@@ -31,6 +31,6 @@ export default async function handler(req, res) {
     const data = await r.json().catch(() => ({}))
     if (!r.ok) { const m = (data && data.error && data.error.message) || ('HTTP ' + r.status); res.status(200).json({ ok: false, reason: m }); return }
     const text = (data.content || []).filter(b => b.type === 'text').map(b => b.text).join('\n').trim()
-    res.status(200).json({ ok: true, text })
+    res.status(200).json({ ok: true, text, truncated: data.stop_reason === 'max_tokens' })
   } catch (e) { res.status(200).json({ ok: false, reason: 'exception', message: String((e && e.message) || e) }) }
 }
