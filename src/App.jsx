@@ -4,7 +4,7 @@ import 'leaflet/dist/leaflet.css'
 import { supabase, MODE } from './supabaseClient.js'
 import { facilities as FAC, assignments as ASG, visits as VIS, notifications as NOTIF, calls as CALLS, access as ACC, facilitiesFromCSV, orderRoute, googleMapsDirUrl, geocode, uploadEvidence, sendNotify, askAI, seedSampleData, clearAllData } from './data.js'
 
-const BUILD = 'field-2026-07-14z'
+const BUILD = 'field-2026-07-15a'
 
 /*
   REALMS FIELD — Stages 1 to 3 (single-file App.jsx + supabaseClient.js + data.js)
@@ -523,6 +523,25 @@ function Dashboard({ identity, role, onOpen, facilities, onSeed, onClear, dbErro
 }
 
 /* ---------- facilities ---------- */
+function localityOf(f) {
+  const a = String(f.address || '').trim()
+  if (!a) return f.area || ''
+  let parts = a.split(',').map(x => x.trim()).filter(Boolean)
+  parts = parts.filter(p => !/^lagos( state)?$/i.test(p) && !/^nigeria$/i.test(p))
+  if (!parts.length) return f.area || ''
+  let loc = parts[parts.length - 1].replace(/^\d+[a-z]?[\s,]+/i, '').trim()
+  if (loc.length < 3 && parts.length > 1) loc = parts[parts.length - 2]
+  // Free-text address with no commas: the neighbourhood is almost always the last words.
+  let w = loc.split(/\s+/).filter(x => x && !/^(lagos|nigeria|state)$/i.test(x))
+  if (w.length > 3) w = w.slice(-2)
+  loc = w.join(' ').replace(/[^A-Za-z\s-]/g, '').replace(/-/g, ' ').replace(/\s+/g, ' ').trim()
+  if (!loc) return f.area || ''
+  return loc.replace(/\b\w/g, c => c.toUpperCase())
+}
+async function geocodeBatch(list) {
+  const r = await fetch('/api/geocode', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ list }) })
+  return await r.json().catch(() => ({ ok: false, reason: 'bad_response' }))
+}
 function FacilitiesPage({ list, canEdit, userId, reload }) {
   const [adding, setAdding] = useState(false); const [busy, setBusy] = useState(false); const [msg, setMsg] = useState('')
   const [form, setForm] = useState({ name: '', category: '', area: '', address: '', lat: '', lng: '' })
@@ -531,6 +550,7 @@ function FacilitiesPage({ list, canEdit, userId, reload }) {
   const [drawer, setDrawer] = useState(null)
   const [aiClean, setAiClean] = useState(false)
   const [geoRun, setGeoRun] = useState(null)
+  const [geoMsg, setGeoMsg] = useState('')
   useEffect(() => { VIS.list().then(setVisits).catch(() => {}) }, [])
   const origin = (typeof window !== 'undefined' && window.location) ? window.location.origin : ''
   function facVisits(f) { return visits.filter(v => (v.facility_id && v.facility_id === f.id) || v.facility_name === f.name) }
@@ -606,20 +626,36 @@ function FacilitiesPage({ list, canEdit, userId, reload }) {
   async function mapAll() {
     const todo = list.filter(f => !hasCoords(f))
     if (!todo.length) { toast('Every facility already has a pin.'); return }
-    if (!(await confirmAction('This looks up a map pin for ' + todo.length + ' facilities from their addresses. It takes roughly ' + Math.ceil(todo.length * 1.2 / 60) + ' minutes. Pins are marked "check" until your team confirms them.', { title: 'Map the facilities', ok: 'Start' }))) return
-    setGeoRun({ done: 0, total: todo.length, found: 0 })
-    let found = 0
-    for (let i = 0; i < todo.length; i++) {
-      const f = todo[i]
-      try {
-        const g = await geocode(f.address || (f.name + ' ' + (f.area || '')))
-        if (g) { await FAC.update(f.id, { ...g, geo_confirmed: false }); found++ }
-      } catch (e) {}
-      setGeoRun({ done: i + 1, total: todo.length, found })
-      await new Promise(r => setTimeout(r, 1150))
+    // Group by locality. Most addresses share a handful of neighbourhoods, so this is a few
+    // dozen lookups instead of hundreds, and it is exactly the level routing needs.
+    const groupsBy = {}
+    todo.forEach(f => { const k = localityOf(f) + '|' + (f.area || ''); (groupsBy[k] = groupsBy[k] || []).push(f) })
+    const keys = Object.keys(groupsBy)
+    if (!(await confirmAction('This looks up a map pin for ' + todo.length + ' facilities by grouping them into ' + keys.length + ' neighbourhoods. It takes a couple of minutes. Pins are marked "check" until your team confirms them.', { title: 'Map the facilities', ok: 'Start' }))) return
+    setGeoRun({ done: 0, total: keys.length, found: 0 })
+    let found = 0, mapped = 0, source = '', failed = []
+    for (let i = 0; i < keys.length; i += 20) {
+      const batch = keys.slice(i, i + 20)
+      const queries = batch.map(k => { const [loc, area] = k.split('|'); return [loc, area, 'Lagos, Nigeria'].filter(Boolean).join(', ') })
+      let r = null
+      try { r = await geocodeBatch(queries) } catch (e) { r = null }
+      if (!r || !r.ok) { setGeoRun(null); toast('The lookup service could not be reached' + (r && r.reason ? ': ' + r.reason : '') + '.', 'err'); return }
+      source = r.source || source
+      for (let b = 0; b < batch.length; b++) {
+        const hit = r.results[b]
+        if (!hit) { failed.push(batch[b].split('|')[0]); continue }
+        found++
+        for (const f of groupsBy[batch[b]]) {
+          try { await FAC.update(f.id, { lat: hit.lat, lng: hit.lng, geo_confirmed: false }); mapped++ } catch (e) {}
+        }
+      }
+      setGeoRun({ done: Math.min(i + 20, keys.length), total: keys.length, found })
     }
     await reload(); setGeoRun(null)
-    toast(found + ' of ' + todo.length + ' facilities mapped. Ask the team to confirm the pins.')
+    setGeoMsg(mapped + ' of ' + todo.length + ' facilities now have a pin, from ' + found + ' of ' + keys.length + ' neighbourhoods'
+      + (source === 'osm' ? '. These are neighbourhood-level pins from the free map service. For exact pins, add GOOGLE_MAPS_KEY in Vercel and run this again.' : '.')
+      + (failed.length ? ' Not found: ' + failed.slice(0, 6).join(', ') + (failed.length > 6 ? ' and ' + (failed.length - 6) + ' more' : '') + '.' : ''))
+    toast(mapped + ' facilities mapped. Ask the team to confirm the pins.')
   }
   async function confirmPin(f) { try { await FAC.update(f.id, { geo_confirmed: true }); await reload() } catch (e) { toast('Could not save.', 'err') } }
   async function del(f) { if (!(await confirmAction('Remove ' + f.name + ' from the facility list?', { title: 'Remove facility', ok: 'Remove', danger: true }))) return; await FAC.remove(f.id); await reload(); toast('Facility removed.') }
@@ -653,6 +689,7 @@ function FacilitiesPage({ list, canEdit, userId, reload }) {
       <button className="btn small primary" onClick={saveForm} disabled={busy}>{busy ? 'Saving\u2026' : 'Save facility'}</button>
     </div>)}
 
+    {geoMsg && <p className="warnline">{geoMsg} <button className="linkbtn subtle" onClick={() => setGeoMsg('')}>Dismiss</button></p>}
     {geoRun && <div className="mon-meter"><div className="meter-row"><span className="meter-lab">Mapping</span><div className="meter-track"><div className="meter-fill" style={{ width: Math.round(geoRun.done / geoRun.total * 100) + '%' }} /></div><span className="meter-val">{geoRun.done}/{geoRun.total}</span></div></div>}
     {list.length > 0 && <div className="list-tools"><SearchBox value={q} onChange={setQ} placeholder="Search facilities, area, category…" /></div>}
     {list.length === 0 ? <p className="empty">No facilities yet. {canEdit ? 'Add one or import a CSV to begin.' : 'Nothing to show.'}</p> :
