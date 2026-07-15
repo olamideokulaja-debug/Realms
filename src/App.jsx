@@ -2,9 +2,9 @@ import React, { useEffect, useRef, useState } from 'react'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
 import { supabase, MODE } from './supabaseClient.js'
-import { facilities as FAC, assignments as ASG, visits as VIS, notifications as NOTIF, calls as CALLS, access as ACC, facilitiesFromCSV, orderRoute, googleMapsDirUrl, geocode, uploadEvidence, sendNotify, askAI, seedSampleData, clearAllData } from './data.js'
+import { facilities as FAC, assignments as ASG, visits as VIS, notifications as NOTIF, calls as CALLS, access as ACC, facilitiesFromCSV, orderRoute, clusterDays, googleMapsDirUrl, geocode, uploadEvidence, sendNotify, askAI, seedSampleData, clearAllData } from './data.js'
 
-const BUILD = 'field-2026-07-15c'
+const BUILD = 'field-2026-07-15d'
 
 /*
   REALMS FIELD — Stages 1 to 3 (single-file App.jsx + supabaseClient.js + data.js)
@@ -766,15 +766,15 @@ function MapRoutePage({ list, role, userId }) {
   const areas = Array.from(new Set(list.map(f => f.area || 'Unassigned'))).sort()
   const colorMap = {}; areas.forEach((a, i) => { colorMap[a] = AREA_COLORS[i % AREA_COLORS.length] })
   const [area, setArea] = useState('all')
-  const [routed, setRouted] = useState(false)
+  const [tab, setTab] = useState('plan')
   const [visits, setVisits] = useState([])
   const [q, setQ] = useState('')
   const [perDay, setPerDay] = useState(14)
-  const [plan, setPlan] = useState(null)
-  const [planBusy, setPlanBusy] = useState(false)
   const [days, setDays] = useState(5)
   const [scope, setScope] = useState('due')
+  const [plan, setPlan] = useState(null)
   const [planErr, setPlanErr] = useState('')
+  const [openDay, setOpenDay] = useState(0)
   const [assignForm, setAssignForm] = useState({})
   const [assignBusy, setAssignBusy] = useState('')
   const canAssign = role === 'team_leader' || role === 'rhsc_hq'
@@ -783,8 +783,6 @@ function MapRoutePage({ list, role, userId }) {
 
   const filtered = (area === 'all' ? list : list.filter(f => (f.area || 'Unassigned') === area))
   const plotted = filtered.filter(hasCoords)
-  const ordered = routed ? orderRoute(plotted) : plotted
-  const gmaps = googleMapsDirUrl(ordered)
 
   const visByFac = {}
   visits.forEach(v => { const key = v.facility_id || v.facility_name; if (!key) return; const prev = visByFac[key]; if (!prev || (v.arrival_time || v.created_at || '') > (prev.arrival_time || prev.created_at || '')) visByFac[key] = v })
@@ -792,10 +790,9 @@ function MapRoutePage({ list, role, userId }) {
   function facStatus(f) { const v = facVisit(f); return v ? (v.status === 'debriefed' ? 'Debriefed' : v.status === 'monitored' ? 'Assessed' : 'Engaged') : 'Not visited' }
   const visitedCount = list.filter(facVisit).length
   const assessedCount = list.filter(f => { const v = facVisit(f); return v && (v.status === 'monitored' || v.status === 'debriefed') }).length
-  const dueCount = visits.filter(v => v.debrief && v.debrief.remediation_deadline && daysUntil(v.debrief.remediation_deadline) != null && daysUntil(v.debrief.remediation_deadline) < 7).length
+  const overdueCount = visits.filter(v => v.debrief && v.debrief.remediation_deadline && daysUntil(v.debrief.remediation_deadline) != null && daysUntil(v.debrief.remediation_deadline) < 7).length
   const tableRows = list.filter(f => matchQ(f, q))
 
-  // A facility is due when its first visit is on record but the next round has not happened yet.
   const firstDone = {}, laterDone = {}
   visits.forEach(v => {
     const key = v.facility_id || v.facility_name
@@ -805,61 +802,37 @@ function MapRoutePage({ list, role, userId }) {
   })
   function isDue(f) { return (firstDone[f.id] || firstDone[f.name]) && !(laterDone[f.id] || laterDone[f.name]) }
   const dueCountAll = list.filter(isDue).length
-  const scopePool = filtered.filter(f => scope === 'due' ? isDue(f) : true)
-  const planPool = scopePool.slice(0, Math.max(1, days) * Math.max(1, perDay))
+  const scopePool = filtered.filter(f => (scope === 'due' ? isDue(f) : true))
+  const planPool = scopePool.filter(hasCoords).slice(0, Math.max(1, days) * Math.max(1, perDay))
+  const unmapped = scopePool.length - scopePool.filter(hasCoords).length
 
-  function facByName(n) { return list.find(f => f.name === n) || list.find(f => (f.name || '').toLowerCase() === (n || '').toLowerCase()) }
   function dayMapsUrl(items) {
-    // An unconfirmed pin is only a neighbourhood estimate, so navigate by address instead.
     const stops = (items || []).map(f => { if (!f) return null; if (hasCoords(f) && f.geo_confirmed !== false) return f.lat + ',' + f.lng; return encodeURIComponent(f.name + (f.address ? ', ' + f.address : '') + ', Lagos') }).filter(Boolean)
     return stops.length ? 'https://www.google.com/maps/dir/' + stops.join('/') : ''
   }
-  async function planRoutes() {
-    setPlanErr('')
-    if (!planPool.length) { setPlanErr(scope === 'due' ? 'Nothing is due for a visit in this view.' : 'No facilities in this view to plan.'); return }
-    setPlanBusy(true); setPlan(null)
-    // Send a numbered list and ask for numbers back. Names are long, numbers are not,
-    // so the answer always fits and nothing is lost to a mis-typed facility name.
-    const facs = planPool.map((f, i) => ({ i, n: f.name, a: f.address || '', lg: f.area || '', ll: hasCoords(f) ? (Number(f.lat).toFixed(4) + ',' + Number(f.lng).toFixed(4)) : '' }))
-    const sys = 'You plan daily routes for a Lagos health-facility monitoring team. Split the numbered facilities into ' + days + ' day(s) of about ' + perDay + ' each. Put facilities that are close together (same neighbourhood, street or locality) on the same day, and order each day sensibly from start to finish. Judge proximity from the address locality (field a) and from lat/lng (field ll) when present. Reply with ONLY compact JSON, no prose, no code fences, referring to facilities by their number i: {"days":[{"day":1,"area":"locality","f":[3,7,12]}]}. Use every number exactly once.'
-    const budget = Math.min(8000, 700 + facs.length * 10)
-    const r = await askAI({ system: sys, prompt: JSON.stringify(facs), max_tokens: budget })
-    setPlanBusy(false)
-    if (!r.ok) {
-      setPlanErr(r.reason === 'ai_not_configured'
-        ? 'AI is not switched on. Add ANTHROPIC_API_KEY in Vercel, then redeploy.'
-        : 'The planner could not respond: ' + (r.reason || 'unknown error'))
-      return
-    }
-    try {
-      let txt = (r.text || '').replace(/```json/gi, '').replace(/```/g, '').trim()
-      const i = txt.indexOf('{'), j = txt.lastIndexOf('}')
-      if (i < 0 || j <= i) throw new Error('no json')
-      txt = txt.slice(i, j + 1)
-      const obj = JSON.parse(txt)
-      const raw = Array.isArray(obj) ? obj : (obj.days || [])
-      const used = {}
-      const out = raw.map((d, k) => {
-        const src = d.f || d.facilities || []
-        const items = src.map(x => (typeof x === 'number' ? planPool[x] : facByName(x))).filter(f => f && !used[f.id] && (used[f.id] = true))
-        return { day: d.day || k + 1, area: d.area || '', items }
-      }).filter(d => d.items.length)
-      if (!out.length) { setPlanErr('The planner returned nothing usable. Try again.'); return }
-      const placed = out.reduce((n, d) => n + d.items.length, 0)
-      setPlan(out)
-      toast(out.length + ' day' + (out.length === 1 ? '' : 's') + ' planned, ' + placed + ' stops.')
-      if (r.truncated) setPlanErr('The answer was cut short, so ' + (planPool.length - placed) + ' facilities were left out. Plan fewer days to include them.')
-    } catch (e) { setPlanErr(r.truncated ? 'The answer was cut short. Try fewer days.' : 'Could not read the plan. Please try again.') }
+  function dayLabel(items) {
+    const c = {}; items.forEach(f => { const l = localityOf(f); if (l) c[l] = (c[l] || 0) + 1 })
+    const best = Object.keys(c).sort((a, b) => c[b] - c[a])[0]
+    return best || (items[0] && items[0].area) || ''
+  }
+  function planRoutes() {
+    setPlanErr(''); setPlan(null); setOpenDay(0)
+    if (!planPool.length) { setPlanErr(scope === 'due' ? 'Nothing is due for a visit here.' : 'No mapped facilities in this view.'); return }
+    const groups = clusterDays(planPool, days, perDay)
+    if (!groups.length) { setPlanErr('Could not group these facilities. Check they have map pins.'); return }
+    const out = groups.map((items, i) => ({ day: i + 1, area: dayLabel(items), items }))
+    setPlan(out)
+    toast(out.length + ' day' + (out.length === 1 ? '' : 's') + ' planned, ' + out.reduce((n, d) => n + d.items.length, 0) + ' stops.')
   }
   async function assignDay(key, d) {
     const f = assignForm[key] || {}
     if (!f.monitor) { toast('Choose who this day is for.', 'warn'); return }
     if (!f.date) { toast('Choose the visit date.', 'warn'); return }
-    const ids = (d.items || []).map(f => f.id).filter(Boolean)
-    if (!ids.length) { toast('No matching facilities to assign.', 'warn'); return }
+    const ids = (d.items || []).map(x => x.id).filter(Boolean)
+    if (!ids.length) { toast('No facilities to assign.', 'warn'); return }
     setAssignBusy(key)
     try {
-      await ASG.add({ visit_date: f.date, area: d.area || (area === 'all' ? 'Mixed' : area), facility_ids: ids, monitor: f.monitor, note: 'AI route plan, ' + ids.length + ' stops' }, userId)
+      await ASG.add({ visit_date: f.date, area: d.area || (area === 'all' ? 'Mixed' : area), facility_ids: ids, monitor: f.monitor, note: 'Route plan, ' + ids.length + ' stops' }, userId)
       toast(ids.length + ' facilities assigned to ' + f.monitor + ' for ' + f.date + '.')
     } catch (e) { toast('Could not save the assignment.', 'err') } finally { setAssignBusy('') }
   }
@@ -873,128 +846,116 @@ function MapRoutePage({ list, role, userId }) {
     return () => { m.remove(); mapObj.current = null }
   }, [])
 
+  // The map follows what you are looking at: the whole area, or the day you opened.
+  const focus = (plan && plan[openDay]) ? plan[openDay].items : plotted
+  const focusRouted = !!(plan && plan[openDay])
   useEffect(() => {
     const m = mapObj.current, lg = layerRef.current; if (!m || !lg) return
     lg.clearLayers()
-    ordered.forEach((f, i) => {
-      const mk = L.marker([f.lat, f.lng], { icon: pinIcon(colorMap[f.area || 'Unassigned'] || '#6D4B8E', routed ? i + 1 : null) })
-      mk.bindPopup('<strong>' + (f.name || '') + '</strong><br>' + [f.category, f.area].filter(Boolean).join(' \u00b7 '))
+    focus.forEach((f, i) => {
+      const mk = L.marker([f.lat, f.lng], { icon: pinIcon(focusRouted ? '#6D4B8E' : (colorMap[f.area || 'Unassigned'] || '#6D4B8E'), focusRouted ? i + 1 : null) })
+      mk.bindPopup('<strong>' + (f.name || '') + '</strong><br>' + [f.category, f.area, f.phone].filter(Boolean).join(' \u00b7 '))
       mk.addTo(lg)
     })
-    if (routed && ordered.length > 1) L.polyline(ordered.map(f => [f.lat, f.lng]), { color: '#6D4B8E', weight: 3, opacity: .8, dashArray: '6 6' }).addTo(lg)
-    if (ordered.length) { try { m.fitBounds(ordered.map(f => [f.lat, f.lng]), { padding: [40, 40], maxZoom: 14 }) } catch (e) {} }
-  }, [area, routed, list.length])
+    if (focusRouted && focus.length > 1) L.polyline(focus.map(f => [f.lat, f.lng]), { color: '#6D4B8E', weight: 3, opacity: .85, dashArray: '6 6' }).addTo(lg)
+    if (focus.length) { try { m.fitBounds(focus.map(f => [f.lat, f.lng]), { padding: [40, 40], maxZoom: focusRouted ? 15 : 13 }) } catch (e) {} }
+    setTimeout(() => m.invalidateSize(), 120)
+  }, [area, list.length, plan, openDay])
 
-  return (<div className="page map-page">
-    <div className="ptitle"><div><p className="eyebrow">Map & route</p><h2>{plotted.length} mapped in {area === 'all' ? 'all areas' : area}</h2></div>
+  return (<div className="page mr-page">
+    <div className="ptitle">
+      <div><p className="eyebrow">Map &amp; route</p><h2>{plotted.length} mapped{area === 'all' ? '' : ' in ' + area}</h2></div>
       <div className="ptools">
-        <select className="sel" value={area} onChange={e => { setArea(e.target.value); setRouted(false) }}>
+        <select className="sel" value={area} onChange={e => { setArea(e.target.value); setPlan(null) }}>
           <option value="all">All areas</option>{areas.map(a => <option key={a} value={a}>{a}</option>)}
         </select>
-        <button className="btn small primary" onClick={() => setRouted(r => !r)} disabled={plotted.length < 2}>{routed ? 'Clear route' : 'Build route'}</button>
-        {routed && gmaps && <a className="btn small ghost" href={gmaps} target="_blank" rel="noreferrer">Open in Google Maps</a>}
       </div>
     </div>
-    {plotted.length === 0 && <p className="warnline">No mapped facilities in this view. Add coordinates on the Facilities tab.</p>}
-    <div className="map-frame"><div ref={mapRef} className="leaflet-holder" /></div>
-    {routed && ordered.length > 0 && (<ol className="route-list">{ordered.map((f, i) => (<li key={f.id || i}><span className="rn">{i + 1}</span><span>{f.name}</span><em>{f.area}</em></li>))}</ol>)}
 
-    <div className="planner">
-      <SectionHead eyebrow="AI" title="Daily route planner" />
-      <p className="hintline">Groups the facilities in this view into day-by-day routes by proximity, so the team finishes faster each day and covers everywhere with less travel.</p>
-      <div className="planner-controls">
-<label className="field sm inline"><span>Plan</span><select value={scope} onChange={e => setScope(e.target.value)}><option value="due">Due for a visit ({dueCountAll})</option><option value="all">Everything in view ({filtered.length})</option></select></label>
-        <label className="field sm inline"><span>Days</span><input type="number" min="1" max="10" value={days} onChange={e => setDays(Math.max(1, Math.min(10, parseInt(e.target.value, 10) || 5)))} /></label>
-        <label className="field sm inline"><span>Per day</span><input type="number" min="4" max="30" value={perDay} onChange={e => setPerDay(Math.max(4, Math.min(30, parseInt(e.target.value, 10) || 14)))} /></label>
-        <button className="btn small primary" onClick={planRoutes} disabled={planBusy}><span className="ai-spark" aria-hidden="true">✦</span>{planBusy ? 'Planning\u2026' : 'Plan daily routes'}</button>
-        <span className="hintline">{planPool.length} facilities, {scopePool.length > planPool.length ? (scopePool.length - planPool.length) + ' more after this' : 'all of them'}</span>
-      </div>
-      {planErr && <p className="warnline">{planErr}</p>}
-            {plan && plan.length > 0 && <div className="plan-days">{plan.map((d, i) => {
-        const url = dayMapsUrl(d.items || [])
-        const dayKey = 'd' + i
-        return (<div className="plan-day" key={i}>
-          <div className="plan-day-head"><h4>Day {d.day || i + 1}{d.area ? ' \u00b7 ' + d.area : ''}</h4><span className="plan-count">{(d.items || []).length} stops</span>{url && <a className="mini" href={url} target="_blank" rel="noreferrer">Open in Google Maps</a>}</div>
-          <ol className="plan-list">{(d.items || []).map((f, j) => (<li key={j}><span className="pf-name">{f.name}</span>{f.address && <em>{f.address}</em>}{f.phone && <em>{f.phone}</em>}</li>))}</ol>
-          {canAssign && <div className="plan-assign">
-            <select className="sel" value={(assignForm[dayKey] || {}).monitor || ''} onChange={e => setAssignForm(s => ({ ...s, [dayKey]: { ...(s[dayKey] || {}), monitor: e.target.value } }))}>
-              <option value="">Assign to\u2026</option>{MONITORS.map(m => <option key={m} value={m}>{m}</option>)}
-            </select>
-            <input type="date" className="sel" value={(assignForm[dayKey] || {}).date || ''} onChange={e => setAssignForm(s => ({ ...s, [dayKey]: { ...(s[dayKey] || {}), date: e.target.value } }))} />
-            <button className="btn small primary" onClick={() => assignDay(dayKey, d)} disabled={assignBusy === dayKey}>{assignBusy === dayKey ? 'Saving\u2026' : 'Assign day'}</button>
-          </div>}
-        </div>)
-      })}</div>}
-    </div>
-
-    {isHQ && (<div className="hq-oversight">
-      <SectionHead eyebrow="Oversight" title="Coverage & status" />
-      <div className="hq-stats">
-        <div className="hq-stat"><span className="v">{list.length}</span><span className="l">Facilities</span></div>
-        <div className="hq-stat"><span className="v">{list.filter(hasCoords).length}</span><span className="l">Mapped</span></div>
-        <div className="hq-stat"><span className="v">{areas.length}</span><span className="l">Areas</span></div>
-        <div className="hq-stat"><span className="v">{visitedCount}</span><span className="l">Visited</span></div>
-        <div className="hq-stat"><span className="v">{assessedCount}</span><span className="l">Assessed</span></div>
-        <div className="hq-stat"><span className="v">{dueCount}</span><span className="l">Re-inspections due</span></div>
-      </div>
-      <div className="list-tools"><SearchBox value={q} onChange={setQ} placeholder="Search facilities…" /></div>
-      <div className="hq-table">
-        <div className="hq-tr hq-th"><span>Facility</span><span>Area</span><span>Mapped</span><span>Last visit</span><span>Status</span></div>
-        {tableRows.length === 0 ? <div className="hq-tr"><span className="hq-name">No facilities match your search.</span></div> :
-          tableRows.map(f => { const v = facVisit(f); return (
-            <div className="hq-tr" key={f.id}><span className="hq-name">{f.name}</span><span>{f.area || '\u2014'}</span><span>{hasCoords(f) ? 'Yes' : 'No'}</span><span>{v ? (v.arrival_time || v.created_at || '').slice(0, 10) : '\u2014'}</span><span className={'hq-status s-' + facStatus(f).toLowerCase().replace(/[^a-z]/g, '')}>{facStatus(f)}</span></div>
-          ) })}
-      </div>
-    </div>)}
-  </div>)
-}
-
-/* ---------- assign (team leader) ---------- */
-function AssignPage({ list, userId }) {
-  const areas = Array.from(new Set(list.map(f => f.area || 'Unassigned'))).sort()
-  const [date, setDate] = useState(''); const [area, setArea] = useState(areas[0] || '')
-  const [picked, setPicked] = useState({}); const [note, setNote] = useState('')
-  const [busy, setBusy] = useState(false); const [msg, setMsg] = useState(''); const [saved, setSaved] = useState([])
-
-  useEffect(() => { ASG.list().then(setSaved).catch(() => {}) }, [])
-  const inArea = list.filter(f => (f.area || 'Unassigned') === area)
-  function toggle(id) { setPicked(p => ({ ...p, [id]: !p[id] })) }
-
-  async function save() {
-    const ids = Object.keys(picked).filter(k => picked[k])
-    if (!date) { setMsg('Choose a visit date.'); return }
-    if (!ids.length) { setMsg('Select at least one facility.'); return }
-    setBusy(true); setMsg('')
-    try {
-      const rec = await ASG.add({ visit_date: date, area, facility_ids: ids, note: note.trim() }, userId)
-      setSaved(s => [rec].concat(s)); setPicked({}); setNote(''); setMsg('Assignment saved.'); toast('Assignment saved.')
-    } catch (e) { setMsg(e.message || 'Could not save the assignment.') } finally { setBusy(false) }
-  }
-
-  return (<div className="page">
-    <div className="ptitle"><div><p className="eyebrow">Assign</p><h2>Plan a day of visits</h2></div></div>
-    {msg && <p className="auth-msg block">{msg}</p>}
-    <div className="assign-grid">
-      <div className="assign-form">
-        <div className="fgrid two">
-          <label className="field sm"><span>Visit date</span><input type="date" value={date} onChange={e => setDate(e.target.value)} /></label>
-          <label className="field sm"><span>Area</span><select value={area} onChange={e => { setArea(e.target.value); setPicked({}) }}>{areas.map(a => <option key={a} value={a}>{a}</option>)}</select></label>
+    <div className="mr-grid">
+      <div className="mr-mapcol">
+        <div className="map-frame"><div ref={mapRef} className="leaflet-holder" /></div>
+        <div className="mr-legend">
+          {focusRouted
+            ? <><span className="lg-dot" style={{ background: '#6D4B8E' }} /><span>Day {plan[openDay].day} route, {focus.length} stops in order</span><button className="linkbtn subtle" onClick={() => setOpenDay(-1)}>Show all</button></>
+            : areas.map(a => <span className="lg-item" key={a}><span className="lg-dot" style={{ background: colorMap[a] }} />{a}</span>)}
         </div>
-        <p className="pick-label">Facilities in {area || 'this area'}</p>
-        <div className="pick-list">
-          {inArea.length === 0 ? <p className="empty sm">No facilities here yet.</p> : inArea.map(f => (
-            <label className="pick-row" key={f.id}><input type="checkbox" checked={!!picked[f.id]} onChange={() => toggle(f.id)} /><span>{f.name}</span>{!hasCoords(f) && <em className="nocoord">no coords</em>}</label>
-          ))}
+        {plotted.length === 0 && <p className="warnline">Nothing mapped here yet. Use "Map the facilities" on the Facilities tab.</p>}
+      </div>
+
+      <aside className="mr-side">
+        <div className="seg mr-tabs">
+          <button type="button" className={'segb' + (tab === 'plan' ? ' on' : '')} onClick={() => setTab('plan')}>Plan days</button>
+          {isHQ && <button type="button" className={'segb' + (tab === 'cover' ? ' on' : '')} onClick={() => setTab('cover')}>Coverage</button>}
         </div>
-        <label className="field sm"><span>Team note</span><input value={note} onChange={e => setNote(e.target.value)} placeholder="e.g. Team A, start 9am" /></label>
-        <button className="btn small primary" onClick={save} disabled={busy}>{busy ? 'Saving\u2026' : 'Save assignment'}</button>
-      </div>
-      <div className="assign-saved">
-        <p className="pick-label">Planned</p>
-        {saved.length === 0 ? <p className="empty sm">No assignments yet.</p> : saved.map((a, i) => (
-          <div className="saved-card" key={a.id || i}><strong>{a.visit_date}</strong><span>{a.area}</span><em>{(a.facility_ids || []).length} facilities</em>{a.note ? <p>{a.note}</p> : null}</div>
-        ))}
-      </div>
+
+        {tab === 'plan' && (<>
+          <div className="mr-card">
+            <div className="mr-controls">
+              <label className="field sm"><span>Facilities</span>
+                <select value={scope} onChange={e => { setScope(e.target.value); setPlan(null) }}>
+                  <option value="due">Due for a visit ({dueCountAll})</option>
+                  <option value="all">Everything in view ({filtered.length})</option>
+                </select>
+              </label>
+              <div className="mr-two">
+                <label className="field sm"><span>Days</span><input type="number" min="1" max="10" value={days} onChange={e => { setDays(Math.max(1, Math.min(10, parseInt(e.target.value, 10) || 5))); setPlan(null) }} /></label>
+                <label className="field sm"><span>Per day</span><input type="number" min="4" max="30" value={perDay} onChange={e => { setPerDay(Math.max(4, Math.min(30, parseInt(e.target.value, 10) || 14))); setPlan(null) }} /></label>
+              </div>
+            </div>
+            <button className="btn primary wide" onClick={planRoutes} disabled={!planPool.length}>Plan {Math.min(days, Math.ceil(planPool.length / Math.max(1, perDay)))} day{planPool.length && Math.min(days, Math.ceil(planPool.length / Math.max(1, perDay))) === 1 ? '' : 's'}</button>
+            <p className="hintline">{planPool.length} of {scopePool.length} will be planned{scopePool.length > planPool.length ? ', the rest next run' : ''}.{unmapped ? ' ' + unmapped + ' have no pin yet.' : ''}</p>
+          </div>
+
+          {planErr && <p className="warnline">{planErr}</p>}
+
+          {plan && <div className="mr-days">{plan.map((d, i) => {
+            const url = dayMapsUrl(d.items); const dayKey = 'd' + i; const open = openDay === i
+            return (<div className={'mr-day' + (open ? ' open' : '')} key={i}>
+              <button className="mr-day-head" onClick={() => setOpenDay(open ? -1 : i)}>
+                <span className="mr-day-n">{d.day}</span>
+                <span className="mr-day-t"><strong>{d.area || 'Day ' + d.day}</strong><em>{d.items.length} stops</em></span>
+                <span className="mr-day-c">{open ? '\u2212' : '+'}</span>
+              </button>
+              {open && (<div className="mr-day-body">
+                <ol className="plan-list">{d.items.map((f, j) => (<li key={j}><span className="pf-name">{f.name}</span>{f.address && <em>{f.address}</em>}{f.phone && <em className="pf-tel">{f.phone}</em>}</li>))}</ol>
+                <div className="mr-day-actions">
+                  {url && <a className="btn small ghost" href={url} target="_blank" rel="noreferrer">Open in Google Maps</a>}
+                </div>
+                {canAssign && <div className="plan-assign">
+                  <select className="sel" value={(assignForm[dayKey] || {}).monitor || ''} onChange={e => setAssignForm(s => ({ ...s, [dayKey]: { ...(s[dayKey] || {}), monitor: e.target.value } }))}>
+                    <option value="">Assign to&#8230;</option>{MONITORS.map(m => <option key={m} value={m}>{m}</option>)}
+                  </select>
+                  <input type="date" className="sel" value={(assignForm[dayKey] || {}).date || ''} onChange={e => setAssignForm(s => ({ ...s, [dayKey]: { ...(s[dayKey] || {}), date: e.target.value } }))} />
+                  <button className="btn small primary" onClick={() => assignDay(dayKey, d)} disabled={assignBusy === dayKey}>{assignBusy === dayKey ? 'Saving\u2026' : 'Assign'}</button>
+                </div>}
+              </div>)}
+            </div>)
+          })}</div>}
+
+          {!plan && !planErr && <p className="empty sm">Set the numbers above and plan the days. Each day is grouped by how close the facilities are to each other.</p>}
+        </>)}
+
+        {tab === 'cover' && isHQ && (<>
+          <div className="mr-stats">
+            <div className="mr-stat"><span className="v">{list.length}</span><span className="l">Facilities</span></div>
+            <div className="mr-stat"><span className="v">{list.filter(hasCoords).length}</span><span className="l">Mapped</span></div>
+            <div className="mr-stat"><span className="v">{visitedCount}</span><span className="l">Visited</span></div>
+            <div className="mr-stat"><span className="v">{assessedCount}</span><span className="l">Assessed</span></div>
+            <div className="mr-stat"><span className="v">{dueCountAll}</span><span className="l">Due</span></div>
+            <div className="mr-stat"><span className="v">{overdueCount}</span><span className="l">Re-inspect</span></div>
+          </div>
+          <SearchBox value={q} onChange={setQ} placeholder="Search facilities&#8230;" />
+          <div className="hq-table" style={{ marginTop: 10 }}>
+            <div className="hq-tr hq-th"><span>Facility</span><span>Area</span><span>Last visit</span><span>Status</span></div>
+            {tableRows.length === 0 ? <div className="hq-tr"><span className="hq-name">Nothing matches.</span></div> :
+              tableRows.slice(0, 200).map(f => { const v = facVisit(f); return (
+                <div className="hq-tr" key={f.id}><span className="hq-name">{f.name}</span><span>{f.area || '\u2014'}</span><span>{v ? (v.arrival_time || v.created_at || '').slice(0, 10) : '\u2014'}</span><span className={'hq-status s-' + facStatus(f).toLowerCase().replace(/[^a-z]/g, '')}>{facStatus(f)}</span></div>
+              ) })}
+          </div>
+          {tableRows.length > 200 && <p className="hintline">Showing the first 200. Use search to narrow it.</p>}
+        </>)}
+      </aside>
     </div>
   </div>)
 }
@@ -2931,6 +2892,46 @@ const css = `
 .realms .plan-list li { font-size:13px; color:#4A3B66; margin-bottom:5px; }
 .realms .plan-list .pf-name { font-weight:500; color:#3A2B54; }
 .realms .plan-list em { display:block; font-style:normal; color:#8A7AA6; font-size:12px; }
+
+/* ===== Map & Route, redesigned ===== */
+.realms .mr-page { max-width:1800px; }
+.realms .mr-grid { display:grid; grid-template-columns:minmax(0,1.55fr) minmax(340px,1fr); gap:18px; align-items:start; }
+.realms .mr-mapcol { position:sticky; top:84px; }
+.realms .mr-mapcol .map-frame { border-radius:var(--r-lg); overflow:hidden; border:1px solid var(--line); box-shadow:var(--e2); }
+.realms .mr-mapcol .leaflet-holder { height:min(66vh,620px); }
+.realms .mr-legend { display:flex; align-items:center; flex-wrap:wrap; gap:14px; padding:10px 4px 0; font-size:12.5px; color:#5A4C74; }
+.realms .lg-item { display:inline-flex; align-items:center; gap:7px; }
+.realms .lg-dot { width:9px; height:9px; border-radius:50%; display:inline-block; }
+.realms .mr-side { display:flex; flex-direction:column; gap:12px; min-width:0; }
+.realms .mr-tabs { width:100%; }
+.realms .mr-tabs .segb { flex:1; }
+.realms .mr-card { background:#fff; border:1px solid var(--line); border-radius:var(--r-lg); padding:16px; box-shadow:var(--e1); }
+.realms .mr-controls { display:grid; gap:10px; margin-bottom:12px; }
+.realms .mr-two { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+.realms .mr-days { display:grid; gap:8px; }
+.realms .mr-day { background:#fff; border:1px solid var(--line); border-radius:var(--r-md); overflow:hidden; transition:border-color .15s ease, box-shadow .15s ease; }
+.realms .mr-day.open { border-color:var(--p); box-shadow:var(--e2); }
+.realms .mr-day-head { width:100%; display:flex; align-items:center; gap:12px; padding:12px 14px; background:none; border:0; cursor:pointer; text-align:left; min-height:var(--tap); }
+.realms .mr-day-n { flex:0 0 auto; width:28px; height:28px; border-radius:50%; background:var(--lav2); color:var(--p-deep); display:grid; place-items:center; font-size:13px; font-weight:700; }
+.realms .mr-day.open .mr-day-n { background:var(--p); color:#fff; }
+.realms .mr-day-t { flex:1; min-width:0; display:flex; flex-direction:column; }
+.realms .mr-day-t strong { font-size:14px; color:#3A2B54; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.realms .mr-day-t em { font-style:normal; font-size:12px; color:#8A7AA6; }
+.realms .mr-day-c { color:var(--v); font-size:18px; line-height:1; }
+.realms .mr-day-body { padding:0 14px 14px; border-top:1px solid var(--lav2); }
+.realms .mr-day-body .plan-list { margin-top:12px; max-height:320px; overflow-y:auto; }
+.realms .mr-day-actions { display:flex; gap:8px; margin:12px 0 0; }
+.realms .pf-tel { color:var(--p-mid) !important; }
+.realms .mr-stats { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; }
+.realms .mr-stat { background:#fff; border:1px solid var(--line); border-radius:var(--r-sm); padding:12px 8px; text-align:center; }
+.realms .mr-stat .v { display:block; font-family:Lora,serif; font-size:20px; font-weight:700; color:var(--p-deep); font-variant-numeric:tabular-nums; }
+.realms .mr-stat .l { display:block; font-size:10.5px; color:#8A7AA6; text-transform:uppercase; letter-spacing:.05em; margin-top:2px; }
+.realms .mr-side .hq-tr { grid-template-columns:2fr 1fr 1fr 1fr; font-size:12.5px; padding:9px 12px; }
+@media (max-width:1100px){
+  .realms .mr-grid { grid-template-columns:1fr; }
+  .realms .mr-mapcol { position:static; }
+  .realms .mr-mapcol .leaflet-holder { height:44vh; }
+}
 .realms .appr-chip { font-size:11.5px; border-radius:10px; padding:2px 9px; border:1px solid; }
 .realms .appr-chip.pending { background:#FBF3E6; color:#9A5B12; border-color:#F0D9B5; }
 .realms .appr-chip.approved { background:#E6F4EA; color:#2E7D46; border-color:#BFE3CB; }

@@ -24,6 +24,64 @@ export function orderRoute(list) {
   return route
 }
 
+/* ---------- daily route clustering ----------
+   With real coordinates we can work the geography out directly: group the
+   facilities into k compact clusters (k-means), keep each within the day's
+   capacity, then order each day nearest-neighbour. Exact, instant, and it
+   cannot be truncated the way an AI answer can. */
+export function clusterDays(items, k, cap) {
+  const pts = (items || []).filter(f => typeof f.lat === 'number' && typeof f.lng === 'number')
+  if (!pts.length) return []
+  k = Math.max(1, Math.min(k, pts.length))
+  // Seed with points that are far apart, so clusters do not collapse together.
+  const cents = [{ lat: pts[0].lat, lng: pts[0].lng }]
+  while (cents.length < k) {
+    let best = pts[0], bd = -1
+    for (const p of pts) {
+      let d = Infinity
+      for (const c of cents) { const x = haversine(c, p); if (x < d) d = x }
+      if (d > bd) { bd = d; best = p }
+    }
+    cents.push({ lat: best.lat, lng: best.lng })
+  }
+  let assign = new Array(pts.length).fill(0)
+  for (let it = 0; it < 14; it++) {
+    let moved = false
+    for (let j = 0; j < pts.length; j++) {
+      let bi = 0, bd = Infinity
+      for (let i = 0; i < k; i++) { const d = haversine(cents[i], pts[j]); if (d < bd) { bd = d; bi = i } }
+      if (assign[j] !== bi) { assign[j] = bi; moved = true }
+    }
+    for (let i = 0; i < k; i++) {
+      const g = pts.filter((_, j) => assign[j] === i)
+      if (g.length) cents[i] = { lat: g.reduce((s, x) => s + x.lat, 0) / g.length, lng: g.reduce((s, x) => s + x.lng, 0) / g.length }
+    }
+    if (!moved) break
+  }
+  const groups = Array.from({ length: k }, () => [])
+  pts.forEach((p, j) => groups[assign[j]].push(p))
+  // Keep each day within capacity: shed the point furthest from its centre to
+  // the nearest day that still has room.
+  if (cap && cap > 0) {
+    for (let pass = 0; pass < 6; pass++) {
+      let changed = false
+      for (let i = 0; i < k; i++) {
+        while (groups[i].length > cap) {
+          let fi = 0, fd = -1
+          groups[i].forEach((p, idx) => { const d = haversine(cents[i], p); if (d > fd) { fd = d; fi = idx } })
+          const p = groups[i][fi]
+          let ti = -1, td = Infinity
+          for (let t = 0; t < k; t++) { if (t === i || groups[t].length >= cap) continue; const d = haversine(cents[t], p); if (d < td) { td = d; ti = t } }
+          if (ti < 0) break
+          groups[i].splice(fi, 1); groups[ti].push(p); changed = true
+        }
+      }
+      if (!changed) break
+    }
+  }
+  return groups.filter(g => g.length).map(g => orderRoute(g))
+}
+
 export function googleMapsDirUrl(ordered) {
   const pts = ordered.filter(f => typeof f.lat === 'number' && typeof f.lng === 'number')
   if (!pts.length) return ''
