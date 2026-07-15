@@ -1,6 +1,8 @@
 // RHSC AI endpoint. Thin proxy to the Claude Messages API.
 // Set ANTHROPIC_API_KEY (and optionally AI_MODEL) in Vercel to enable AI features.
 // Without the key, every AI feature degrades gracefully to "not configured".
+export const maxDuration = 60 // AI calls can take longer than the 10s default
+
 export default async function handler(req, res) {
   if (req.method === 'OPTIONS') { res.setHeader('Allow', 'POST'); res.status(200).end(); return }
   if (req.method !== 'POST') { res.status(405).json({ ok: false, reason: 'method_not_allowed' }); return }
@@ -27,7 +29,7 @@ export default async function handler(req, res) {
       })
     })
     const data = await r.json().catch(() => ({}))
-    if (!r.ok) { res.status(200).json({ ok: false, reason: 'api_error', detail: data }); return }
+    if (!r.ok) { const m = (data && data.error && data.error.message) || ('HTTP ' + r.status); res.status(200).json({ ok: false, reason: m }); return }
     const text = (data.content || []).filter(b => b.type === 'text').map(b => b.text).join('\n').trim()
     res.status(200).json({ ok: true, text })
   } catch (e) { res.status(200).json({ ok: false, reason: 'exception', message: String((e && e.message) || e) }) }
