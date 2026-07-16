@@ -4,7 +4,7 @@ import 'leaflet/dist/leaflet.css'
 import { supabase, MODE } from './supabaseClient.js'
 import { facilities as FAC, assignments as ASG, visits as VIS, notifications as NOTIF, calls as CALLS, access as ACC, facilitiesFromCSV, orderRoute, clusterDays, googleMapsDirUrl, geocode, uploadEvidence, sendNotify, askAI, seedSampleData, clearAllData } from './data.js'
 
-const BUILD = 'field-2026-07-15d'
+const BUILD = 'field-2026-07-15f'
 
 /*
   REALMS FIELD — Stages 1 to 3 (single-file App.jsx + supabaseClient.js + data.js)
@@ -57,12 +57,15 @@ const SERVICES = [
 const IMPACT_STATS = [ { v: '25+', l: 'Years of experience' }, { v: '1000+', l: 'Facilities monitored' }, { v: '20+', l: 'Projects delivered' } ]
 const PARTNERS = ['Vatebra Limited', 'Lagos State Ministry of Health', 'HEFAMAA']
 const CONTACT = {
-  email: 'info@realmsconsulting.com', phone: '[Imade Forte phone]', whatsapp: '',
+  email: 'info@realmsconsulting.com', phone: '+234 704 799 9337', whatsapp: '+234 704 799 9337',
   address: '21 Fatai Arobieke Street, off Admiralty Way, Lekki Phase 1, Lagos',
   hours: 'Monday to Friday, 9am to 5pm'
 }
 function isPlaceholder(v) { return !v || /^\[/.test(v) }
-function getSettings() { try { const s = JSON.parse(localStorage.getItem('realms_settings') || '{}'); if (!s.cs_email) s.cs_email = CONTACT.email; return s } catch (e) { return { cs_email: CONTACT.email } } }
+function getSettings() {
+  const d = { cs_email: CONTACT.email, cs_phone: CONTACT.phone, cs_whatsapp: CONTACT.whatsapp }
+  try { const s = JSON.parse(localStorage.getItem('realms_settings') || '{}'); return { ...d, ...s, cs_email: s.cs_email || d.cs_email, cs_phone: s.cs_phone || d.cs_phone, cs_whatsapp: s.cs_whatsapp || d.cs_whatsapp } } catch (e) { return d }
+}
 function saveSettings(s) { try { localStorage.setItem('realms_settings', JSON.stringify(s)) } catch (e) {} }
 const ICONS = {
   mail: 'M3 5h18v14H3zM3 6l9 7 9-7',
@@ -781,6 +784,8 @@ function MapRoutePage({ list, role, userId }) {
   const isHQ = role === 'rhsc_hq'
   useEffect(() => { VIS.list().then(setVisits).catch(() => {}) }, [])
 
+  const areaCount = {}; list.forEach(f => { const a = f.area || 'Unassigned'; areaCount[a] = (areaCount[a] || 0) + 1 })
+  function pickArea(a) { setArea(a); setPlan(null); setPlanErr(''); setOpenDay(-1) }
   const filtered = (area === 'all' ? list : list.filter(f => (f.area || 'Unassigned') === area))
   const plotted = filtered.filter(hasCoords)
 
@@ -788,10 +793,10 @@ function MapRoutePage({ list, role, userId }) {
   visits.forEach(v => { const key = v.facility_id || v.facility_name; if (!key) return; const prev = visByFac[key]; if (!prev || (v.arrival_time || v.created_at || '') > (prev.arrival_time || prev.created_at || '')) visByFac[key] = v })
   function facVisit(f) { return visByFac[f.id] || visByFac[f.name] }
   function facStatus(f) { const v = facVisit(f); return v ? (v.status === 'debriefed' ? 'Debriefed' : v.status === 'monitored' ? 'Assessed' : 'Engaged') : 'Not visited' }
-  const visitedCount = list.filter(facVisit).length
-  const assessedCount = list.filter(f => { const v = facVisit(f); return v && (v.status === 'monitored' || v.status === 'debriefed') }).length
-  const overdueCount = visits.filter(v => v.debrief && v.debrief.remediation_deadline && daysUntil(v.debrief.remediation_deadline) != null && daysUntil(v.debrief.remediation_deadline) < 7).length
-  const tableRows = list.filter(f => matchQ(f, q))
+  const visitedCount = filtered.filter(facVisit).length
+  const assessedCount = filtered.filter(f => { const v = facVisit(f); return v && (v.status === 'monitored' || v.status === 'debriefed') }).length
+  const overdueCount = visits.filter(v => (area === 'all' || (v.area || 'Unassigned') === area) && v.debrief && v.debrief.remediation_deadline && daysUntil(v.debrief.remediation_deadline) != null && daysUntil(v.debrief.remediation_deadline) < 7).length
+  const tableRows = filtered.filter(f => matchQ(f, q))
 
   const firstDone = {}, laterDone = {}
   visits.forEach(v => {
@@ -801,7 +806,7 @@ function MapRoutePage({ list, role, userId }) {
     else laterDone[key] = true
   })
   function isDue(f) { return (firstDone[f.id] || firstDone[f.name]) && !(laterDone[f.id] || laterDone[f.name]) }
-  const dueCountAll = list.filter(isDue).length
+  const dueCountAll = filtered.filter(isDue).length
   const scopePool = filtered.filter(f => (scope === 'due' ? isDue(f) : true))
   const planPool = scopePool.filter(hasCoords).slice(0, Math.max(1, days) * Math.max(1, perDay))
   const unmapped = scopePool.length - scopePool.filter(hasCoords).length
@@ -866,9 +871,10 @@ function MapRoutePage({ list, role, userId }) {
     <div className="ptitle">
       <div><p className="eyebrow">Map &amp; route</p><h2>{plotted.length} mapped{area === 'all' ? '' : ' in ' + area}</h2></div>
       <div className="ptools">
-        <select className="sel" value={area} onChange={e => { setArea(e.target.value); setPlan(null) }}>
-          <option value="all">All areas</option>{areas.map(a => <option key={a} value={a}>{a}</option>)}
-        </select>
+        <div className="seg area-seg">
+          <button type="button" className={'segb' + (area === 'all' ? ' on' : '')} onClick={() => pickArea('all')}>{areas.length === 2 ? 'Both' : 'All areas'}<span className="seg-n">{list.length}</span></button>
+          {areas.map(a => (<button type="button" key={a} className={'segb' + (area === a ? ' on' : '')} onClick={() => pickArea(a)}>{a}<span className="seg-n">{areaCount[a] || 0}</span></button>))}
+        </div>
       </div>
     </div>
 
@@ -938,8 +944,8 @@ function MapRoutePage({ list, role, userId }) {
 
         {tab === 'cover' && isHQ && (<>
           <div className="mr-stats">
-            <div className="mr-stat"><span className="v">{list.length}</span><span className="l">Facilities</span></div>
-            <div className="mr-stat"><span className="v">{list.filter(hasCoords).length}</span><span className="l">Mapped</span></div>
+            <div className="mr-stat"><span className="v">{filtered.length}</span><span className="l">Facilities</span></div>
+            <div className="mr-stat"><span className="v">{plotted.length}</span><span className="l">Mapped</span></div>
             <div className="mr-stat"><span className="v">{visitedCount}</span><span className="l">Visited</span></div>
             <div className="mr-stat"><span className="v">{assessedCount}</span><span className="l">Assessed</span></div>
             <div className="mr-stat"><span className="v">{dueCountAll}</span><span className="l">Due</span></div>
@@ -2905,6 +2911,11 @@ const css = `
 .realms .mr-side { display:flex; flex-direction:column; gap:12px; min-width:0; }
 .realms .mr-tabs { width:100%; }
 .realms .mr-tabs .segb { flex:1; }
+.realms .area-seg { flex-wrap:wrap; }
+.realms .area-seg .segb { display:inline-flex; align-items:center; gap:7px; }
+.realms .seg-n { font-size:11px; font-weight:600; background:var(--lav2); color:var(--p-deep); border-radius:9px; padding:1px 7px; font-variant-numeric:tabular-nums; }
+.realms .area-seg .segb.on .seg-n { background:rgba(255,255,255,.24); color:#fff; }
+@media (max-width:620px){ .realms .area-seg { width:100%; } .realms .area-seg .segb { flex:1; justify-content:center; } }
 .realms .mr-card { background:#fff; border:1px solid var(--line); border-radius:var(--r-lg); padding:16px; box-shadow:var(--e1); }
 .realms .mr-controls { display:grid; gap:10px; margin-bottom:12px; }
 .realms .mr-two { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
