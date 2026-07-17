@@ -4,7 +4,7 @@ import 'leaflet/dist/leaflet.css'
 import { supabase, MODE } from './supabaseClient.js'
 import { facilities as FAC, assignments as ASG, visits as VIS, notifications as NOTIF, calls as CALLS, access as ACC, facilitiesFromCSV, orderRoute, clusterDays, googleMapsDirUrl, geocode, uploadEvidence, sendNotify, askAI, seedSampleData, clearAllData } from './data.js'
 
-const BUILD = 'field-2026-07-17a'
+const BUILD = 'field-2026-07-17c'
 
 /*
   REALMS FIELD — Stages 1 to 3 (single-file App.jsx + supabaseClient.js + data.js)
@@ -240,6 +240,29 @@ function IconStore() { return (<svg viewBox="0 0 24 24" fill="none" stroke="curr
 
 /* ---------- shared ---------- */
 function SectionHead({ eyebrow, title }) { return (<div className="section-head anim"><p className="eyebrow">{eyebrow}</p><h2>{title}</h2></div>) }
+function NumField({ label, value, min, max, onChange, hint }) {
+  const [txt, setTxt] = useState(String(value))
+  useEffect(() => { setTxt(String(value)) }, [value])
+  function commit(raw) {
+    const n = parseInt(String(raw).replace(/[^0-9]/g, ''), 10)
+    const v = isFinite(n) ? Math.max(min, Math.min(max, n)) : value
+    setTxt(String(v)); if (v !== value) onChange(v)
+  }
+  function step(d) { const v = Math.max(min, Math.min(max, Number(value) + d)); setTxt(String(v)); if (v !== value) onChange(v) }
+  return (<label className="field sm numfield">
+    <span>{label}</span>
+    <div className="num-row">
+      <button type="button" className="num-btn" onClick={() => step(-1)} disabled={value <= min} aria-label={'Fewer: ' + label}>&#8722;</button>
+      <input className="num-in" inputMode="numeric" pattern="[0-9]*" value={txt}
+        onChange={e => setTxt(e.target.value)}
+        onBlur={e => commit(e.target.value)}
+        onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); e.currentTarget.blur() } }}
+        aria-label={label} />
+      <button type="button" className="num-btn" onClick={() => step(1)} disabled={value >= max} aria-label={'More: ' + label}>+</button>
+    </div>
+    {hint && <em className="num-hint">{hint}</em>}
+  </label>)
+}
 function SearchBox({ value, onChange, placeholder }) { return <input className="searchbox" value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder || 'Search\u2026'} aria-label="Search" /> }
 function matchQ(v, q) { if (!q) return true; const s = q.toLowerCase(); return ((v.facility_name || v.name || '') + ' ' + (v.area || '') + ' ' + (v.category || '') + ' ' + (v.address || '')).toLowerCase().includes(s) }
 
@@ -908,8 +931,8 @@ function MapRoutePage({ list, role, userId }) {
                 </select>
               </label>
               <div className="mr-two">
-                <label className="field sm"><span>Days</span><input type="number" min="1" max="10" value={days} onChange={e => { setDays(Math.max(1, Math.min(10, parseInt(e.target.value, 10) || 5))); setPlan(null) }} /></label>
-                <label className="field sm"><span>Per day</span><input type="number" min="4" max="30" value={perDay} onChange={e => { setPerDay(Math.max(4, Math.min(30, parseInt(e.target.value, 10) || 14))); setPlan(null) }} /></label>
+                <NumField label="Days" value={days} min={1} max={10} onChange={v => { setDays(v); setPlan(null) }} />
+                <NumField label="Per day" value={perDay} min={4} max={30} onChange={v => { setPerDay(v); setPlan(null) }} />
               </div>
             </div>
             <button className="btn primary wide" onClick={planRoutes} disabled={!planPool.length}>Plan {Math.min(days, Math.ceil(planPool.length / Math.max(1, perDay)))} day{planPool.length && Math.min(days, Math.ceil(planPool.length / Math.max(1, perDay))) === 1 ? '' : 's'}</button>
@@ -1144,9 +1167,9 @@ const CHECKLIST = [
 // av (available), num, txt, ta (notes), sel, chk (multi).
 const HEFAMAA_FORM = [
   { id: 'ident', title: 'Facility identification', fields: [
-    ['ward', 'Ward', 'txt'], ['lga', 'Local Government Area', 'txt'], ['status', 'Status of establishment', 'sel', ['New', 'Existing']],
-    ['reg_no', 'HEFAMAA Reg. Number', 'txt'], ['contact', 'Contact (name, email, phone)', 'txt'], ['hours', 'Days & hours of operation', 'txt'],
-    ['interviewed', 'Person(s) interviewed (name, designation)', 'txt'], ['officers', 'HEFAMAA officer(s) & designation', 'txt'], ['departure', 'Departure time (HH:MM)', 'txt'],
+    ['ward', 'Ward', 'txt'], ['lga', 'Local Government Area', 'sel', ['Alimosho', 'Ifako-Ijaiye']], ['status', 'Status of establishment', 'sel', ['New', 'Existing']],
+    ['reg_no', 'HEFAMAA Reg. Number', 'txt'], ['contact', 'Contact (name, email, phone)', 'txt'], ['hours', 'Days & hours of operation', 'txt', ['24 hours', '8am - 5pm', '8am - 4pm', 'Mon-Fri 8am-5pm', 'Mon-Sat 8am-6pm']],
+    ['interviewed', 'Person(s) interviewed (name, designation)', 'txt'], ['officers', 'HEFAMAA officer(s) & designation', 'txt'], ['departure', 'Departure time', 'time'],
     ['estab_type', 'Type of establishment', 'chk', ['Public Comprehensive HC', 'Public PHC', 'Private Clinic/HC', 'Convalescent/Nursing Home', 'Maternity Home', 'Private Hospital', 'Other']],
     ['estab_type_other', 'Other type (specify)', 'txt'], ['branches', 'Any branches?', 'yn'], ['branches_detail', 'Branches: number & locations', 'ta'] ] },
   { id: 'services', title: 'A. Services provided', fields: [
@@ -1156,7 +1179,7 @@ const HEFAMAA_FORM = [
     ['own_type', 'Type of ownership', 'sel', ['Public', 'Private', 'Public Private Partnership', 'Other']], ['own_arrangement', 'If private, ownership arrangement', 'sel', ['Sole proprietorship', 'Group practice', 'Limited Liability Company']],
     ['organogram', 'Organogram present?', 'yn'], ['cac', 'CAC registration status', 'sel', ['Registered', 'Registration in progress', 'Not registered']],
     ['hefamaa_reg', 'HEFAMAA registration status', 'sel', ['Ever Registered', 'Registration in progress', 'Not registered']], ['hefamaa_renewal', 'HEFAMAA renewal status', 'sel', ['Up to date', 'Not up to date']],
-    ['hefamaa_last_renewal', 'Last year of renewal', 'txt'], ['gov_comment', 'Comment', 'ta'] ] },
+    ['hefamaa_last_renewal', 'Last year of renewal', 'txt', ['2026', '2025', '2024', '2023', '2022', 'Never renewed']], ['gov_comment', 'Comment', 'ta'] ] },
   { id: 'building', title: 'C. Building & designated areas', fields: [
     ['build_type', 'Type of building', 'sel', ['Purpose built', 'Stand alone', 'Shared accommodation', 'Other']],
     ['waiting_size', 'Waiting/Reception adequate in size', 'yn'], ['waiting_equip', 'Waiting/Reception well-equipped', 'yn'],
@@ -1187,8 +1210,8 @@ const HEFAMAA_FORM = [
     ['rec_type', 'Records type', 'sel', ['Paper-based', 'Digital', 'Both']], ['rec_secured', 'Secured location', 'yn'], ['rec_shelving', 'Shelving', 'yn'], ['rec_filing', 'Filing', 'yn'],
     ['nhmis', 'NHMIS registers available', 'yn'], ['hmis_monthly', 'HMIS data submitted monthly', 'yn'], ['records_comment', 'Comment', 'ta'] ] },
   { id: 'lab', title: 'J. Diagnostic services — laboratory', fields: [
-    ['lab_type', 'Type of laboratory', 'sel', ['Commercial (standalone)', 'Hospital Lab', 'Side Lab', 'None']], ['lab_tests', 'Laboratory investigations (list)', 'ta'],
-    ['lab_personnel', 'Personnel in charge', 'chk', ['Pathologist', 'Med. Lab. Scientist', 'Med. Lab. Tech.', 'Other']], ['lab_equip', 'Lab equipment adequacy', 'ai'], ['lab_equip_list', 'Lab equipment sighted & functionality', 'ta'],
+    ['lab_type', 'Type of laboratory', 'sel', ['Commercial (standalone)', 'Hospital Lab', 'Side Lab', 'None']], ['lab_tests', 'Laboratory investigations (list)', 'ta', ['Malaria parasite', 'Full blood count', 'Widal', 'Urinalysis', 'HIV screening', 'Hepatitis B', 'Blood sugar', 'PCV', 'Pregnancy test', 'Genotype', 'Blood group', 'Liver function', 'Kidney function', 'Lipid profile']],
+    ['lab_personnel', 'Personnel in charge', 'chk', ['Pathologist', 'Med. Lab. Scientist', 'Med. Lab. Tech.', 'Other']], ['lab_equip', 'Lab equipment adequacy', 'ai'], ['lab_equip_list', 'Lab equipment sighted & functionality', 'ta', ['Microscope', 'Centrifuge', 'Haematology analyser', 'Chemistry analyser', 'Refrigerator', 'Autoclave', 'Water bath', 'Incubator', 'Rotator']],
     ['lab_power', 'Power supply', 'ai'], ['lab_waste', 'Waste management', 'ai'], ['lab_illum', 'Illumination', 'ai'], ['lab_water', 'Water supply', 'ai'], ['lab_ppe', 'PPE', 'ai'], ['lab_comment', 'Comment', 'ta'],
     ['ultrasound', 'Provides ultrasound services', 'yn'], ['ultrasound_by', 'Ultrasound provided by', 'chk', ['Radiologist', 'Sonographer', 'Sonologist', 'Other']] ] },
   { id: 'medication', title: 'K. Medication management', fields: [
@@ -1211,13 +1234,13 @@ const HEFAMAA_FORM = [
   { id: 'fire', title: 'N. Fire safety', fields: [
     ['fire_cert', 'Fire service certification', 'av'], ['fire_equip', 'Fire-fighting equipment', 'yn'], ['fire_service_history', 'Service history', 'yn'], ['fire_exits', 'Two labelled exits', 'yn'], ['muster_point', 'Muster / assembly point', 'av'], ['fire_comment', 'Comment', 'ta'] ] },
   { id: 'staffing', title: 'O. Staffing', fields: [
-    ['qip', 'Quality improvement programme', 'yn'], ['update_training', 'Regular update training', 'yn'], ['duty_roster', 'Duty roster available', 'yn'], ['adequate_staff', 'Adequate number of qualified personnel', 'yn'], ['staff_shortfall', 'If no, personnel type lacking', 'txt'],
+    ['qip', 'Quality improvement programme', 'yn'], ['update_training', 'Regular update training', 'yn'], ['duty_roster', 'Duty roster available', 'yn'], ['adequate_staff', 'Adequate number of qualified personnel', 'yn'], ['staff_shortfall', 'If no, personnel type lacking', 'txt', ['Doctor', 'Nurse', 'Med Lab Scientist', 'Pharmacist', 'Health records officer']],
     ['doctors_ft', 'Doctors (full time)', 'num'], ['doctors_pt', 'Doctors (part time)', 'num'], ['nurses_ft', 'Nurses (full time)', 'num'], ['nurses_pt', 'Nurses (part time)', 'num'], ['others_ft', 'Other staff (full time)', 'num'], ['others_pt', 'Other staff (part time)', 'num'],
     ['staff_complement', 'Staff complement (name, reg no, designation, specialty)', 'ta'], ['staffing_comment', 'Comment', 'ta'] ] },
   { id: 'submission', title: 'Inspection report (for HEFAMAA submission)', fields: [
-    ['address', 'Facility address', 'txt'], ['schedule', 'Facility schedule (category)', 'txt'], ['opening', 'Opening schedule', 'txt'],
-    ['services_rendered', 'Services rendered', 'ta'], ['total_staff', 'Total staff strength & breakdown', 'ta'], ['staff_on_duty', 'Staff met on duty', 'ta'], ['basic_equipment', 'Basic equipment available', 'ta'],
-    ['wards_no', '# of Wards', 'txt'], ['treatment_room', 'Treatment room', 'txt'], ['environment', 'Environment', 'txt'], ['waste_mgmt', 'Waste management', 'txt'], ['observation', 'Observation (gaps)', 'ta'], ['other_notes', 'Others', 'ta'] ] }
+    ['address', 'Facility address', 'txt'], ['schedule', 'Facility schedule (category)', 'txt', ['Hospital', 'Clinic', 'Maternity Home', 'Nursing Home', 'Convalescent Home', 'Dental Clinic', 'Eye Clinic', 'Laboratory', 'Diagnostic Centre', 'Specialist Hospital']], ['opening', 'Opening schedule', 'txt', ['24 hours', '8am - 5pm', '8am - 4pm', 'Mon-Fri 8am-5pm', 'Mon-Sat 8am-6pm']],
+    ['services_rendered', 'Services rendered', 'ta', ['General medical practice', 'Antenatal care', 'Skilled birth delivery', 'Immunisation', 'Family planning', 'Laboratory', 'Ultrasound', 'Pharmacy', 'Dental', 'Eye care', 'HIV counselling and testing', 'TB DOTS', 'Minor surgery', 'Inpatient care']], ['total_staff', 'Total staff strength & breakdown', 'ta'], ['staff_on_duty', 'Staff met on duty', 'ta', ['Doctor', 'Nurse', 'Matron', 'Med Lab Scientist', 'Pharmacist', 'Pharmacy technician', 'Health assistant', 'Receptionist', 'Cleaner', 'Security']], ['basic_equipment', 'Basic equipment available', 'ta', ['BP apparatus', 'Stethoscope', 'Thermometer', 'Weighing scale', 'Glucometer', 'Nebuliser', 'Oxygen cylinder', 'Suction machine', 'Delivery bed', 'Resuscitaire', 'Autoclave', 'Wheelchair', 'Examination couch', 'Ambu bag']],
+    ['wards_no', '# of Wards', 'txt'], ['treatment_room', 'Treatment room', 'txt', ['Available and adequate', 'Available but inadequate', 'Not available']], ['environment', 'Environment', 'txt', ['Clean and well maintained', 'Fairly clean', 'Poor, needs attention']], ['waste_mgmt', 'Waste management', 'txt', ['Adequate, registered with LAWMA PSP', 'Colour-coded bins in use', 'Inadequate segregation', 'No medical waste contract']], ['observation', 'Observation (gaps)', 'ta'], ['other_notes', 'Others', 'ta'] ] }
 ]
 const HEF_TYPES = { yn: ['Yes', 'No'], ai: ['Adequate', 'Inadequate'], fn: ['Functional', 'Non-functional'], av: ['Available', 'Not available'] }
 function ragWeight(r) { return r === 'green' ? 2 : r === 'amber' ? 1 : 0 }
@@ -1274,13 +1297,36 @@ function VoiceButton({ onClip }) {
 function Seg({ options, value, onChange }) {
   return (<div className="seg">{options.map(o => (<button type="button" key={o} className={'segb' + (value === o ? ' on' : '')} onClick={() => onChange(value === o ? '' : o)}>{o}</button>))}</div>)
 }
+function fragToggle(cur, frag) {
+  const parts = String(cur || '').split(/;\s*/).map(x => x.trim()).filter(Boolean)
+  const i = parts.findIndex(x => x.toLowerCase() === frag.toLowerCase())
+  if (i >= 0) parts.splice(i, 1); else parts.push(frag)
+  return parts.join('; ')
+}
+function fragHas(cur, frag) {
+  return String(cur || '').split(/;\s*/).some(x => x.trim().toLowerCase() === frag.toLowerCase())
+}
 function HefField({ f, value, onChange }) {
   const id = f[0], label = f[1], type = f[2], opts = f[3]
+  const picks = (type === 'txt' || type === 'ta') && Array.isArray(opts) && opts.length ? opts : null
   let control
   if (HEF_TYPES[type]) control = <Seg options={HEF_TYPES[type]} value={value || ''} onChange={onChange} />
-  else if (type === 'num') control = <input type="number" className="hef-input" value={value || ''} onChange={e => onChange(e.target.value)} />
-  else if (type === 'txt') control = <input className="hef-input" value={value || ''} onChange={e => onChange(e.target.value)} />
-  else if (type === 'ta') control = <textarea className="hef-input" rows="2" value={value || ''} onChange={e => onChange(e.target.value)} />
+  else if (type === 'num') control = <input type="number" inputMode="numeric" pattern="[0-9]*" className="hef-input" value={value || ''} onChange={e => onChange(e.target.value)} />
+  else if (type === 'time') control = <input type="time" className="hef-input" value={value || ''} onChange={e => onChange(e.target.value)} />
+  else if (type === 'txt') control = (<>
+    {picks && <div className="picks">{picks.map(o => (
+      <button type="button" key={o} className={'pick' + (String(value || '').trim().toLowerCase() === o.toLowerCase() ? ' on' : '')}
+        onClick={() => onChange(String(value || '').trim().toLowerCase() === o.toLowerCase() ? '' : o)}>{o}</button>))}</div>}
+    <input className="hef-input" value={value || ''} onChange={e => onChange(e.target.value)}
+      placeholder={picks ? 'Tap an answer, or type your own' : ''} />
+  </>)
+  else if (type === 'ta') control = (<>
+    {picks && <div className="picks">{picks.map(o => (
+      <button type="button" key={o} className={'pick' + (fragHas(value, o) ? ' on' : '')}
+        onClick={() => onChange(fragToggle(value, o))}>{o}</button>))}</div>}
+    <textarea className="hef-input" rows="2" value={value || ''} onChange={e => onChange(e.target.value)}
+      placeholder={picks ? 'Tap what applies, and add anything else here' : ''} />
+  </>)
   else if (type === 'sel') control = <select className="hef-input" value={value || ''} onChange={e => onChange(e.target.value)}><option value="">—</option>{opts.map(o => <option key={o} value={o}>{o}</option>)}</select>
   else if (type === 'chk') { const arr = Array.isArray(value) ? value : []; control = <div className="chks">{opts.map(o => { const on = arr.includes(o); return <label key={o} className={'chkpill' + (on ? ' on' : '')}><input type="checkbox" checked={on} onChange={() => onChange(on ? arr.filter(x => x !== o) : arr.concat([o]))} />{o}</label> })}</div> }
   return (<div className="hef-field"><span className="hef-label">{label}</span>{control}</div>)
@@ -3138,6 +3184,34 @@ const css = `
 .realms .state-chip.find { background:#EAF2FB; color:#2E6B8A; border-color:#C9DEF0; }
 .realms .fremark { display:block; margin-top:5px; font-size:12px; color:#8A7AA6; font-style:italic; }
 .realms .list-tools-row { display:flex; flex-wrap:wrap; gap:10px; align-items:center; }
+.realms .numfield .num-row { display:flex; align-items:stretch; border:1px solid var(--line); border-radius:10px; overflow:hidden; background:#fff; }
+.realms .num-btn { flex:0 0 auto; width:46px; min-height:46px; border:0; background:var(--lav1); color:var(--p-deep); font-size:20px; line-height:1; cursor:pointer; touch-action:manipulation; -webkit-tap-highlight-color:transparent; }
+.realms .num-btn:active { background:var(--lav2); }
+.realms .num-btn:disabled { color:#C9BEDA; cursor:default; }
+.realms .num-in { flex:1; min-width:0; width:100%; border:0; text-align:center; font-family:inherit; font-size:16px; font-variant-numeric:tabular-nums; color:var(--ink); background:#fff; min-height:46px; padding:0 4px; }
+.realms .num-in:focus { outline:none; box-shadow:inset 0 0 0 2px var(--lav2); }
+.realms .num-hint { display:block; font-style:normal; font-size:11.5px; color:#8A7AA6; margin-top:4px; }
+
+/* ===== tablets =====
+   Two things break forms on iPad specifically. Any input under 16px makes Safari
+   zoom the whole page on focus, which throws the layout and feels like the field
+   is fighting you. And taps carry a highlight flash and a delay unless told not to. */
+@media (pointer: coarse) {
+  .realms input, .realms select, .realms textarea,
+  .realms .sel, .realms .searchbox, .realms .hef-input, .realms .num-in { font-size:16px; }
+  .realms button, .realms .btn, .realms .mini, .realms .segb, .realms .num-btn, .realms .tab, .realms a.mini {
+    touch-action:manipulation; -webkit-tap-highlight-color:transparent;
+  }
+  .realms .field.sm span { font-size:12.5px; }
+  /* A sticky header plus a blur is expensive on Safari and can leave artefacts. */
+  .realms .ptitle { backdrop-filter:none; background:var(--lav1); }
+}
+@media (pointer: coarse) and (max-width:1100px) {
+  .realms .mr-two { grid-template-columns:1fr 1fr; gap:12px; }
+  .realms .mr-card { padding:18px; }
+  .realms .plan-assign { flex-direction:column; align-items:stretch; }
+  .realms .plan-assign .sel, .realms .plan-assign .btn { width:100%; }
+}
 .realms .band-note { text-align:center; max-width:720px; margin:16px auto 0; font-size:14px; color:#5A4C74; }
 
 /* ===== UI upscale: tablet-first field ergonomics + depth ===== */
@@ -3633,6 +3707,10 @@ const css = `
 .realms .chkpill { display:inline-flex; align-items:center; gap:6px; font-size:13px; border:1px solid var(--line); border-radius:20px; padding:6px 12px; color:#5A4C74; cursor:pointer; background:#fff; }
 .realms .chkpill.on { border-color:var(--p); background:var(--lav2); color:var(--p-deep); }
 .realms .chkpill input { margin:0; }
+.realms .picks { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:8px; }
+.realms .pick { font-family:inherit; font-size:13px; min-height:38px; padding:7px 13px; border:1px solid var(--line); border-radius:19px; background:#fff; color:#5A4C74; cursor:pointer; touch-action:manipulation; -webkit-tap-highlight-color:transparent; }
+.realms .pick:active { background:var(--lav1); }
+.realms .pick.on { background:var(--p); border-color:var(--p); color:#fff; }
 .realms .hq-oversight { margin-top:24px; }
 .realms .hq-stats { display:grid; grid-template-columns:repeat(6,1fr); gap:10px; margin-bottom:14px; }
 .realms .hq-stat { background:#fff; border:1px solid var(--line); border-radius:12px; padding:14px 10px; text-align:center; }
