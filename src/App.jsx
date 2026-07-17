@@ -4,7 +4,7 @@ import 'leaflet/dist/leaflet.css'
 import { supabase, MODE } from './supabaseClient.js'
 import { facilities as FAC, assignments as ASG, visits as VIS, notifications as NOTIF, calls as CALLS, access as ACC, facilitiesFromCSV, orderRoute, clusterDays, googleMapsDirUrl, geocode, uploadEvidence, sendNotify, askAI, seedSampleData, clearAllData } from './data.js'
 
-const BUILD = 'field-2026-07-16b'
+const BUILD = 'field-2026-07-17a'
 
 /*
   REALMS FIELD — Stages 1 to 3 (single-file App.jsx + supabaseClient.js + data.js)
@@ -215,6 +215,9 @@ function identityFor(email, name) {
   const n = base.split(' ').map(w => w ? w[0].toUpperCase() + w.slice(1) : w).join(' ') || 'Staff'
   return { name: n, first: n.split(' ')[0], title: '', photo: '' }
 }
+const DEAD_STATES = ['untraceable', 'closed', 'not_at_address']
+const STATE_LABEL = { untraceable: 'Untraceable', closed: 'Closed', not_at_address: 'Not at address', locked: 'Met locked', relocated: 'Relocated', renovation: 'Under renovation', closure_notice: 'Closure notice', active: '' }
+function isLive(f) { return !f.state || DEAD_STATES.indexOf(f.state) < 0 }
 const OWNER_EMAIL = 'exco@realmsconsulting.com'
 function isOwner(u) { return !!u && String(u.email || '').trim().toLowerCase() === OWNER_EMAIL }
 const TEAM_LABEL = 'Field team'
@@ -544,6 +547,7 @@ function FacilitiesPage({ list, canEdit, userId, reload }) {
   const [adding, setAdding] = useState(false); const [busy, setBusy] = useState(false); const [msg, setMsg] = useState('')
   const [form, setForm] = useState({ name: '', category: '', area: '', address: '', lat: '', lng: '' })
   const [q, setQ] = useState('')
+  const [fstate, setFstate] = useState('all')
   const [visits, setVisits] = useState([])
   const [drawer, setDrawer] = useState(null)
   const [aiClean, setAiClean] = useState(false)
@@ -555,7 +559,11 @@ function FacilitiesPage({ list, canEdit, userId, reload }) {
   const fileRef = useRef(null)
 
   const groups = {}
-  const flist = list.filter(f => matchQ(f, q))
+  const stateCount = { live: list.filter(isLive).length, dead: list.filter(f => !isLive(f)).length,
+    field: list.filter(f => f.source === 'field').length, unreg: list.filter(f => f.reg_status && f.reg_status !== 'Registered').length }
+  const flist = list.filter(f => matchQ(f, q) && (
+    fstate === 'all' ? true : fstate === 'live' ? isLive(f) : fstate === 'dead' ? !isLive(f)
+    : fstate === 'field' ? f.source === 'field' : fstate === 'unreg' ? (f.reg_status && f.reg_status !== 'Registered') : true))
   flist.forEach(f => { const a = f.area || 'Unassigned'; (groups[a] = groups[a] || []).push(f) })
   const areas = Object.keys(groups).sort()
   const missing = list.filter(f => !hasCoords(f)).length
@@ -725,13 +733,13 @@ function FacilitiesPage({ list, canEdit, userId, reload }) {
 
     {geoMsg && <p className="warnline">{geoMsg} <button className="linkbtn subtle" onClick={() => setGeoMsg('')}>Dismiss</button></p>}
     {geoRun && <div className="mon-meter"><div className="meter-row"><span className="meter-lab">{geoRun.phase || 'Mapping'}</span><div className="meter-track"><div className="meter-fill" style={{ width: Math.round(geoRun.done / geoRun.total * 100) + '%' }} /></div><span className="meter-val">{geoRun.done}/{geoRun.total}</span></div></div>}
-    {list.length > 0 && <div className="list-tools"><SearchBox value={q} onChange={setQ} placeholder="Search facilities, area, category…" /></div>}
+    {list.length > 0 && <div className="list-tools list-tools-row"><SearchBox value={q} onChange={setQ} placeholder="Search facilities, area, category…" /><select className="sel" value={fstate} onChange={e => setFstate(e.target.value)}><option value="all">All ({list.length})</option><option value="live">For the round ({stateCount.live})</option><option value="dead">Closed or untraceable ({stateCount.dead})</option><option value="field">Found in the field ({stateCount.field})</option><option value="unreg">Not fully registered ({stateCount.unreg})</option></select></div>}
     {list.length === 0 ? <p className="empty">No facilities yet. {canEdit ? 'Add one or import a CSV to begin.' : 'Nothing to show.'}</p> :
       areas.length === 0 ? <p className="empty">No facilities match your search.</p> :
       areas.map((a, ai) => (<div className="cluster" key={a}>
         <div className="cluster-head"><span className="area-dot" style={{ background: AREA_COLORS[ai % AREA_COLORS.length] }} /><h3>{a}</h3><span className="cluster-count">{groups[a].length}</span></div>
         <div className="frows">{groups[a].map(f => (<div className="frow" key={f.id}>
-          <div className="fmain"><span className="fname">{f.name}</span><span className="fmeta">{[f.category, f.address, f.phone].filter(Boolean).join(' \u00b7 ') || 'No details'}</span></div>
+          <div className="fmain"><span className="fname">{f.name}</span><span className="fmeta">{[f.category, f.address, f.phone].filter(Boolean).join(' \u00b7 ') || 'No details'}</span>{(f.reg_status || f.state) && <span className="fchips">{f.reg_status && <span className={'reg-chip ' + (f.reg_status === 'Registered' ? 'ok' : f.reg_status === 'Registration in progress' ? 'prog' : 'no')}>{f.reg_status}</span>}{f.state && STATE_LABEL[f.state] && <span className={'state-chip' + (DEAD_STATES.indexOf(f.state) >= 0 ? ' dead' : '')}>{STATE_LABEL[f.state]}</span>}{f.source === 'field' && <span className="state-chip find">Found in field</span>}</span>}{f.remark && <span className="fremark">{f.remark}</span>}</div>
           <div className="factions">
             <button className="mini" onClick={() => setDrawer(f)}>History</button>
             {f.phone && <a className="mini" href={'tel:' + String(f.phone).replace(/[^0-9+]/g, '')}>Call</a>}
@@ -800,7 +808,7 @@ function MapRoutePage({ list, role, userId }) {
     if (v.debrief && v.debrief.first_visit) firstDone[key] = true
     else laterDone[key] = true
   })
-  function isDue(f) { return (firstDone[f.id] || firstDone[f.name]) && !(laterDone[f.id] || laterDone[f.name]) }
+  function isDue(f) { return isLive(f) && (firstDone[f.id] || firstDone[f.name]) && !(laterDone[f.id] || laterDone[f.name]) }
   const dueCountAll = filtered.filter(isDue).length
   const scopePool = filtered.filter(f => (scope === 'due' ? isDue(f) : true))
   const planPool = scopePool.filter(hasCoords).slice(0, Math.max(1, days) * Math.max(1, perDay))
@@ -939,7 +947,7 @@ function MapRoutePage({ list, role, userId }) {
 
         {tab === 'cover' && isHQ && (<>
           <div className="mr-stats">
-            <div className="mr-stat"><span className="v">{filtered.length}</span><span className="l">Facilities</span></div>
+            <div className="mr-stat"><span className="v">{filtered.filter(isLive).length}</span><span className="l">In the round</span></div>
             <div className="mr-stat"><span className="v">{plotted.length}</span><span className="l">Mapped</span></div>
             <div className="mr-stat"><span className="v">{visitedCount}</span><span className="l">Visited</span></div>
             <div className="mr-stat"><span className="v">{assessedCount}</span><span className="l">Assessed</span></div>
@@ -3120,6 +3128,16 @@ const css = `
 .realms .int-flags { display:flex; flex-wrap:wrap; gap:4px; }
 .realms .int-flags em { font-style:normal; font-size:11px; background:#FBF3E6; color:#9A5B12; border:1px solid #F0D9B5; border-radius:9px; padding:2px 7px; }
 .realms .frow.picked { border-color:var(--p); background:var(--lav2); }
+.realms .fchips { display:flex; flex-wrap:wrap; gap:6px; margin-top:6px; }
+.realms .reg-chip, .realms .state-chip { font-size:11px; border-radius:9px; padding:2px 8px; border:1px solid; }
+.realms .reg-chip.ok { background:#E6F4EA; color:#2E7D46; border-color:#BFE3CB; }
+.realms .reg-chip.prog { background:#FBF3E6; color:#9A5B12; border-color:#F0D9B5; }
+.realms .reg-chip.no { background:#FBE9E6; color:#B4442E; border-color:#F0C9BF; }
+.realms .state-chip { background:var(--lav2); color:var(--p-deep); border-color:var(--line); }
+.realms .state-chip.dead { background:#F1EFF4; color:#8A7AA6; }
+.realms .state-chip.find { background:#EAF2FB; color:#2E6B8A; border-color:#C9DEF0; }
+.realms .fremark { display:block; margin-top:5px; font-size:12px; color:#8A7AA6; font-style:italic; }
+.realms .list-tools-row { display:flex; flex-wrap:wrap; gap:10px; align-items:center; }
 .realms .band-note { text-align:center; max-width:720px; margin:16px auto 0; font-size:14px; color:#5A4C74; }
 
 /* ===== UI upscale: tablet-first field ergonomics + depth ===== */
