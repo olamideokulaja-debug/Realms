@@ -556,7 +556,7 @@ export async function seedSampleData(userId) {
       const at = (x.last_visit ? x.last_visit : '2026-02-01') + 'T09:00:00.000Z'
       return {
         facility_id: f.id, facility_name: f.name, area: f.area, arrival_time: at, status: 'debriefed',
-        team: [{ name: 'Rev. Dr Solomon Nweke', role: 'Team Lead' }],
+        team: [{ name: 'RHSC Field Monitoring Team', role: 'Team' }],
         monitoring: { profile: { beds: x.fv_beds || '' }, hefamaa: { registration: x.fv_status || '', beds_no: x.fv_beds || '', address: x.address, schedule: x.category }, updatedAt: at },
         score: null, overall_rating: null,
         debrief: { strengths: [], gaps: [], narrative: 'First visit completed' + (x.last_visit ? ' on ' + x.last_visit : '') + '. Registration status: ' + (x.fv_status || 'not recorded') + '. Second visit due August 2026.', proprietor_ack: false, remediation_deadline: '', reinspection: '', letter_issued: false, first_visit: true, updatedAt: at }
@@ -569,7 +569,7 @@ export async function seedSampleData(userId) {
     const sample = facs.slice(0, 8)
     const outcomes = ['Reached', 'No answer', 'Call back', 'Reached', 'Escalated']
     const notes = ['Facility satisfied with the visit; will action the minor gaps noted.', '', 'Asked us to call back next week to confirm progress.', 'Confirmed corrective actions are underway.', 'Escalated a critical finding to HEFAMAA for review.']
-    const callers = ['Ojuma Joy', 'Anele Goodnews', 'Rev. Dr Solomon Nweke']
+    const callers = ['Ojuma Joy', 'Anele Goodnews']
     for (let i = 0; i < sample.length; i++) {
       const f = sample[i]
       await notifications.add({ type: 'visit_completed', facility_name: f.name, area: f.area, channel: 'customer_service', status: 'pending', message: 'First visit completed at ' + f.name + ' (' + f.area + '). Customer service to call the facility to hear how the visit went.' }, userId)

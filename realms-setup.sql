@@ -121,3 +121,6 @@ create policy "auth access_requests" on access_requests for all using (auth.uid(
 alter table notifications add column if not exists stage text;
 alter table access_requests add column if not exists facility_id text;
 alter table access_requests add column if not exists facility_name text;
+
+-- 11. Integrity: record what the facility says about conduct
+alter table calls add column if not exists integrity text;

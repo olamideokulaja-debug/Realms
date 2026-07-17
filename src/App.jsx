@@ -4,7 +4,7 @@ import 'leaflet/dist/leaflet.css'
 import { supabase, MODE } from './supabaseClient.js'
 import { facilities as FAC, assignments as ASG, visits as VIS, notifications as NOTIF, calls as CALLS, access as ACC, facilitiesFromCSV, orderRoute, clusterDays, googleMapsDirUrl, geocode, uploadEvidence, sendNotify, askAI, seedSampleData, clearAllData } from './data.js'
 
-const BUILD = 'field-2026-07-15f'
+const BUILD = 'field-2026-07-16b'
 
 /*
   REALMS FIELD — Stages 1 to 3 (single-file App.jsx + supabaseClient.js + data.js)
@@ -62,6 +62,7 @@ const CONTACT = {
   hours: 'Monday to Friday, 9am to 5pm'
 }
 function isPlaceholder(v) { return !v || /^\[/.test(v) }
+const INTEGRITY_NOTICE = 'RHSC monitoring is carried out at no cost to the facility. Our officers must never request or accept money, gifts or favours, and no payment is ever required to pass an inspection or to obtain a report. If anyone asks you for anything, report it to ' + CONTACT.phone + ' or ' + CONTACT.email + '. Reports are treated in confidence.'
 function getSettings() {
   const d = { cs_email: CONTACT.email, cs_phone: CONTACT.phone, cs_whatsapp: CONTACT.whatsapp }
   try { const s = JSON.parse(localStorage.getItem('realms_settings') || '{}'); return { ...d, ...s, cs_email: s.cs_email || d.cs_email, cs_phone: s.cs_phone || d.cs_phone, cs_whatsapp: s.cs_whatsapp || d.cs_whatsapp } } catch (e) { return d }
@@ -129,14 +130,9 @@ const LEADERS = [
 ]
 const STAFF = [
   {
-    name: 'Rev. Dr Solomon Chidiebere Nweke', role: 'Team Lead', unit: 'Field Monitoring Team',
-    purpose: 'Plans, coordinates, supervises and leads daily monitoring across assigned Lagos State health facilities, ensuring field operations meet HEFAMAA standards and advance quality, patient safety and regulatory compliance.',
-    duties: ['Pre-field planning, route planning and team briefing', 'Leadership, supervision and team safety in the field', 'Official representation and stakeholder engagement with HEFAMAA', 'Supervises checklist-based inspections and photographic evidence', 'Documentation, quality assurance and confidentiality', 'Exit debriefs, corrective actions and next regulatory steps', 'Reporting, escalation of critical findings and record-keeping', 'Professional ethics, integrity and accountability']
-  },
-  {
-    name: 'Ojuma Joy', role: 'Registered Nurse, Monitoring Officer', unit: 'Field Monitoring Team',
-    purpose: 'Supports routine facility assessment across allocated local government areas, combining accurate field documentation with professional nursing oversight and regulatory guidance.',
-    duties: ['Facility mapping and route planning with Google Maps', 'Documents staffing, duty rosters, equipment, wards, beds and services', 'Facility debriefing and practical corrective guidance', 'Assesses nursing quality, uniforms, practising licences and staffing', 'Daily reporting and data entry into approved templates', 'Geographic data management for coverage planning']
+    name: 'Ojuma Joy', role: 'Team Lead (interim), Registered Nurse', unit: 'Field Monitoring Team',
+    purpose: 'Leads and supervises daily monitoring across assigned Lagos State local government areas, combining accurate field documentation with professional nursing oversight and regulatory guidance.',
+    duties: ['Plans routes, assigns daily rounds and briefs the team', 'Supervises checklist-based inspections and photographic evidence', 'Documents staffing, duty rosters, equipment, wards, beds and services', 'Facility debriefing and practical corrective guidance', 'Assesses nursing quality, uniforms, practising licences and staffing', 'Reviews and signs off reports before HEFAMAA submission', 'Upholds professional ethics, integrity and accountability in the field']
   },
   {
     name: 'Anele Goodnews', role: 'Medical Laboratory Scientist, Monitoring Agent', unit: 'Field Monitoring Team',
@@ -201,16 +197,15 @@ const ROLES = [
 const ROLE_TABS = {
   team_leader: ['dashboard', 'facilities', 'map', 'engage', 'monitor', 'debrief', 'assign', 'approvals', 'reports'],
   field_monitor: ['dashboard', 'facilities', 'map', 'engage', 'monitor', 'debrief'],
-  rhsc_hq: ['dashboard', 'facilities', 'map', 'reports', 'approvals', 'followups', 'assistant', 'settings'],
+  rhsc_hq: ['dashboard', 'facilities', 'map', 'reports', 'approvals', 'integrity', 'followups', 'assistant', 'settings'],
   hefamaa_reviewer: ['dashboard', 'facilities', 'reports'],
   facility_proprietor: ['dashboard', 'myfacility']
 }
-const TAB_LABEL = { dashboard: 'Dashboard', facilities: 'Facilities', map: 'Map & Route', engage: 'Engage', monitor: 'Monitor', debrief: 'Debrief', assign: 'Assign', reports: 'Reports', analytics: 'Analytics', myfacility: 'My Facility', followups: 'Follow-ups', settings: 'Settings', assistant: 'AI Assistant', approvals: 'Approvals' }
+const TAB_LABEL = { dashboard: 'Dashboard', facilities: 'Facilities', map: 'Map & Route', engage: 'Engage', monitor: 'Monitor', debrief: 'Debrief', assign: 'Assign', reports: 'Reports', analytics: 'Analytics', myfacility: 'My Facility', followups: 'Follow-ups', settings: 'Settings', assistant: 'AI Assistant', approvals: 'Approvals', integrity: 'Integrity' }
 const CAN_EDIT = ['team_leader', 'field_monitor', 'rhsc_hq']
 const AREA_COLORS = ['#6D4B8E', '#3E86C9', '#C7549C', '#5FA35A', '#D08A2E', '#7E63A0', '#4AA3A3', '#B0562E', '#6C6FD0', '#C0603C']
 
 const IDENTITY = {
-  // 'solomon@realms.ng': { name: 'Dr Solomon', title: 'Team Leader', photo: '' },
 }
 function identityFor(email, name) {
   const found = IDENTITY[(email || '').toLowerCase()]
@@ -222,10 +217,10 @@ function identityFor(email, name) {
 }
 const OWNER_EMAIL = 'exco@realmsconsulting.com'
 function isOwner(u) { return !!u && String(u.email || '').trim().toLowerCase() === OWNER_EMAIL }
-const MONITORS = ['Rev. Dr Solomon Nweke', 'Ojuma Joy', 'Anele Goodnews']
+const TEAM_LABEL = 'Field team'
+const MONITORS = [TEAM_LABEL, 'Ojuma Joy', 'Anele Goodnews']
 const VIEW_USERS = [
-  { name: 'Rev. Dr Solomon Nweke', role: 'team_leader' },
-  { name: 'Ojuma Joy', role: 'field_monitor' },
+  { name: 'Ojuma Joy', role: 'team_leader' },
   { name: 'Anele Goodnews', role: 'field_monitor' },
   { name: 'HEFAMAA Reviewer', role: 'hefamaa_reviewer' },
   { name: 'Facility Proprietor', role: 'facility_proprietor' }
@@ -831,14 +826,14 @@ function MapRoutePage({ list, role, userId }) {
   }
   async function assignDay(key, d) {
     const f = assignForm[key] || {}
-    if (!f.monitor) { toast('Choose who this day is for.', 'warn'); return }
+    if (!f.monitor) { toast('Choose who leads this day.', 'warn'); return }
     if (!f.date) { toast('Choose the visit date.', 'warn'); return }
     const ids = (d.items || []).map(x => x.id).filter(Boolean)
     if (!ids.length) { toast('No facilities to assign.', 'warn'); return }
     setAssignBusy(key)
     try {
       await ASG.add({ visit_date: f.date, area: d.area || (area === 'all' ? 'Mixed' : area), facility_ids: ids, monitor: f.monitor, note: 'Route plan, ' + ids.length + ' stops' }, userId)
-      toast(ids.length + ' facilities assigned to ' + f.monitor + ' for ' + f.date + '.')
+      toast(ids.length + ' facilities set for ' + f.date + (f.monitor === TEAM_LABEL ? '.' : ', led by ' + f.monitor + '.'))
     } catch (e) { toast('Could not save the assignment.', 'err') } finally { setAssignBusy('') }
   }
 
@@ -930,7 +925,7 @@ function MapRoutePage({ list, role, userId }) {
                 </div>
                 {canAssign && <div className="plan-assign">
                   <select className="sel" value={(assignForm[dayKey] || {}).monitor || ''} onChange={e => setAssignForm(s => ({ ...s, [dayKey]: { ...(s[dayKey] || {}), monitor: e.target.value } }))}>
-                    <option value="">Assign to&#8230;</option>{MONITORS.map(m => <option key={m} value={m}>{m}</option>)}
+                    <option value="">Day led by&#8230;</option>{MONITORS.map(m => <option key={m} value={m}>{m}</option>)}
                   </select>
                   <input type="date" className="sel" value={(assignForm[dayKey] || {}).date || ''} onChange={e => setAssignForm(s => ({ ...s, [dayKey]: { ...(s[dayKey] || {}), date: e.target.value } }))} />
                   <button className="btn small primary" onClick={() => assignDay(dayKey, d)} disabled={assignBusy === dayKey}>{assignBusy === dayKey ? 'Saving\u2026' : 'Assign'}</button>
@@ -997,7 +992,8 @@ function EngagePage({ list, identity, role, userId }) {
   const todayStr = new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'long' })
   useEffect(() => { ASG.list().then(setAsgs).catch(() => {}); VIS.list().then(setTodayVisits).catch(() => {}) }, [])
   const myIds = {}
-  asgs.filter(a => a.visit_date === todayISO && (!a.monitor || a.monitor === identity.name)).forEach(a => { (a.facility_ids || []).forEach(id => { myIds[id] = true }) })
+  // RHSC works as a single team, so today's round is everyone's round.
+  asgs.filter(a => a.visit_date === todayISO).forEach(a => { (a.facility_ids || []).forEach(id => { myIds[id] = true }) })
   const myDay = list.filter(f => myIds[f.id])
   const visitedToday = {}
   todayVisits.forEach(v => { if ((v.arrival_time || '').slice(0, 10) === todayISO && v.facility_id) visitedToday[v.facility_id] = true })
@@ -1061,7 +1057,7 @@ function EngagePage({ list, identity, role, userId }) {
 
     {step === 0 && (<div className="engage-pick">
       {myDay.length > 0 && (<div className="myday">
-        <div className="myday-head"><h3>Your day, {todayStr}</h3><span className="plan-count">{myDay.length} assigned</span></div>
+        <div className="myday-head"><h3>Today's round, {todayStr}</h3><span className="plan-count">{myDay.length} assigned</span></div>
         <div className="frows">{myDay.map(f => (<button className="frow pickable" key={'my' + f.id} onClick={() => chooseFacility(f)}>
           <div className="fmain"><span className="fname">{f.name}</span><span className="fmeta">{[f.category, f.address].filter(Boolean).join(' \u00b7 ') || 'No details'}{visitedToday[f.id] ? ' \u00b7 checked in' : ''}</span></div>
           <span className={'mini' + (visitedToday[f.id] ? ' ok' : '')}>{visitedToday[f.id] ? 'Done' : 'Start'}</span>
@@ -1514,7 +1510,7 @@ function buildInspectionReport(v, d, origin) {
   const esc = s => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/\n/g, '<br>')
   const body = rows.map(r => r[1] === '' && (r[0] === 'General' || r[0] === 'Findings') ? '<tr><th colspan="2" style="font-size:13px">' + r[0] + '</th></tr>' : '<tr><td style="width:34%;font-weight:600;color:#574277">' + r[0] + '</td><td>' + esc(r[1]) + '</td></tr>').join('')
   const stamp = (v.approval && v.approval.status === 'approved') ? '<p class="muted" style="border:1px solid #BFE3CB;background:#E6F4EA;color:#2E7D46;border-radius:6px;padding:6px 10px;display:inline-block">Approved for submission by ' + esc(v.approval.by || 'Team Lead') + ' on ' + String(v.approval.at || '').slice(0, 10) + '</p>' : ''
-  return inspHead(origin) + '<table style="margin-top:10px">' + body + '</table>' + stamp + (d && d.signature ? '<p class="muted">Proprietor sign-off:</p><img class="sig" src="' + d.signature + '">' : '') + '<p class="muted">Prepared by REALMS Healthcare Services Consulting Limited for HEFAMAA, Lagos State.</p>'
+  return inspHead(origin) + '<table style="margin-top:10px">' + body + '</table>' + stamp + (d && d.signature ? '<p class="muted">Proprietor sign-off:</p><img class="sig" src="' + d.signature + '">' : '') + '<p class="muted" style="border:1px solid #E4DCEE;border-radius:6px;padding:8px 10px"><strong>Integrity notice.</strong> ' + INTEGRITY_NOTICE + '</p><p class="muted">Prepared by REALMS Healthcare Services Consulting Limited for HEFAMAA, Lagos State.</p>'
 }
 function buildWeeklyBatch(visits, origin, from, to) {
   const parts = visits.map((v, i) => '<div style="' + (i ? 'page-break-before:always;' : '') + '">' + buildInspectionReport(v, v.debrief || deriveDebrief(v), origin) + '</div>')
@@ -1552,7 +1548,7 @@ function buildReport(v, d, origin) {
     digital +
     '<h2>Debrief and sign-off</h2><p>Person in charge: ' + (d.proprietor_name || '\u2014') + '. Acknowledged: ' + (d.proprietor_ack ? 'Yes' : 'No') + '.</p>' + sig + (d.signed_at ? '<p class="muted">Signed ' + d.signed_at.slice(0, 16).replace('T', ' ') + '</p>' : '') +
     hefSection +
-    '<p class="muted">Prepared by REALMS Healthcare Services Consulting Limited in support of the HEFAMAA regulatory mandate. This report is not legal advice.</p>'
+    '<p class="muted"><strong>Integrity notice.</strong> ' + INTEGRITY_NOTICE + '</p><p class="muted">Prepared by REALMS Healthcare Services Consulting Limited in support of the HEFAMAA regulatory mandate. This report is not legal advice.</p>'
 }
 function buildClosure(v, d, origin) {
   const date = (v.arrival_time || v.created_at || '').slice(0, 10)
@@ -1606,7 +1602,7 @@ function SignaturePad({ value, onChange }) {
   return (<div className="sigwrap"><canvas ref={ref} width="600" height="170" className="sigpad" onMouseDown={start} onMouseMove={move} onMouseUp={end} onMouseLeave={end} onTouchStart={start} onTouchMove={move} onTouchEnd={end} /><button type="button" className="mini" onClick={clear}>Clear signature</button></div>)
 }
 
-function DebriefPage({ userId }) {
+function DebriefPage({ userId, facilities }) {
   const [visits, setVisits] = useState([])
   const [active, setActive] = useState(null)
   const [strengths, setStrengths] = useState([])
@@ -1666,6 +1662,14 @@ function DebriefPage({ userId }) {
           await NOTIF.add({ type: 'visit_completed', visit_id: active.id, facility_name: active.facility_name, area: active.area, channel: 'customer_service', status: 'pending', message: 'Visit completed at ' + active.facility_name + ' (' + (active.area || '') + '). Customer service to call the facility to hear how the visit went.' }, userId)
         } catch (e) {}
         const cs = getSettings(); const csMsg = 'RHSC: monitoring completed at ' + active.facility_name + '. Please call the facility to follow up.'
+        // The facility hears from us directly, so a demand for money has somewhere to go.
+        const fac = (facilities || []).find(f => f.id === active.facility_id || f.name === active.facility_name)
+        if (fac && fac.phone) {
+          const fm = 'RHSC/HEFAMAA: your facility was monitored today. This visit is free of charge and our officers must never request money, gifts or favours. If anything was asked of you, report it in confidence to ' + CONTACT.phone + '.'
+          try { sendNotify({ channel: 'sms', to: fac.phone, message: fm }) } catch (e) {}
+          try { sendNotify({ channel: 'whatsapp', to: fac.phone, message: fm }) } catch (e) {}
+          try { await NOTIF.add({ type: 'integrity_notice', visit_id: active.id, facility_name: active.facility_name, area: active.area, channel: 'sms', status: 'sent', message: fm }, userId) } catch (e) {}
+        }
         if (cs.cs_email) { try { sendNotify({ channel: 'email', to: cs.cs_email, subject: 'Visit completed: ' + active.facility_name, message: csMsg }) } catch (e) {} }
         if (cs.cs_phone) { try { sendNotify({ channel: 'sms', to: cs.cs_phone, message: csMsg }) } catch (e) {} }
         if (cs.cs_whatsapp) { try { sendNotify({ channel: 'whatsapp', to: cs.cs_whatsapp, message: csMsg }) } catch (e) {} }
@@ -1803,7 +1807,7 @@ function FollowUpsPage({ userId, identity }) {
   const [callLog, setCallLog] = useState([])
   const [q, setQ] = useState('')
   const [openId, setOpenId] = useState(null)
-  const [form, setForm] = useState({ outcome: 'Reached', notes: '', caller: '' })
+  const [form, setForm] = useState({ outcome: 'Reached', notes: '', caller: '', integrity: 'Not asked' })
   const [busy, setBusy] = useState(false)
   const [briefs, setBriefs] = useState({})
   async function refresh() {
@@ -1815,11 +1819,17 @@ function FollowUpsPage({ userId, identity }) {
   const anyDone = visits.some(v => v.status === 'debriefed' && !(v.debrief && v.debrief.first_visit))
   const done = visits.filter(v => v.status === 'debriefed' && !(v.debrief && v.debrief.first_visit) && matchQ(v, q))
   function callsFor(id) { return callLog.filter(c => c.visit_id === id) }
-  function openForm(v) { setOpenId(v.id); setForm({ outcome: 'Reached', notes: '', caller: (identity && identity.name) || '' }) }
+  function openForm(v) { setOpenId(v.id); setForm({ outcome: 'Reached', notes: '', caller: (identity && identity.name) || '', integrity: 'Not asked' }) }
   async function saveCall(v) {
     setBusy(true)
     try {
-      await CALLS.add({ visit_id: v.id, facility_name: v.facility_name, area: v.area, outcome: form.outcome, notes: form.notes.trim(), caller: form.caller.trim() }, userId)
+      await CALLS.add({ visit_id: v.id, facility_name: v.facility_name, area: v.area, outcome: form.outcome, notes: form.notes.trim(), caller: form.caller.trim(), integrity: form.integrity }, userId)
+      if (form.integrity === 'Payment or gift was requested') {
+        const m = 'INTEGRITY ALERT: ' + v.facility_name + ' (' + (v.area || '') + ') reports that a payment or gift was requested during monitoring. Logged by ' + (form.caller || 'customer service') + '.'
+        try { await NOTIF.add({ type: 'integrity_alert', visit_id: v.id, facility_name: v.facility_name, area: v.area, channel: 'email', status: 'sent', message: m }, userId) } catch (e) {}
+        try { sendNotify({ channel: 'email', to: OWNER_EMAIL, subject: 'Integrity alert: ' + v.facility_name, message: m }) } catch (e) {}
+        toast('Integrity alert raised with the executive office.', 'warn')
+      }
       setOpenId(null); await refresh()
     } catch (e) {} finally { setBusy(false) }
   }
@@ -1841,6 +1851,9 @@ function FollowUpsPage({ userId, identity }) {
               <label className="field sm"><span>Outcome</span><select value={form.outcome} onChange={e => setForm({ ...form, outcome: e.target.value })}>{['Reached', 'No answer', 'Call back', 'Escalated'].map(o => <option key={o}>{o}</option>)}</select></label>
               <label className="field sm"><span>Caller</span><input value={form.caller} onChange={e => setForm({ ...form, caller: e.target.value })} /></label>
             </div>
+            <label className="field sm"><span>Was any payment, gift or favour requested by our officer?</span>
+              <select value={form.integrity} onChange={e => setForm({ ...form, integrity: e.target.value })}>{['Not asked', 'No, nothing was requested', 'Payment or gift was requested', 'Facility preferred not to say'].map(o => <option key={o}>{o}</option>)}</select>
+            </label>
             <label className="field sm"><span>Notes</span><textarea rows="2" value={form.notes} onChange={e => setForm({ ...form, notes: e.target.value })} placeholder="What did the facility say about the visit?" /></label>
             <button className="btn small primary" onClick={() => saveCall(v)} disabled={busy}>{busy ? 'Saving\u2026' : 'Save call'}</button>
           </div>}
@@ -1892,6 +1905,139 @@ async function runReminders(visits, facilities, userId, opts) {
     sent.push({ facility: v.facility_name, stage })
   }
   return sent
+}
+
+/* ---------- integrity oversight (HQ) ----------
+   RHSC monitors as ONE team, so comparing officers against each other proves
+   nothing: everybody is on every visit. And a team that watches itself did not
+   stop the last case, because juniors do not report the person leading them.
+   So this looks at the VISITS instead, for the marks a hurried or bought visit
+   leaves behind, and leans on the two checks that sit outside the team: what the
+   facility says, and a random re-inspection. */
+function monitorOf(v) { return (v.team && v.team[0] && v.team[0].name) || 'Unknown' }
+function minutesOnSite(v) {
+  const a = v.arrival_time ? new Date(v.arrival_time).getTime() : 0
+  const d = (v.debrief && v.debrief.updatedAt) ? new Date(v.debrief.updatedAt).getTime() : ((v.monitoring && v.monitoring.updatedAt) ? new Date(v.monitoring.updatedAt).getTime() : 0)
+  if (!a || !d || d <= a) return null
+  const m = Math.round((d - a) / 60000)
+  return m > 0 && m < 600 ? m : null
+}
+function evidenceCount(v) {
+  const items = (v.monitoring && v.monitoring.items) || {}
+  let n = 0
+  Object.keys(items).forEach(k => { n += ((items[k] && items[k].evidence) || []).length })
+  return n
+}
+function metresBetween(a, b) {
+  const R = 6371000, t = Math.PI / 180
+  const dLat = (b.lat - a.lat) * t, dLng = (b.lng - a.lng) * t
+  const la1 = a.lat * t, la2 = b.lat * t
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(la1) * Math.cos(la2) * Math.sin(dLng / 2) ** 2
+  return Math.round(2 * R * Math.asin(Math.sqrt(h)))
+}
+function IntegrityPage({ facilities }) {
+  const [visits, setVisits] = useState([])
+  const [calls, setCalls] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [sample, setSample] = useState(null)
+  useEffect(() => {
+    VIS.list().then(v => { setVisits(v); setLoading(false) }).catch(() => setLoading(false))
+    CALLS.list().then(setCalls).catch(() => {})
+  }, [])
+  const scored = visits.filter(v => !(v.debrief && v.debrief.first_visit) && (v.status === 'monitored' || v.status === 'debriefed'))
+  const facById = {}; (facilities || []).forEach(f => { facById[f.id] = f; facById[f.name] = f })
+
+  function checkVisit(v) {
+    const f = facById[v.facility_id] || facById[v.facility_name]
+    const flags = []
+    const mins = minutesOnSite(v)
+    const ev = evidenceCount(v)
+    if (mins != null && mins < 20) flags.push('In and out in ' + mins + ' min')
+    if (!ev) flags.push('No photo evidence')
+    if (typeof v.lat !== 'number' || typeof v.lng !== 'number') flags.push('No GPS at check-in')
+    else if (f && hasCoords(f) && f.geo_confirmed !== false) {
+      const d = metresBetween({ lat: v.lat, lng: v.lng }, { lat: f.lat, lng: f.lng })
+      if (d > 800) flags.push('Checked in ' + (d > 1500 ? (d / 1000).toFixed(1) + ' km' : d + ' m') + ' from the facility')
+    }
+    const gaps = (v.debrief && v.debrief.gaps) || []
+    if (v.overall_rating === 'green' && !gaps.length && !ev) flags.push('Passed with nothing recorded')
+    return { v, mins, ev, flags }
+  }
+  const checked = scored.map(checkVisit)
+  const flagged = checked.filter(c => c.flags.length).sort((a, b) => b.flags.length - a.flags.length)
+  const passRate = scored.length ? Math.round(scored.filter(v => v.overall_rating === 'green').length / scored.length * 100) : null
+  const allMins = checked.map(c => c.mins).filter(m => m != null).sort((a, b) => a - b)
+  const medMins = allMins.length ? allMins[Math.floor(allMins.length / 2)] : null
+  const noEv = scored.length ? Math.round(checked.filter(c => !c.ev).length / scored.length * 100) : 0
+
+  // Who was on the visits that raised a flag. With one team this only sharpens
+  // as the roster changes, but it is the record you would want later.
+  const present = {}
+  flagged.forEach(c => (c.v.team || []).forEach(m => { if (m && m.name) present[m.name] = (present[m.name] || 0) + 1 }))
+  const presentRows = Object.keys(present).map(n => ({ name: n, n: present[n] })).sort((a, b) => b.n - a.n)
+
+  const reported = calls.filter(c => c.integrity === 'Payment or gift was requested')
+  const askedCount = calls.filter(c => c.integrity && c.integrity !== 'Not asked').length
+  const approved = scored.filter(v => v.approval && v.approval.status === 'approved')
+
+  function drawSample() {
+    const pool = approved.length ? approved : scored
+    if (!pool.length) { toast('No completed visits to sample yet.', 'warn'); return }
+    const n = Math.max(1, Math.round(pool.length * 0.05))
+    const picked = pool.slice().sort(() => Math.random() - 0.5).slice(0, n)
+    setSample(picked)
+    toast(n + ' visit' + (n === 1 ? '' : 's') + ' drawn for re-inspection.')
+  }
+
+  return (<div className="page">
+    <div className="ptitle"><div><p className="eyebrow">Integrity</p><h2>Field conduct</h2></div>
+      <div className="ptools"><button className="btn small primary" onClick={drawSample}>Draw re-inspection sample</button></div>
+    </div>
+    <p className="page-lede">The team monitors together, so the checks that matter come from outside it: what the facility tells us, and visits picked at random to be checked again.</p>
+
+    {reported.length > 0 && (<div className="int-alert">
+      <h3>{reported.length} facilit{reported.length === 1 ? 'y has' : 'ies have'} reported a request for payment</h3>
+      <ul className="log-list">{reported.map((c, i) => (<li key={i}><span className="log-when">{(c.created_at || '').slice(0, 10)}</span><span className="log-msg"><strong>{c.facility_name}</strong>{c.area ? ' \u00b7 ' + c.area : ''}{c.notes ? ' \u2014 ' + c.notes : ''}</span></li>))}</ul>
+    </div>)}
+
+    <div className="mr-stats" style={{ gridTemplateColumns: 'repeat(6,1fr)', marginBottom: 16 }}>
+      <div className="mr-stat"><span className="v">{scored.length}</span><span className="l">Monitored</span></div>
+      <div className="mr-stat"><span className="v">{passRate == null ? '\u2013' : passRate + '%'}</span><span className="l">Pass rate</span></div>
+      <div className="mr-stat"><span className="v">{medMins == null ? '\u2013' : medMins}</span><span className="l">Median min</span></div>
+      <div className="mr-stat"><span className="v">{noEv}%</span><span className="l">No photos</span></div>
+      <div className="mr-stat"><span className="v">{askedCount}</span><span className="l">Asked</span></div>
+      <div className="mr-stat"><span className="v">{reported.length}</span><span className="l">Reported</span></div>
+    </div>
+
+    {sample && (<div className="settings-card" style={{ marginBottom: 16 }}>
+      <h3>Re-inspect these {sample.length}</h3>
+      <p className="hintline">Drawn at random. Send someone who was not on the original visit, ideally from outside the team, and compare what they find.</p>
+      <div className="frows">{sample.map(v => (<div className="frow" key={v.id}>
+        <div className="fmain"><span className="fname">{v.facility_name}</span><span className="fmeta">{v.area} &middot; visited {(v.arrival_time || '').slice(0, 10)} &middot; rated {ragText(v.overall_rating)}</span></div>
+      </div>))}</div>
+      <button className="linkbtn subtle" onClick={() => setSample(null)}>Clear</button>
+    </div>)}
+
+    <SectionHead eyebrow="Worth a second look" title={flagged.length + ' visit' + (flagged.length === 1 ? '' : 's') + ' raised something'} />
+    {loading ? <div className="skeleton skel-row" /> :
+      flagged.length === 0 ? <p className="empty">Nothing flagged. This fills up as the August round runs.</p> :
+        <div className="rep-rows">{flagged.slice(0, 60).map(c => (
+          <div className="rep-row" key={c.v.id}>
+            <div className="rep-main"><span className="fname">{c.v.facility_name}</span><span className="fmeta">{c.v.area} &middot; {(c.v.arrival_time || '').slice(0, 10)} &middot; {(c.v.team || []).map(m => m.name).join(', ') || 'team not recorded'}</span></div>
+            <div className="rep-mid">{c.v.score != null && <Chip rag={c.v.overall_rating} pct={c.v.score} />}</div>
+            <div className="int-flags">{c.flags.map((x, i) => <em key={i}>{x}</em>)}</div>
+          </div>))}</div>}
+    {flagged.length > 60 && <p className="hintline">Showing the first 60 of {flagged.length}.</p>}
+
+    {presentRows.length > 0 && (<>
+      <SectionHead eyebrow="Record" title="Who was present on flagged visits" />
+      <div className="hq-table">
+        <div className="hq-tr hq-th" style={{ gridTemplateColumns: '2fr 1fr' }}><span>Name</span><span>Flagged visits</span></div>
+        {presentRows.map(r => (<div className="hq-tr" key={r.name} style={{ gridTemplateColumns: '2fr 1fr' }}><span className="hq-name">{r.name}</span><span>{r.n}</span></div>))}
+      </div>
+      <p className="hintline">Everyone attends every visit, so this is a record rather than a comparison. It becomes meaningful as the roster changes.</p>
+    </>)}
+  </div>)
 }
 
 /* ---------- settings (HQ) ---------- */
@@ -2403,7 +2549,8 @@ function TabIcon({ id }) {
     followups: 'M4 4h5l2 5-3 2a12 12 0 006 6l2-3 5 2v5a2 2 0 01-2 2A16 16 0 014 6a2 2 0 012-2',
     settings: 'M12 15a3 3 0 100-6 3 3 0 000 6zM19 12a7 7 0 00-.1-1l2-1.6-2-3.4-2.4 1a7 7 0 00-1.7-1l-.3-2.6H9.5l-.3 2.6a7 7 0 00-1.7 1l-2.4-1-2 3.4L3.1 11a7 7 0 000 2l-2 1.6 2 3.4 2.4-1a7 7 0 001.7 1l.3 2.6h4.9l.3-2.6a7 7 0 001.7-1l2.4 1 2-3.4-2-1.6a7 7 0 00.1-1z',
     assistant: 'M12 3l2 5 5 2-5 2-2 5-2-5-5-2 5-2zM19 15l1 2.5L22 19l-2 1-1 2.5-1-2.5L16 19l2-1z',
-    approvals: 'M9 12l2 2 4-4M12 3l7 4v5c0 4.5-3 8.3-7 9-4-.7-7-4.5-7-9V7z'
+    approvals: 'M9 12l2 2 4-4M12 3l7 4v5c0 4.5-3 8.3-7 9-4-.7-7-4.5-7-9V7z',
+    integrity: 'M12 3l7 4v5c0 4.5-3 8.3-7 9-4-.7-7-4.5-7-9V7zM12 8v4M12 15h.01'
   }[id] || 'M4 4h16v16H4z'
   return (<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d={p} /></svg>)
 }
@@ -2617,13 +2764,14 @@ export default function App() {
     else if (appTab === 'map') body = <MapRoutePage list={facs} role={effRole} userId={user.id} />
     else if (appTab === 'engage') body = <EngagePage list={facs} identity={effId} role={effRole} userId={user.id} />
     else if (appTab === 'monitor') body = <MonitorPage userId={user.id} />
-    else if (appTab === 'debrief') body = <DebriefPage userId={user.id} />
+    else if (appTab === 'debrief') body = <DebriefPage userId={user.id} facilities={facs} />
     else if (appTab === 'reports') body = <ReportsPage facilities={facs} userId={user.id} role={effRole} />
     else if (appTab === 'myfacility') body = <ProprietorPage facilityId={myFacility} facilities={facs} />
     else if (appTab === 'followups') body = <FollowUpsPage userId={user.id} identity={identity} />
     else if (appTab === 'settings') body = <SettingsPage user={user} identity={identity} facilities={facs} />
     else if (appTab === 'assistant') body = <AssistantPage facilities={facs} />
     else if (appTab === 'approvals') body = <ApprovalsPage userId={user.id} identity={effId} role={effRole} />
+    else if (appTab === 'integrity') body = <IntegrityPage facilities={facs} />
     else if (appTab === 'assign') body = <AssignPage list={facs} userId={user.id} />
     else body = <Dashboard identity={effId} role={effRole} onOpen={setAppTab} facilities={facs} onSeed={loadSample} onClear={clearAll} dbError={dbError} />
   } else {
@@ -2964,6 +3112,13 @@ const css = `
 .realms .pending-card h2 { color:var(--p-deep); font-size:22px; margin-bottom:10px; }
 .realms .pending-card p { color:#5A4C74; margin-bottom:8px; }
 .realms .cta-row.center { justify-content:center; }
+.realms .int-alert { background:#FBE9E6; border:1px solid #F0C9BF; border-left:3px solid #B4442E; border-radius:var(--r-md); padding:14px 16px; margin-bottom:16px; }
+.realms .int-alert h3 { color:#B4442E; font-size:15px; margin-bottom:8px; }
+.realms .int-alert .log-list { border:none; }
+.realms .int-tr { grid-template-columns:1.6fr .6fr .8fr .8fr .8fr .7fr 1.6fr; }
+.realms .int-flag { background:#FFFBF3; }
+.realms .int-flags { display:flex; flex-wrap:wrap; gap:4px; }
+.realms .int-flags em { font-style:normal; font-size:11px; background:#FBF3E6; color:#9A5B12; border:1px solid #F0D9B5; border-radius:9px; padding:2px 7px; }
 .realms .frow.picked { border-color:var(--p); background:var(--lav2); }
 .realms .band-note { text-align:center; max-width:720px; margin:16px auto 0; font-size:14px; color:#5A4C74; }
 
