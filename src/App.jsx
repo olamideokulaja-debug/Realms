@@ -4,7 +4,7 @@ import 'leaflet/dist/leaflet.css'
 import { supabase, MODE } from './supabaseClient.js'
 import { facilities as FAC, assignments as ASG, visits as VIS, notifications as NOTIF, calls as CALLS, access as ACC, facilitiesFromCSV, orderRoute, clusterDays, googleMapsDirUrl, geocode, uploadEvidence, sendNotify, askAI, seedSampleData, clearAllData } from './data.js'
 
-const BUILD = 'field-2026-07-17c'
+const BUILD = 'field-2026-07-17d'
 
 /*
   REALMS FIELD — Stages 1 to 3 (single-file App.jsx + supabaseClient.js + data.js)
@@ -568,7 +568,7 @@ async function geocodeCall(body) {
 }
 function FacilitiesPage({ list, canEdit, userId, reload }) {
   const [adding, setAdding] = useState(false); const [busy, setBusy] = useState(false); const [msg, setMsg] = useState('')
-  const [form, setForm] = useState({ name: '', category: '', area: '', address: '', lat: '', lng: '' })
+  const [form, setForm] = useState({ name: '', category: '', area: '', address: '', lat: '', lng: '', reg_status: '' })
   const [q, setQ] = useState('')
   const [fstate, setFstate] = useState('all')
   const [visits, setVisits] = useState([])
@@ -596,8 +596,10 @@ function FacilitiesPage({ list, canEdit, userId, reload }) {
     setBusy(true); setMsg('')
     try {
       const lat = parseFloat(form.lat), lng = parseFloat(form.lng)
-      await FAC.addMany([{ name: form.name.trim(), category: form.category.trim(), area: form.area.trim() || 'Unassigned', address: form.address.trim(), last_visit: '', lat: isNaN(lat) ? null : lat, lng: isNaN(lng) ? null : lng }], userId)
-      setForm({ name: '', category: '', area: '', address: '', lat: '', lng: '' }); setAdding(false); await reload()
+      // Anything added by hand was found by the team, so tag it like the rest.
+      await FAC.addMany([{ name: form.name.trim(), category: form.category.trim(), area: form.area.trim() || 'Unassigned', address: form.address.trim(), last_visit: '', lat: isNaN(lat) ? null : lat, lng: isNaN(lng) ? null : lng, state: 'active', source: 'field', reg_status: form.reg_status || 'Unknown' }], userId)
+      toast('Facility added.')
+      setForm({ name: '', category: '', area: '', address: '', lat: '', lng: '', reg_status: '' }); setAdding(false); await reload()
     } catch (e) { setMsg(e.message || 'Could not save the facility.') } finally { setBusy(false) }
   }
   async function importRows(text, sourceLabel) {
