@@ -4,7 +4,7 @@ import 'leaflet/dist/leaflet.css'
 import { supabase, MODE } from './supabaseClient.js'
 import { facilities as FAC, assignments as ASG, visits as VIS, notifications as NOTIF, calls as CALLS, access as ACC, facilitiesFromCSV, orderRoute, clusterDays, clusterDaysByDate, googleMapsDirUrl, geocode, uploadEvidence, sendNotify, askAI, seedSampleData, clearAllData } from './data.js'
 
-const BUILD = 'field-2026-07-18h'
+const BUILD = 'field-2026-07-18i'
 
 /*
   REALMS FIELD — Stages 1 to 3 (single-file App.jsx + supabaseClient.js + data.js)
@@ -2494,7 +2494,7 @@ function AccessPanel({ identity, user }) {
 }
 
 /* ---------- approvals (Team Lead sign-off before HEFAMAA) ---------- */
-function needsApproval(v) { return v.status === 'debriefed' && !(v.debrief && v.debrief.first_visit) }
+function needsApproval(v) { return (v.status === 'debriefed') || !!(v.debrief && v.debrief.first_visit) || !!(v.assessment && v.assessment.ruid) }
 function approvalState(v) { return (v.approval && v.approval.status) || 'pending' }
 function ApprovalsPage({ userId, identity, role }) {
   const [visits, setVisits] = useState([])
@@ -2518,6 +2518,16 @@ function ApprovalsPage({ userId, identity, role }) {
       toast(status === 'approved' ? 'Report approved for submission.' : 'Returned to the monitor.')
     } catch (e) { toast('Could not save that decision.', 'err') } finally { setBusy('') }
   }
+  async function decideAll() {
+    const targets = rows.filter(v => approvalState(v) !== 'approved')
+    if (!targets.length) { toast('Nothing here to approve.'); return }
+    setBusy('all'); let ok = 0
+    for (const v of targets) {
+      const approval = { status: 'approved', by: (identity && identity.name) || 'Team Lead', at: new Date().toISOString(), note: '' }
+      try { await VIS.update(v.id, { approval }); setVisits(vs => vs.map(x => x.id === v.id ? { ...x, approval } : x)); ok++ } catch (e) {}
+    }
+    setBusy(''); toast('Approved ' + ok + ' report' + (ok === 1 ? '' : 's') + ' for submission.')
+  }
   return (<div className="page">
     <div className="ptitle"><div><p className="eyebrow">Approvals</p><h2>{counts.pending} awaiting sign-off</h2></div>
       <div className="ptools">
@@ -2528,20 +2538,21 @@ function ApprovalsPage({ userId, identity, role }) {
           <option value="returned">Returned ({counts.returned})</option>
           <option value="all">All</option>
         </select>
+        {canApprove && <button className="btn small primary" onClick={decideAll} disabled={busy === 'all'}>{busy === 'all' ? 'Approving…' : 'Approve all shown'}</button>}
       </div>
     </div>
     <p className="page-lede">Every report is signed off by the Team Lead before it goes to HEFAMAA. Only approved reports appear in the weekly submission.</p>
     {rows.length === 0 ? <p className="empty">Nothing here.</p> :
       <div className="rep-rows">{rows.map(v => { const st = approvalState(v); return (
         <div className="rep-row" key={v.id}>
-          <div className="rep-main"><span className="fname">{v.facility_name}</span><span className="fmeta">{v.area} &middot; {(v.arrival_time || v.created_at || '').slice(0, 10)}{v.team && v.team[0] ? ' \u00b7 ' + v.team[0].name : ''}</span></div>
+          <div className="rep-main"><span className="fname">{v.facility_name}</span><span className="fmeta">{v.area} &middot; {(v.visit_date || v.arrival_time || v.created_at || '').slice(0, 10)}{v.team && v.team[0] ? ' \u00b7 ' + v.team[0].name : ''}</span></div>
           <div className="rep-mid">
-            {v.score != null && <Chip rag={v.overall_rating} pct={v.score} />}
+            {v.score != null ? <Chip rag={v.overall_rating} pct={v.score} /> : hasFirstAssessment(v) && <span className="appr-chip">First assessment</span>}
             <span className={'appr-chip ' + st}>{st === 'approved' ? 'Approved' : st === 'returned' ? 'Returned' : 'Pending'}</span>
             {v.approval && v.approval.by && st !== 'pending' && <span className="fmeta">{v.approval.by}, {(v.approval.at || '').slice(0, 10)}</span>}
           </div>
           <div className="rep-actions">
-            <button className="mini" onClick={() => printDoc('HEFAMAA Inspection Report', buildInspectionReport(v, v.debrief || deriveDebrief(v), origin))}>Review</button>
+            <button className="mini" onClick={() => safePrint(hasFirstAssessment(v) ? 'Monitoring Report' : 'Inspection Report', () => hasFirstAssessment(v) ? buildMonitoringReport(v, origin) : buildInspectionReport(v, v.debrief || deriveDebrief(v), origin))}>Review</button>
             {canApprove && st !== 'approved' && <button className="mini ok" onClick={() => decide(v, 'approved')} disabled={busy === v.id}>Approve</button>}
             {canApprove && st !== 'returned' && <button className="mini danger" onClick={() => { setNoteFor(noteFor === v.id ? null : v.id); setNote('') }}>Return</button>}
           </div>
@@ -2644,7 +2655,7 @@ function ReportsPage({ facilities, userId, scope, role }) {
   const areas = Array.from(new Set(scopedVisits.map(v => v.area || 'Unassigned'))).sort()
   const rows = scopedVisits.filter(v => (area === 'all' || (v.area || 'Unassigned') === area) && (status === 'all' || v.status === status) && matchQ(v, q))
   const due = scopedVisits.filter(v => v.debrief && v.debrief.remediation_deadline).map(v => ({ v, date: v.debrief.remediation_deadline, days: daysUntil(v.debrief.remediation_deadline) })).sort((a, b) => (a.date < b.date ? -1 : 1))
-  function inRange(v) { const d = (v.arrival_time || v.created_at || '').slice(0, 10); return d && d >= from && d <= to }
+  function inRange(v) { const d = (v.visit_date || (v.assessment && v.assessment.date) || v.arrival_time || v.created_at || '').slice(0, 10); return d && d >= from && d <= to }
   const rangePool = scopedVisits.filter(v => needsApproval(v) && inRange(v))
   const batch = rangePool.filter(v => approvalState(v) === 'approved')
   const pendingCount = rangePool.length - batch.length
