@@ -4,7 +4,7 @@ import 'leaflet/dist/leaflet.css'
 import { supabase, MODE } from './supabaseClient.js'
 import { facilities as FAC, assignments as ASG, visits as VIS, notifications as NOTIF, calls as CALLS, access as ACC, facilitiesFromCSV, orderRoute, clusterDays, clusterDaysByDate, googleMapsDirUrl, geocode, uploadEvidence, sendNotify, askAI, seedSampleData, clearAllData } from './data.js'
 
-const BUILD = 'field-2026-07-18e'
+const BUILD = 'field-2026-07-18f'
 
 /*
   REALMS FIELD — Stages 1 to 3 (single-file App.jsx + supabaseClient.js + data.js)
@@ -1042,6 +1042,7 @@ const SA_FIELDS = [
 function saNum(v) { if (v == null || v === '') return null; const m = String(v).match(/-?\d+(\.\d+)?/); return m ? parseFloat(m[0]) : null }
 function REC_LABEL(s) { return s === 'resolved' ? 'Resolved' : s === 'in_progress' ? 'In progress' : 'Not done' }
 function SecondAssessmentPage({ facilities, identity, userId, role }) {
+  const origin = (typeof window !== 'undefined' && window.location) ? window.location.origin : ''
   const [visits, setVisits] = useState([])
   const [sub, setSub] = useState('due')
   const [openId, setOpenId] = useState(null)
@@ -1139,7 +1140,7 @@ function SecondAssessmentPage({ facilities, identity, userId, role }) {
               {!b && <p className="warnline">No first-assessment baseline is on file for this facility (it was among the first ~50 without reports). You can still record the visit; improvement will be based on this visit only.</p>}
               <div className="sa-cmp">
                 <div className="sa-col sa-basecol">
-                  <h4>First assessment{bd ? ' \u00b7 ' + bd : ''}</h4>
+                  <h4 style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>First assessment{bd ? ' \u00b7 ' + bd : ''}<button className="mini" onClick={() => { const fv = firstOf(f); if (fv) printDoc('Monitoring Report', buildMonitoringReport(fv, origin)) }}>Print report</button></h4>
                   {SA_FIELDS.map(([k, lab]) => (<div className="sa-row" key={k}><span className="sa-lab">{lab}</span><span className="sa-val">{base[k] || '\u2014'}</span></div>))}
                   <div className="sa-row"><span className="sa-lab">Score</span><span className="sa-val">{base.visited_unscored ? 'Visited \u2014 not scored' : (base.total_score != null ? base.total_score : '\u2014') + (() => { const bp = basePct(base); return bp ? ' (' + bp.v + '%' + (bp.est ? ' est.' : '') + ')' : '' })()}</span></div>
                   {(base.pct_estimated || base.visited_unscored) && <div className="sa-row"><span className="sa-lab"></span><span className="sa-val" style={{ fontSize: '11.5px', color: '#8A7AA6' }}>{base.score_basis || base.pct_basis || ''}</span></div>}
@@ -1779,6 +1780,50 @@ function buildInspectionReport(v, d, origin) {
   const body = rows.map(r => r[1] === '' && (r[0] === 'General' || r[0] === 'Findings') ? '<tr><th colspan="2" style="font-size:13px">' + r[0] + '</th></tr>' : '<tr><td style="width:34%;font-weight:600;color:#574277">' + r[0] + '</td><td>' + esc(r[1]) + '</td></tr>').join('')
   const stamp = (v.approval && v.approval.status === 'approved') ? '<p class="muted" style="border:1px solid #BFE3CB;background:#E6F4EA;color:#2E7D46;border-radius:6px;padding:6px 10px;display:inline-block">Approved for submission by ' + esc(v.approval.by || 'Team Lead') + ' on ' + String(v.approval.at || '').slice(0, 10) + '</p>' : ''
   return inspHead(origin) + '<table style="margin-top:10px">' + body + '</table>' + stamp + (d && d.signature ? '<p class="muted">Proprietor sign-off:</p><img class="sig" src="' + d.signature + '">' : '') + '<p class="muted" style="border:1px solid #E4DCEE;border-radius:6px;padding:8px 10px"><strong>Integrity notice.</strong> ' + INTEGRITY_NOTICE + '</p><p class="muted">Prepared by REALMS Healthcare Services Consulting Limited for HEFAMAA, Lagos State.</p>'
+}
+function hasFirstAssessment(v) {
+  const a = v && v.assessment
+  return !!((a && (a.ruid || a.services != null || a.total_score != null || a.recommendations || a.environment != null || a.visited_unscored)) || (v && v.monitoring && v.monitoring.first_assessment))
+}
+function firstAssessmentData(v) {
+  const a = v && v.assessment
+  if (a && (a.ruid || a.services != null || a.total_score != null || a.recommendations || a.environment != null || a.visited_unscored)) return a
+  return (v && v.monitoring && v.monitoring.first_assessment) || (v && v.assessment) || {}
+}
+function buildMonitoringReport(v, origin) {
+  const a = firstAssessmentData(v)
+  const esc = s => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/\n/g, '<br>')
+  const date = firstVal(a.date, v.visit_date, (v.arrival_time || v.created_at || '').slice(0, 10))
+  const pctText = a.visited_unscored ? 'Visited \u2014 not scored'
+    : (a.pct_score != null && a.pct_score !== '') ? a.pct_score + '%'
+    : (a.pct_estimate != null && a.pct_estimate !== '') ? a.pct_estimate + '% (estimated from the raw score)'
+    : ''
+  const gen = [
+    ['Date', date], ['Facility Name', firstVal(a.name, v.facility_name)], ['Facility Address', firstVal(a.address, v.address)],
+    ['LGA', firstVal(a.lga, v.area)], ['Facility Schedule', firstVal(a.schedule, v.category)], ['Opening Schedule', a.opening], ['Registration Status', a.reg_status]
+  ]
+  const find = [
+    ['Renewal Status', a.renewal_status], ['Services Rendered', a.services], ['Total Staff Strength and Breakdown', a.staff_strength], ['Staff met on duty', a.staff_on_duty],
+    ['Basic Equipment Available', a.basic_equipment], ['# of Wards', a.wards], ['# of Beds', a.beds], ['# of Toilets', a.toilets],
+    ['Environment', a.environment], ['Waste Management', a.waste_mgmt], ['Theatre / Clinical Areas', a.clinical_area], ['Others', a.others]
+  ]
+  const scoreRows = [['Total Score', a.total_score != null && a.total_score !== '' ? String(a.total_score) : ''], ['Percentage', pctText]]
+  const row = r => '<tr><td style="width:34%;font-weight:600;color:#574277">' + r[0] + '</td><td>' + esc(r[1]) + '</td></tr>'
+  const sec = t => '<tr><th colspan="2" style="font-size:13px">' + t + '</th></tr>'
+  const recs = Array.isArray(a.recommendations) && a.recommendations.length
+    ? '<h2>Recommendation(s)</h2><ol>' + a.recommendations.map(r => '<li>' + esc(r) + '</li>').join('') + '</ol>' : ''
+  const inspBy = firstVal(a.inspected_by) ? '<p class="muted"><strong>Inspected by:</strong> ' + esc(a.inspected_by) + '</p>' : ''
+  const estNote = (a.pct_estimated || a.visited_unscored) && a.score_basis ? '<p class="muted">' + esc(a.score_basis) + '</p>' : ''
+  return inspHead(origin) + '<h1 style="font-size:18px;margin-top:10px">First Assessment \u2014 Monitoring Report</h1>'
+    + '<table style="margin-top:6px">' + sec('General') + gen.map(row).join('') + sec('Findings') + find.map(row).join('') + sec('Scores') + scoreRows.map(row).join('') + '</table>'
+    + recs + estNote + inspBy
+    + '<p class="muted" style="border:1px solid #E4DCEE;border-radius:6px;padding:8px 10px"><strong>Integrity notice.</strong> ' + INTEGRITY_NOTICE + '</p>'
+    + '<p class="muted">Prepared by REALMS Healthcare Services Consulting Limited for HEFAMAA, Lagos State.</p>'
+}
+function buildMonitoringBatch(visits, origin) {
+  const parts = visits.map((v, i) => '<div style="' + (i ? 'page-break-before:always;' : '') + '">' + buildMonitoringReport(v, origin) + '</div>')
+  const idx = '<h1>First-assessment monitoring reports</h1><p>REALMS Healthcare Services Consulting Limited. ' + visits.length + ' report' + (visits.length === 1 ? '' : 's') + '.</p><table><tr><th>#</th><th>Facility</th><th>LGA</th><th>Date</th></tr>' + visits.map((v, i) => { const a = firstAssessmentData(v); return '<tr><td>' + (i + 1) + '</td><td>' + (v.facility_name || '') + '</td><td>' + (v.area || '') + '</td><td>' + firstVal(a.date, v.visit_date, (v.arrival_time || '').slice(0, 10)) + '</td></tr>' }).join('') + '</table>'
+  return docHead(origin) + idx + '<div style="page-break-before:always">' + parts.join('') + '</div>'
 }
 function buildWeeklyBatch(visits, origin, from, to) {
   const parts = visits.map((v, i) => '<div style="' + (i ? 'page-break-before:always;' : '') + '">' + buildInspectionReport(v, v.debrief || deriveDebrief(v), origin) + '</div>')
@@ -2609,6 +2654,7 @@ function ReportsPage({ facilities, userId, scope, role }) {
         <button className="btn small ghost" onClick={() => exportVisitsXLS(rows)}>Excel</button>
         <button className="btn small ghost" onClick={() => exportVisitsPDF(rows, origin)}>PDF</button>
         <button className="btn small primary" onClick={() => buildDailyPDF(rows, origin)}>Daily report</button>
+        <button className="btn small ghost" onClick={() => { const fr = rows.filter(hasFirstAssessment); if (!fr.length) { toast('No first-assessment reports in this view.', 'warn'); return } printDoc('First-assessment monitoring reports', buildMonitoringBatch(fr, origin)) }}>1st-assessment pack</button>
         <AIButton className="btn small ghost" label="AI summary" build={() => { const agg = rows.map(v => ({ facility: v.facility_name, area: v.area, rating: v.overall_rating, score: v.score, status: v.status })); return { system: 'You are the RHSC monitoring analyst. Write a brief executive summary (4 to 6 sentences) of these monitoring results for HEFAMAA leadership: coverage, overall compliance picture, notable areas or facilities needing attention. Use only the data given.', prompt: JSON.stringify(agg), max_tokens: 500 } }} onText={txt => setAiSummary(txt)} />
       </div>
     </div>
@@ -2640,6 +2686,7 @@ function ReportsPage({ facilities, userId, scope, role }) {
           <div className="rep-main"><span className="fname">{v.facility_name}</span><span className="fmeta">{v.area} &middot; {(v.arrival_time || v.created_at || '').slice(0, 10)}</span></div>
           <div className="rep-mid">{v.score != null ? <Chip rag={v.overall_rating} pct={v.score} /> : <span className={'chip ' + (v.status || 'engaged')}>{v.status === 'monitored' ? 'Assessed' : v.status === 'debriefed' ? 'Debriefed' : 'Engaged'}</span>}{v.debrief && v.debrief.closure_recommended && <span className="risk-badge high">Closure</span>}{v.debrief && v.debrief.escalated && <span className="risk-badge high">Escalated</span>}{v.debrief && v.debrief.genesys_interest && <span className="risk-badge low">Genesys</span>}{needsApproval(v) && <span className={'appr-chip ' + approvalState(v)}>{approvalState(v) === 'approved' ? 'Approved' : approvalState(v) === 'returned' ? 'Returned' : 'Pending'}</span>}</div>
           <div className="rep-actions">
+            {hasFirstAssessment(v) && <button className="mini primary" onClick={() => printDoc('Monitoring Report', buildMonitoringReport(v, origin))}>1st assessment</button>}
             <button className="mini" onClick={() => doc(v, 'report')}>Report</button>
             <button className="mini" onClick={() => doc(v, 'letter')}>Letter</button>
             <button className="mini" onClick={() => printDoc('HEFAMAA Inspection Report', buildInspectionReport(v, v.debrief || deriveDebrief(v), origin))}>Inspection</button>
