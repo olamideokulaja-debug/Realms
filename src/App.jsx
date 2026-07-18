@@ -2,9 +2,9 @@ import React, { useEffect, useRef, useState } from 'react'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
 import { supabase, MODE } from './supabaseClient.js'
-import { facilities as FAC, assignments as ASG, visits as VIS, notifications as NOTIF, calls as CALLS, access as ACC, facilitiesFromCSV, orderRoute, clusterDays, googleMapsDirUrl, geocode, uploadEvidence, sendNotify, askAI, seedSampleData, clearAllData } from './data.js'
+import { facilities as FAC, assignments as ASG, visits as VIS, notifications as NOTIF, calls as CALLS, access as ACC, facilitiesFromCSV, orderRoute, clusterDays, clusterDaysByDate, googleMapsDirUrl, geocode, uploadEvidence, sendNotify, askAI, seedSampleData, clearAllData } from './data.js'
 
-const BUILD = 'field-2026-07-17d'
+const BUILD = 'field-2026-07-18b'
 
 /*
   REALMS FIELD — Stages 1 to 3 (single-file App.jsx + supabaseClient.js + data.js)
@@ -195,13 +195,13 @@ const ROLES = [
 ]
 
 const ROLE_TABS = {
-  team_leader: ['dashboard', 'facilities', 'map', 'engage', 'monitor', 'debrief', 'assign', 'approvals', 'reports'],
-  field_monitor: ['dashboard', 'facilities', 'map', 'engage', 'monitor', 'debrief'],
-  rhsc_hq: ['dashboard', 'facilities', 'map', 'reports', 'approvals', 'integrity', 'followups', 'assistant', 'settings'],
+  team_leader: ['dashboard', 'facilities', 'map', 'engage', 'monitor', 'debrief', 'secondassessment', 'assign', 'approvals', 'reports'],
+  field_monitor: ['dashboard', 'facilities', 'map', 'engage', 'monitor', 'debrief', 'secondassessment'],
+  rhsc_hq: ['dashboard', 'facilities', 'map', 'secondassessment', 'reports', 'approvals', 'integrity', 'followups', 'assistant', 'settings'],
   hefamaa_reviewer: ['dashboard', 'facilities', 'reports'],
   facility_proprietor: ['dashboard', 'myfacility']
 }
-const TAB_LABEL = { dashboard: 'Dashboard', facilities: 'Facilities', map: 'Map & Route', engage: 'Engage', monitor: 'Monitor', debrief: 'Debrief', assign: 'Assign', reports: 'Reports', analytics: 'Analytics', myfacility: 'My Facility', followups: 'Follow-ups', settings: 'Settings', assistant: 'AI Assistant', approvals: 'Approvals', integrity: 'Integrity' }
+const TAB_LABEL = { dashboard: 'Dashboard', facilities: 'Facilities', map: 'Map & Route', engage: 'Engage', monitor: 'Monitor', debrief: 'Debrief', secondassessment: 'Second Assessment', assign: 'Assign', reports: 'Reports', analytics: 'Analytics', myfacility: 'My Facility', followups: 'Follow-ups', settings: 'Settings', assistant: 'AI Assistant', approvals: 'Approvals', integrity: 'Integrity' }
 const CAN_EDIT = ['team_leader', 'field_monitor', 'rhsc_hq']
 const AREA_COLORS = ['#6D4B8E', '#3E86C9', '#C7549C', '#5FA35A', '#D08A2E', '#7E63A0', '#4AA3A3', '#B0562E', '#6C6FD0', '#C0603C']
 
@@ -803,6 +803,7 @@ function MapRoutePage({ list, role, userId }) {
   const [perDay, setPerDay] = useState(14)
   const [days, setDays] = useState(5)
   const [scope, setScope] = useState('due')
+  const [order, setOrder] = useState('date') // 'date' = oldest first (2nd round), 'geo' = by geography
   const [plan, setPlan] = useState(null)
   const [planErr, setPlanErr] = useState('')
   const [openDay, setOpenDay] = useState(0)
@@ -826,16 +827,31 @@ function MapRoutePage({ list, role, userId }) {
   const overdueCount = visits.filter(v => (area === 'all' || (v.area || 'Unassigned') === area) && v.debrief && v.debrief.remediation_deadline && daysUntil(v.debrief.remediation_deadline) != null && daysUntil(v.debrief.remediation_deadline) < 7).length
   const tableRows = filtered.filter(f => matchQ(f, q))
 
-  const firstDone = {}, laterDone = {}
+  const firstDone = {}, laterDone = {}, firstRec = {}
   visits.forEach(v => {
     const key = v.facility_id || v.facility_name
     if (!key) return
-    if (v.debrief && v.debrief.first_visit) firstDone[key] = true
+    if (v.debrief && v.debrief.first_visit) { firstDone[key] = true; if (!firstRec[key]) firstRec[key] = v }
     else laterDone[key] = true
   })
+  function firstVisitOf(f) { return firstRec[f.id] || firstRec[f.name] || null }
+  function baselineDate(f) {
+    const v = firstVisitOf(f); if (!v) return ''
+    return (v.visit_date || (v.assessment && v.assessment.date) || (v.arrival_time || '').slice(0, 10) || '')
+  }
   function isDue(f) { return isLive(f) && (firstDone[f.id] || firstDone[f.name]) && !(laterDone[f.id] || laterDone[f.name]) }
   const dueCountAll = filtered.filter(isDue).length
-  const scopePool = filtered.filter(f => (scope === 'due' ? isDue(f) : true))
+  let scopePool = filtered.filter(f => (scope === 'due' ? isDue(f) : true))
+  // Second round: revisit oldest-first, so the team continues where they began
+  // rather than starting from the last facilities they saw. Sort the whole pool
+  // by first-assessment date BEFORE the days*perDay slice, so the earliest
+  // facilities make this run.
+  if (order === 'date') {
+    scopePool = scopePool.slice().sort((a, b) => {
+      const da = baselineDate(a) || '9999-99-99', db = baselineDate(b) || '9999-99-99'
+      return da < db ? -1 : da > db ? 1 : 0
+    })
+  }
   const planPool = scopePool.filter(hasCoords).slice(0, Math.max(1, days) * Math.max(1, perDay))
   const unmapped = scopePool.length - scopePool.filter(hasCoords).length
 
@@ -848,12 +864,21 @@ function MapRoutePage({ list, role, userId }) {
     const best = Object.keys(c).sort((a, b) => c[b] - c[a])[0]
     return best || (items[0] && items[0].area) || ''
   }
+  function dayDateRange(items) {
+    const ds = items.map(baselineDate).filter(Boolean).sort()
+    if (!ds.length) return ''
+    return ds[0] === ds[ds.length - 1] ? ds[0] : ds[0] + ' \u2192 ' + ds[ds.length - 1]
+  }
   function planRoutes() {
     setPlanErr(''); setPlan(null); setOpenDay(0)
     if (!planPool.length) { setPlanErr(scope === 'due' ? 'Nothing is due for a visit here.' : 'No mapped facilities in this view.'); return }
-    const groups = clusterDays(planPool, days, perDay)
+    // Oldest-first keeps chronological day order (continue where the first round began);
+    // by-geography groups purely on closeness. Either way each day is nearest-neighbour inside.
+    const groups = order === 'date'
+      ? clusterDaysByDate(planPool, perDay, baselineDate).slice(0, Math.max(1, days))
+      : clusterDays(planPool, days, perDay)
     if (!groups.length) { setPlanErr('Could not group these facilities. Check they have map pins.'); return }
-    const out = groups.map((items, i) => ({ day: i + 1, area: dayLabel(items), items }))
+    const out = groups.map((items, i) => ({ day: i + 1, area: order === 'date' ? (dayDateRange(items) || dayLabel(items)) : dayLabel(items), items }))
     setPlan(out)
     toast(out.length + ' day' + (out.length === 1 ? '' : 's') + ' planned, ' + out.reduce((n, d) => n + d.items.length, 0) + ' stops.')
   }
@@ -932,6 +957,12 @@ function MapRoutePage({ list, role, userId }) {
                   <option value="all">Everything in view ({filtered.length})</option>
                 </select>
               </label>
+              <label className="field sm"><span>Order</span>
+                <select value={order} onChange={e => { setOrder(e.target.value); setPlan(null) }}>
+                  <option value="date">Oldest first (continue the round)</option>
+                  <option value="geo">By geography (closest together)</option>
+                </select>
+              </label>
               <div className="mr-two">
                 <NumField label="Days" value={days} min={1} max={10} onChange={v => { setDays(v); setPlan(null) }} />
                 <NumField label="Per day" value={perDay} min={4} max={30} onChange={v => { setPerDay(v); setPlan(null) }} />
@@ -952,7 +983,7 @@ function MapRoutePage({ list, role, userId }) {
                 <span className="mr-day-c">{open ? '\u2212' : '+'}</span>
               </button>
               {open && (<div className="mr-day-body">
-                <ol className="plan-list">{d.items.map((f, j) => (<li key={j}><span className="pf-name">{f.name}</span>{f.address && <em>{f.address}</em>}{f.phone && <em className="pf-tel">{f.phone}</em>}</li>))}</ol>
+                <ol className="plan-list">{d.items.map((f, j) => { const bd = baselineDate(f); return (<li key={j}><span className="pf-name">{f.name}</span>{f.address && <em>{f.address}</em>}{bd && <em className="pf-tel">First assessed {bd}</em>}</li>) })}</ol>
                 <div className="mr-day-actions">
                   {url && <a className="btn small ghost" href={url} target="_blank" rel="noreferrer">Open in Google Maps</a>}
                 </div>
@@ -967,7 +998,7 @@ function MapRoutePage({ list, role, userId }) {
             </div>)
           })}</div>}
 
-          {!plan && !planErr && <p className="empty sm">Set the numbers above and plan the days. Each day is grouped by how close the facilities are to each other.</p>}
+          {!plan && !planErr && <p className="empty sm">Set the numbers above and plan the days. {order === 'date' ? 'Days run oldest-first \u2014 the team continues the round from the facilities they first assessed, not the last ones \u2014 and stops within a day are still ordered by how close they are.' : 'Each day is grouped by how close the facilities are to each other.'}</p>}
         </>)}
 
         {tab === 'cover' && isHQ && (<>
@@ -991,6 +1022,185 @@ function MapRoutePage({ list, role, userId }) {
         </>)}
       </aside>
     </div>
+  </div>)
+}
+
+/* ---------- second assessment (round 2; baseline = first assessment) ---------- */
+const SA_FIELDS = [
+  ['reg_status', 'Registration status', 's'],
+  ['renewal_status', 'Renewal status', 's'],
+  ['services', 'Services rendered', 'l'],
+  ['staff_strength', 'Total staff strength', 'l'],
+  ['staff_on_duty', 'Staff met on duty', 'l'],
+  ['basic_equipment', 'Basic equipment available', 'l'],
+  ['wards', '# of Wards', 's'], ['beds', '# of Beds', 's'], ['toilets', '# of Toilets', 's'],
+  ['environment', 'Environment', 'l'],
+  ['waste_mgmt', 'Waste management', 'l'],
+  ['clinical_area', 'Theatre / clinical areas', 'l'],
+  ['others', 'Others', 'l']
+]
+function saNum(v) { if (v == null || v === '') return null; const m = String(v).match(/-?\d+(\.\d+)?/); return m ? parseFloat(m[0]) : null }
+function REC_LABEL(s) { return s === 'resolved' ? 'Resolved' : s === 'in_progress' ? 'In progress' : 'Not done' }
+function SecondAssessmentPage({ facilities, identity, userId, role }) {
+  const [visits, setVisits] = useState([])
+  const [sub, setSub] = useState('due')
+  const [openId, setOpenId] = useState(null)
+  const [form, setForm] = useState({})
+  const [busy, setBusy] = useState(false)
+  const [q, setQ] = useState('')
+  useEffect(() => { VIS.list().then(setVisits).catch(() => {}) }, [])
+
+  const firstRec = {}, secondRec = {}
+  visits.forEach(v => {
+    const key = v.facility_id || v.facility_name; if (!key) return
+    if (v.round === 2 || v.status === 'second' || (v.debrief && v.debrief.second_visit)) secondRec[key] = v
+    else if (v.debrief && v.debrief.first_visit) { if (!firstRec[key]) firstRec[key] = v }
+  })
+  const firstOf = f => firstRec[f.id] || firstRec[f.name] || null
+  const secondOf = f => secondRec[f.id] || secondRec[f.name] || null
+  const baseAssess = f => { const v = firstOf(f); return (v && (v.assessment || (v.monitoring && v.monitoring.first_assessment))) || null }
+  const baseDate = f => { const v = firstOf(f); return v ? (v.visit_date || (v.assessment && v.assessment.date) || (v.arrival_time || '').slice(0, 10) || '') : '' }
+
+  const withFirst = facilities.filter(f => isLive(f) && firstOf(f))
+  const byDate = (a, b) => { const x = baseDate(a) || '9999-99-99', y = baseDate(b) || '9999-99-99'; return x < y ? -1 : x > y ? 1 : 0 }
+  const dueAll = withFirst.filter(f => !secondOf(f)).sort(byDate)
+  const doneAll = withFirst.filter(f => secondOf(f)).sort(byDate)
+  const due = dueAll.filter(f => matchQ(f, q))
+  const done = doneAll.filter(f => matchQ(f, q))
+
+  function startVisit(f) {
+    const b = baseAssess(f) || {}
+    setOpenId(f.id)
+    const pre = {}; SA_FIELDS.forEach(([k]) => { pre[k] = b[k] || '' })
+    setForm({ ...pre, total_score: '', pct_score: '', notes: '', newRecs: '',
+      recStatus: (b.recommendations || []).map(() => 'in_progress') })
+  }
+  function improvementFor(f) {
+    const b = baseAssess(f) || {}
+    const bs = saNum(b.total_score), bp = saNum(b.pct_score)
+    const ns = saNum(form.total_score), np = saNum(form.pct_score)
+    const recTotal = (b.recommendations || []).length
+    const resolved = (form.recStatus || []).filter(s => s === 'resolved').length
+    const dScore = (bs != null && ns != null) ? +(ns - bs).toFixed(1) : null
+    const dPct = (bp != null && np != null) ? +(np - bp).toFixed(1) : null
+    let verdict = 'No change'
+    if (dPct != null) verdict = dPct > 2 ? 'Improved' : dPct < -2 ? 'Declined' : 'No change'
+    else if (recTotal) verdict = resolved > recTotal / 2 ? 'Improved' : resolved === 0 ? 'No change' : 'In progress'
+    return { dScore, dPct, resolved, recTotal, verdict, baseScore: bs, basePct: bp, newScore: ns, newPct: np }
+  }
+  async function save(f) {
+    const b = baseAssess(f) || {}; const first = firstOf(f); const imp = improvementFor(f)
+    const today = new Date().toISOString().slice(0, 10)
+    const assessment = { date: today, source: 'second_assessment', inspected_by: (identity && identity.name) || '' }
+    SA_FIELDS.forEach(([k]) => { assessment[k] = form[k] || '' })
+    assessment.total_score = saNum(form.total_score)
+    assessment.pct_score = saNum(form.pct_score)
+    assessment.recommendation_status = (b.recommendations || []).map((r, i) => ({ text: r, status: (form.recStatus || [])[i] || 'not_done' }))
+    assessment.new_recommendations = (form.newRecs || '').split('\n').map(s => s.trim()).filter(Boolean)
+    assessment.notes = form.notes || ''
+    const row = {
+      facility_id: f.id, facility_name: f.name, area: f.area, status: 'second', round: 2,
+      baseline_visit_id: (first && first.id) || null, visit_date: today, arrival_time: new Date().toISOString(),
+      team: [{ name: (identity && identity.name) || 'RHSC Field Monitoring Team', role: 'Team' }],
+      monitoring: { second_assessment: assessment }, assessment, improvement: imp,
+      debrief: { first_visit: false, second_visit: true, narrative: 'Second assessment on ' + today + '. ' + imp.verdict + (imp.recTotal ? ' \u2014 ' + imp.resolved + ' of ' + imp.recTotal + ' first-visit recommendations resolved.' : '.') }
+    }
+    setBusy(true)
+    try { await VIS.add(row, userId); toast('Second assessment saved for ' + f.name + '.'); setOpenId(null); setForm({}); const vs = await VIS.list(); setVisits(vs); setSub('done') }
+    catch (e) { toast('Could not save the second assessment.', 'err') } finally { setBusy(false) }
+  }
+
+  function VerdictChip({ v }) { const c = v === 'Improved' ? 'g' : v === 'Declined' ? 'r' : 'a'; return <span className={'sa-verdict ' + c}>{v}</span> }
+
+  return (<div className="page">
+    <div className="ptitle">
+      <div><p className="eyebrow">Second assessment</p><h2>{dueAll.length} due &middot; {doneAll.length} completed</h2></div>
+    </div>
+    <p className="lead sm">The second visit continues the first. Each facility is shown with its first-assessment baseline so you can record what changed and whether it improved. Oldest baselines are listed first.</p>
+
+    <div className="seg" style={{ margin: '4px 0 14px' }}>
+      <button type="button" className={'segb' + (sub === 'due' ? ' on' : '')} onClick={() => setSub('due')}>Due for a second visit<span className="seg-n">{dueAll.length}</span></button>
+      <button type="button" className={'segb' + (sub === 'done' ? ' on' : '')} onClick={() => setSub('done')}>Completed<span className="seg-n">{doneAll.length}</span></button>
+    </div>
+    <SearchBox value={q} onChange={setQ} placeholder="Search facilities&#8230;" />
+
+    {sub === 'due' && <div className="sa-list">
+      {due.length === 0 && <p className="empty sm">{dueAll.length ? 'Nothing matches your search.' : 'No facilities are due for a second assessment yet. Load the first-assessment baselines, then facilities appear here oldest-first.'}</p>}
+      {due.map(f => { const b = baseAssess(f); const open = openId === f.id; const bd = baseDate(f)
+        return (<div className={'sa-item' + (open ? ' open' : '')} key={f.id}>
+          <button className="sa-head" onClick={() => open ? (setOpenId(null), setForm({})) : startVisit(f)}>
+            <span className="sa-name"><strong>{f.name}</strong><em>{[f.area, f.address].filter(Boolean).join(' \u00b7 ')}</em></span>
+            <span className="sa-meta">{bd ? 'First assessed ' + bd : 'No baseline date'}{b && b.total_score != null ? ' \u00b7 score ' + b.total_score + (b.pct_score != null ? ' (' + b.pct_score + '%)' : '') : ''}</span>
+            <span className="sa-tog">{open ? '\u2212' : 'Start'}</span>
+          </button>
+          {open && (() => { const imp = improvementFor(f); const base = b || {}
+            return (<div className="sa-body">
+              {!b && <p className="warnline">No first-assessment baseline is on file for this facility (it was among the first ~50 without reports). You can still record the visit; improvement will be based on this visit only.</p>}
+              <div className="sa-cmp">
+                <div className="sa-col sa-basecol">
+                  <h4>First assessment{bd ? ' \u00b7 ' + bd : ''}</h4>
+                  {SA_FIELDS.map(([k, lab]) => (<div className="sa-row" key={k}><span className="sa-lab">{lab}</span><span className="sa-val">{base[k] || '\u2014'}</span></div>))}
+                  <div className="sa-row"><span className="sa-lab">Score</span><span className="sa-val">{base.total_score != null ? base.total_score : '\u2014'}{base.pct_score != null ? ' (' + base.pct_score + '%)' : ''}</span></div>
+                </div>
+                <div className="sa-col sa-nowcol">
+                  <h4>This visit</h4>
+                  {SA_FIELDS.map(([k, lab, sz]) => (<label className="field sm" key={k}><span>{lab}</span>
+                    {sz === 'l'
+                      ? <textarea rows={2} value={form[k] || ''} onChange={e => setForm(s => ({ ...s, [k]: e.target.value }))} />
+                      : <input value={form[k] || ''} onChange={e => setForm(s => ({ ...s, [k]: e.target.value }))} inputMode={k === 'wards' || k === 'beds' || k === 'toilets' ? 'numeric' : undefined} />}
+                  </label>))}
+                  <div className="mr-two">
+                    <label className="field sm"><span>Total score</span><input inputMode="numeric" value={form.total_score || ''} onChange={e => setForm(s => ({ ...s, total_score: e.target.value }))} /></label>
+                    <label className="field sm"><span>% score</span><input inputMode="numeric" value={form.pct_score || ''} onChange={e => setForm(s => ({ ...s, pct_score: e.target.value }))} /></label>
+                  </div>
+                </div>
+              </div>
+
+              {(base.recommendations || []).length > 0 && <div className="sa-recs">
+                <h4>Progress on first-visit recommendations</h4>
+                {(base.recommendations || []).map((r, i) => (<div className="sa-rec" key={i}>
+                  <span className="sa-rec-t">{r}</span>
+                  <span className="sa-rec-pills">{['resolved', 'in_progress', 'not_done'].map(st => (
+                    <button type="button" key={st} className={'sa-pill ' + (st === 'resolved' ? 'g' : st === 'in_progress' ? 'a' : 'r') + ((form.recStatus || [])[i] === st ? ' on' : '')}
+                      onClick={() => setForm(s => { const arr = (s.recStatus || []).slice(); arr[i] = st; return { ...s, recStatus: arr } })}>{REC_LABEL(st)}</button>))}</span>
+                </div>))}
+              </div>}
+
+              <label className="field sm"><span>New recommendations (one per line)</span><textarea rows={2} value={form.newRecs || ''} onChange={e => setForm(s => ({ ...s, newRecs: e.target.value }))} /></label>
+              <label className="field sm"><span>Notes</span><textarea rows={2} value={form.notes || ''} onChange={e => setForm(s => ({ ...s, notes: e.target.value }))} /></label>
+
+              <div className="sa-improve">
+                <span className="sa-improve-l">Change since first assessment</span>
+                <div className="sa-improve-r">
+                  <VerdictChip v={imp.verdict} />
+                  {imp.dScore != null && <span className={'sa-delta ' + (imp.dScore > 0 ? 'g' : imp.dScore < 0 ? 'r' : '')}>score {imp.dScore > 0 ? '+' : ''}{imp.dScore}</span>}
+                  {imp.dPct != null && <span className={'sa-delta ' + (imp.dPct > 0 ? 'g' : imp.dPct < 0 ? 'r' : '')}>{imp.dPct > 0 ? '+' : ''}{imp.dPct}%</span>}
+                  {imp.recTotal > 0 && <span className="sa-delta">{imp.resolved}/{imp.recTotal} resolved</span>}
+                </div>
+              </div>
+              <button className="btn primary wide" onClick={() => save(f)} disabled={busy}>{busy ? 'Saving\u2026' : 'Save second assessment'}</button>
+            </div>)
+          })()}
+        </div>)
+      })}
+    </div>}
+
+    {sub === 'done' && <div className="sa-list">
+      {done.length === 0 && <p className="empty sm">No second assessments recorded yet.</p>}
+      {done.map(f => { const v = secondOf(f); const imp = (v && v.improvement) || {}; const b = baseAssess(f) || {}
+        return (<div className="sa-item done" key={f.id}>
+          <div className="sa-head static">
+            <span className="sa-name"><strong>{f.name}</strong><em>{[f.area, (v && v.visit_date) ? 'revisited ' + v.visit_date : ''].filter(Boolean).join(' \u00b7 ')}</em></span>
+            <span className="sa-meta">
+              {imp.verdict && <VerdictChip v={imp.verdict} />}
+              {imp.dScore != null && <span className={'sa-delta ' + (imp.dScore > 0 ? 'g' : imp.dScore < 0 ? 'r' : '')}>score {imp.dScore > 0 ? '+' : ''}{imp.dScore}</span>}
+              {imp.dPct != null && <span className={'sa-delta ' + (imp.dPct > 0 ? 'g' : imp.dPct < 0 ? 'r' : '')}>{imp.dPct > 0 ? '+' : ''}{imp.dPct}%</span>}
+              {imp.recTotal > 0 && <span className="sa-delta">{imp.resolved}/{imp.recTotal} resolved</span>}
+            </span>
+          </div>
+        </div>)
+      })}
+    </div>}
   </div>)
 }
 
@@ -2598,6 +2808,7 @@ function TabIcon({ id }) {
     engage: 'M12 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM5 20c0-3.5 3-6 7-6s7 2.5 7 6',
     monitor: 'M5 3h14v14H5zM8 9l2 2 4-5M8 13h6M9 21h6',
     debrief: 'M6 3h12v18l-6-3-6 3zM9 8h6M9 12h4',
+    secondassessment: 'M4 8a8 8 0 0113-6M20 4v4h-4M20 16a8 8 0 01-13 6M4 20v-4h4M9 12l2 2 4-4',
     assign: 'M8 6h11M8 12h11M8 18h11M4 6h.01M4 12h.01M4 18h.01',
     reports: 'M7 3h7l5 5v13H7zM14 3v5h5M9 13h6M9 17h6',
     analytics: 'M4 20V11M10 20V4M16 20v-7M22 20H2',
@@ -2821,6 +3032,7 @@ export default function App() {
     else if (appTab === 'engage') body = <EngagePage list={facs} identity={effId} role={effRole} userId={user.id} />
     else if (appTab === 'monitor') body = <MonitorPage userId={user.id} />
     else if (appTab === 'debrief') body = <DebriefPage userId={user.id} facilities={facs} />
+    else if (appTab === 'secondassessment') body = <SecondAssessmentPage facilities={facs} identity={effId} userId={user.id} role={effRole} />
     else if (appTab === 'reports') body = <ReportsPage facilities={facs} userId={user.id} role={effRole} />
     else if (appTab === 'myfacility') body = <ProprietorPage facilityId={myFacility} facilities={facs} />
     else if (appTab === 'followups') body = <FollowUpsPage userId={user.id} identity={identity} />
@@ -3137,6 +3349,45 @@ const css = `
 .realms .mr-day-body .plan-list { margin-top:12px; max-height:320px; overflow-y:auto; }
 .realms .mr-day-actions { display:flex; gap:8px; margin:12px 0 0; }
 .realms .pf-tel { color:var(--p-mid) !important; }
+/* second assessment */
+.realms .sa-list { margin-top:12px; display:flex; flex-direction:column; gap:10px; }
+.realms .sa-item { border:1px solid var(--line); border-radius:var(--r-lg); background:#fff; overflow:hidden; box-shadow:var(--e1); }
+.realms .sa-item.open { border-color:var(--p); }
+.realms .sa-head { width:100%; display:flex; align-items:center; gap:12px; padding:13px 16px; background:none; border:0; cursor:pointer; text-align:left; }
+.realms .sa-head.static { cursor:default; }
+.realms .sa-name { flex:1 1 auto; display:flex; flex-direction:column; min-width:0; }
+.realms .sa-name strong { font-size:15px; color:#3A2B54; }
+.realms .sa-name em { font-style:normal; font-size:12.5px; color:#8A7AA6; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.realms .sa-meta { display:flex; align-items:center; gap:8px; font-size:12.5px; color:#6B5B87; flex:0 0 auto; }
+.realms .sa-tog { flex:0 0 auto; font-size:13px; font-weight:600; color:var(--p); padding:4px 12px; border:1.5px solid var(--lav2); border-radius:999px; }
+.realms .sa-body { padding:4px 16px 16px; border-top:1px solid var(--lav2); }
+.realms .sa-cmp { display:grid; grid-template-columns:1fr 1fr; gap:16px; margin:12px 0; }
+.realms .sa-col h4 { margin:0 0 10px; font-size:12px; letter-spacing:.08em; text-transform:uppercase; color:var(--p-deep); }
+.realms .sa-basecol { background:var(--lav1,#F7F3FC); border-radius:12px; padding:12px 14px; }
+.realms .sa-row { display:flex; gap:8px; padding:5px 0; border-bottom:1px dashed var(--lav2); font-size:13px; }
+.realms .sa-row:last-child { border-bottom:0; }
+.realms .sa-lab { flex:0 0 42%; color:#7A6A93; }
+.realms .sa-val { flex:1 1 auto; color:#3A2B54; }
+.realms .sa-recs { margin:6px 0 4px; }
+.realms .sa-recs h4 { margin:0 0 8px; font-size:12px; letter-spacing:.08em; text-transform:uppercase; color:var(--p-deep); }
+.realms .sa-rec { display:flex; align-items:flex-start; gap:10px; padding:8px 0; border-bottom:1px dashed var(--lav2); }
+.realms .sa-rec-t { flex:1 1 auto; font-size:13px; color:#4A3B66; }
+.realms .sa-rec-pills { flex:0 0 auto; display:flex; gap:4px; }
+.realms .sa-pill { font-size:11.5px; padding:5px 10px; border-radius:999px; border:1.5px solid var(--line); background:#fff; color:#8A7AA6; cursor:pointer; touch-action:manipulation; min-height:34px; }
+.realms .sa-pill.on.g { background:#E7F5EC; border-color:#3E9B5F; color:#256B3E; }
+.realms .sa-pill.on.a { background:#FBF1DE; border-color:#C98A1E; color:#8A5D0E; }
+.realms .sa-pill.on.r { background:#FBE9E7; border-color:#C0503C; color:#8A2E1E; }
+.realms .sa-improve { display:flex; align-items:center; justify-content:space-between; gap:12px; margin:12px 0; padding:12px 14px; background:var(--lav1,#F7F3FC); border-radius:12px; }
+.realms .sa-improve-l { font-size:12px; letter-spacing:.06em; text-transform:uppercase; color:#7A6A93; }
+.realms .sa-improve-r { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+.realms .sa-verdict { font-size:12.5px; font-weight:700; padding:4px 12px; border-radius:999px; }
+.realms .sa-verdict.g { background:#E7F5EC; color:#256B3E; }
+.realms .sa-verdict.a { background:#FBF1DE; color:#8A5D0E; }
+.realms .sa-verdict.r { background:#FBE9E7; color:#8A2E1E; }
+.realms .sa-delta { font-size:12px; font-variant-numeric:tabular-nums; padding:3px 9px; border-radius:999px; background:#fff; border:1px solid var(--line); color:#5A4B76; }
+.realms .sa-delta.g { color:#256B3E; border-color:#B7E0C4; }
+.realms .sa-delta.r { color:#8A2E1E; border-color:#EBC3BB; }
+@media (max-width:820px){ .realms .sa-cmp { grid-template-columns:1fr; } .realms .sa-head { flex-wrap:wrap; } .realms .sa-meta { width:100%; } }
 .realms .mr-stats { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; }
 .realms .mr-stat { background:#fff; border:1px solid var(--line); border-radius:var(--r-sm); padding:12px 8px; text-align:center; }
 .realms .mr-stat .v { display:block; font-family:Lora,serif; font-size:20px; font-weight:700; color:var(--p-deep); font-variant-numeric:tabular-nums; }

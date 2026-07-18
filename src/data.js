@@ -82,6 +82,30 @@ export function clusterDays(items, k, cap) {
   return groups.filter(g => g.length).map(g => orderRoute(g))
 }
 
+/* ---------- oldest-first day planning (second round) ----------
+   The second assessment is a continuation of the first, so the team should
+   revisit in the same order they first saw the facilities: oldest baseline
+   first. We sort by the first-assessment date, cut the list into day-sized
+   chunks in that order, then order each day's stops nearest-neighbour so the
+   driving within a day is still tight. dateOf(f) returns a sortable string
+   (e.g. '2026-03-04'); facilities with no baseline date sort to the end. */
+export function clusterDaysByDate(items, perDay, dateOf) {
+  const cap = Math.max(1, perDay || 14)
+  const withKey = (items || []).map(f => ({ f, k: (dateOf && dateOf(f)) || '9999-99-99' }))
+  withKey.sort((a, b) => a.k < b.k ? -1 : a.k > b.k ? 1 : 0)
+  const ordered = withKey.map(x => x.f)
+  const days = []
+  for (let i = 0; i < ordered.length; i += cap) days.push(ordered.slice(i, i + cap))
+  // keep the chronological day order, but order the stops inside each day by geography
+  return days.map(g => {
+    const routed = orderRoute(g)
+    // orderRoute drops points without coords; keep those too, appended in date order
+    if (routed.length === g.length) return routed
+    const inRoute = new Set(routed)
+    return routed.concat(g.filter(f => !inRoute.has(f)))
+  })
+}
+
 export function googleMapsDirUrl(ordered) {
   const pts = ordered.filter(f => typeof f.lat === 'number' && typeof f.lng === 'number')
   if (!pts.length) return ''
