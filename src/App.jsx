@@ -4,7 +4,7 @@ import 'leaflet/dist/leaflet.css'
 import { supabase, MODE } from './supabaseClient.js'
 import { facilities as FAC, assignments as ASG, visits as VIS, notifications as NOTIF, calls as CALLS, access as ACC, facilitiesFromCSV, orderRoute, clusterDays, clusterDaysByDate, googleMapsDirUrl, geocode, uploadEvidence, sendNotify, askAI, seedSampleData, clearAllData } from './data.js'
 
-const BUILD = 'field-2026-07-18b'
+const BUILD = 'field-2026-07-18e'
 
 /*
   REALMS FIELD — Stages 1 to 3 (single-file App.jsx + supabaseClient.js + data.js)
@@ -1059,6 +1059,7 @@ function SecondAssessmentPage({ facilities, identity, userId, role }) {
   const firstOf = f => firstRec[f.id] || firstRec[f.name] || null
   const secondOf = f => secondRec[f.id] || secondRec[f.name] || null
   const baseAssess = f => { const v = firstOf(f); return (v && (v.assessment || (v.monitoring && v.monitoring.first_assessment))) || null }
+  function basePct(b) { if (!b) return null; if (b.pct_score != null && b.pct_score !== '') return { v: saNum(b.pct_score), est: false }; if (b.pct_estimate != null && b.pct_estimate !== '') return { v: saNum(b.pct_estimate), est: true }; return null }
   const baseDate = f => { const v = firstOf(f); return v ? (v.visit_date || (v.assessment && v.assessment.date) || (v.arrival_time || '').slice(0, 10) || '') : '' }
 
   const withFirst = facilities.filter(f => isLive(f) && firstOf(f))
@@ -1077,7 +1078,7 @@ function SecondAssessmentPage({ facilities, identity, userId, role }) {
   }
   function improvementFor(f) {
     const b = baseAssess(f) || {}
-    const bs = saNum(b.total_score), bp = saNum(b.pct_score)
+    const bs = saNum(b.total_score), bp = (basePct(b) || {}).v
     const ns = saNum(form.total_score), np = saNum(form.pct_score)
     const recTotal = (b.recommendations || []).length
     const resolved = (form.recStatus || []).filter(s => s === 'resolved').length
@@ -1130,7 +1131,7 @@ function SecondAssessmentPage({ facilities, identity, userId, role }) {
         return (<div className={'sa-item' + (open ? ' open' : '')} key={f.id}>
           <button className="sa-head" onClick={() => open ? (setOpenId(null), setForm({})) : startVisit(f)}>
             <span className="sa-name"><strong>{f.name}</strong><em>{[f.area, f.address].filter(Boolean).join(' \u00b7 ')}</em></span>
-            <span className="sa-meta">{bd ? 'First assessed ' + bd : 'No baseline date'}{b && b.total_score != null ? ' \u00b7 score ' + b.total_score + (b.pct_score != null ? ' (' + b.pct_score + '%)' : '') : ''}</span>
+            <span className="sa-meta">{bd ? 'First assessed ' + bd : 'No baseline date'}{(() => { const bp = basePct(b); if (b && b.visited_unscored) return ' \u00b7 not scored (visited)'; return b && b.total_score != null ? ' \u00b7 score ' + b.total_score + (bp ? ' (' + bp.v + '%' + (bp.est ? ' est.' : '') + ')' : '') : '' })()}</span>
             <span className="sa-tog">{open ? '\u2212' : 'Start'}</span>
           </button>
           {open && (() => { const imp = improvementFor(f); const base = b || {}
@@ -1140,7 +1141,8 @@ function SecondAssessmentPage({ facilities, identity, userId, role }) {
                 <div className="sa-col sa-basecol">
                   <h4>First assessment{bd ? ' \u00b7 ' + bd : ''}</h4>
                   {SA_FIELDS.map(([k, lab]) => (<div className="sa-row" key={k}><span className="sa-lab">{lab}</span><span className="sa-val">{base[k] || '\u2014'}</span></div>))}
-                  <div className="sa-row"><span className="sa-lab">Score</span><span className="sa-val">{base.total_score != null ? base.total_score : '\u2014'}{base.pct_score != null ? ' (' + base.pct_score + '%)' : ''}</span></div>
+                  <div className="sa-row"><span className="sa-lab">Score</span><span className="sa-val">{base.visited_unscored ? 'Visited \u2014 not scored' : (base.total_score != null ? base.total_score : '\u2014') + (() => { const bp = basePct(base); return bp ? ' (' + bp.v + '%' + (bp.est ? ' est.' : '') + ')' : '' })()}</span></div>
+                  {(base.pct_estimated || base.visited_unscored) && <div className="sa-row"><span className="sa-lab"></span><span className="sa-val" style={{ fontSize: '11.5px', color: '#8A7AA6' }}>{base.score_basis || base.pct_basis || ''}</span></div>}
                 </div>
                 <div className="sa-col sa-nowcol">
                   <h4>This visit</h4>
@@ -2661,8 +2663,8 @@ function HeatMap({ points }) {
   }, [])
   useEffect(() => {
     const m = obj.current, lg = layer.current; if (!m || !lg) return
-    m.invalidateSize(); lg.clearLayers(); const col = { green: '#2E7D46', amber: '#C77D0A', red: '#B4442E', none: '#9C86B8' }
-    points.forEach(p => { L.circleMarker([p.lat, p.lng], { radius: 9, color: '#fff', weight: 2, fillColor: col[p.rag || 'none'], fillOpacity: .9 }).bindPopup('<strong>' + p.name + '</strong><br>' + (p.rag ? ragText(p.rag) : 'Not assessed')).addTo(lg) })
+    m.invalidateSize(); lg.clearLayers(); const col = { green: '#2E7D46', amber: '#C77D0A', red: '#B4442E', unscored: '#B9AEC9', none: '#9C86B8' }
+    points.forEach(p => { L.circleMarker([p.lat, p.lng], { radius: 9, color: '#fff', weight: 2, fillColor: col[p.rag || 'none'], fillOpacity: .9 }).bindPopup('<strong>' + p.name + '</strong><br>' + (p.rag === 'unscored' ? 'Visited, not scored' : p.rag ? ragText(p.rag) : 'Not assessed')).addTo(lg) })
     if (points.length) { try { m.fitBounds(points.map(p => [p.lat, p.lng]), { padding: [40, 40], maxZoom: 13 }) } catch (e) {} }
   }, [points])
   return <div className="map-frame"><div ref={ref} className="leaflet-holder" /></div>
@@ -2722,20 +2724,21 @@ function AnalyticsBody({ facilities }) {
   useEffect(() => { VIS.list().then(setVisits).catch(() => {}) }, [])
   const vis = visits
   const areas = Array.from(new Set(facilities.map(f => f.area || 'Unassigned')))
-  const assessed = vis.filter(v => v.score != null)
-  const avg = assessed.length ? Math.round(assessed.reduce((a, v) => a + v.score, 0) / assessed.length) : null
-  const compliant = assessed.filter(v => v.overall_rating === 'green').length
-  const complianceRate = assessed.length ? Math.round(compliant / assessed.length * 100) : null
-  const rag = { green: 0, amber: 0, red: 0 }; assessed.forEach(v => { if (v.overall_rating && rag[v.overall_rating] != null) rag[v.overall_rating]++ })
+  const rated = vis.filter(v => v.score != null)
+  const unscored = vis.filter(v => v.score == null && ((v.assessment && v.assessment.visited_unscored) || v.overall_rating === 'unscored'))
+  const avg = rated.length ? Math.round(rated.reduce((a, v) => a + v.score, 0) / rated.length) : null
+  const compliant = rated.filter(v => v.overall_rating === 'green').length
+  const complianceRate = rated.length ? Math.round(compliant / rated.length * 100) : null
+  const rag = { green: 0, amber: 0, red: 0 }; rated.forEach(v => { if (v.overall_rating && rag[v.overall_rating] != null) rag[v.overall_rating]++ })
   const byArea = {}; vis.forEach(v => { const a = v.area || 'Unassigned'; byArea[a] = (byArea[a] || 0) + 1 })
   const areaRows = Object.keys(byArea).sort().map(a => ({ a, n: byArea[a] })); const maxArea = Math.max(1, ...areaRows.map(r => r.n))
   const latest = {}; vis.forEach(v => { const id = v.facility_id; if (!id) return; if (!latest[id] || (v.created_at || '') > (latest[id].created_at || '')) latest[id] = v })
   const points = facilities.filter(hasCoords).map(f => ({ lat: f.lat, lng: f.lng, name: f.name, rag: latest[f.id] ? latest[f.id].overall_rating : null }))
-  const cards = [{ v: facilities.length, l: 'Facilities' }, { v: areas.length, l: 'Areas covered' }, { v: vis.length, l: 'Visits' }, { v: assessed.length, l: 'Assessed' }, { v: avg == null ? '-' : avg + '%', l: 'Average score' }, { v: complianceRate == null ? '-' : complianceRate + '%', l: 'Green rate' }]
-  const donutData = [{ label: 'Green', value: rag.green, color: '#2E7D46' }, { label: 'Amber', value: rag.amber, color: '#C77D0A' }, { label: 'Red', value: rag.red, color: '#B4442E' }]
+  const cards = [{ v: facilities.length, l: 'Facilities' }, { v: vis.length, l: 'Visits' }, { v: rated.length, l: 'Assessed' }, { v: unscored.length, l: 'Visited \u00b7 not scored' }, { v: avg == null ? '-' : avg + '%', l: 'Average score' }, { v: complianceRate == null ? '-' : complianceRate + '%', l: 'Green rate' }]
+  const donutData = [{ label: 'Green', value: rag.green, color: '#2E7D46' }, { label: 'Amber', value: rag.amber, color: '#C77D0A' }, { label: 'Red', value: rag.red, color: '#B4442E' }, { label: 'Not scored', value: unscored.length, color: '#B9AEC9' }]
 
-  // compliance trend over time (by month)
-  const byMonth = {}; assessed.forEach(v => { const m = (v.arrival_time || v.created_at || '').slice(0, 7); if (!m) return; (byMonth[m] = byMonth[m] || []).push(v.score) })
+  // compliance trend over time (by month) — scored visits only
+  const byMonth = {}; rated.forEach(v => { const m = (v.arrival_time || v.created_at || '').slice(0, 7); if (!m) return; (byMonth[m] = byMonth[m] || []).push(v.score) })
   const trend = Object.keys(byMonth).sort().map(m => ({ label: monthLabel(m), value: Math.round(byMonth[m].reduce((a, b) => a + b, 0) / byMonth[m].length) }))
 
   // team / monitor performance
@@ -2756,7 +2759,7 @@ function AnalyticsBody({ facilities }) {
   return (<>
     <div className="an-cards">{cards.map(c => (<StatCard key={c.l} value={c.v} label={c.l} />))}</div>
     <div className="an-two">
-      <div className="an-panel"><h3>Compliance outcomes</h3>{assessed.length === 0 ? <p className="empty sm">No assessments yet.</p> : <Donut data={donutData} />}</div>
+      <div className="an-panel"><h3>Compliance outcomes</h3>{(rated.length + unscored.length) === 0 ? <p className="empty sm">No assessments yet.</p> : <Donut data={donutData} />}</div>
       <div className="an-panel ring-panel"><h3>Green rate</h3><Ring pct={complianceRate} label="Rated green at the most recent visit" /></div>
     </div>
     <div className="an-panel"><h3>Compliance trend</h3>
