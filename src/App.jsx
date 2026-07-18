@@ -4,7 +4,7 @@ import 'leaflet/dist/leaflet.css'
 import { supabase, MODE } from './supabaseClient.js'
 import { facilities as FAC, assignments as ASG, visits as VIS, notifications as NOTIF, calls as CALLS, access as ACC, facilitiesFromCSV, orderRoute, clusterDays, clusterDaysByDate, googleMapsDirUrl, geocode, uploadEvidence, sendNotify, askAI, seedSampleData, clearAllData } from './data.js'
 
-const BUILD = 'field-2026-07-18f'
+const BUILD = 'field-2026-07-18g'
 
 /*
   REALMS FIELD — Stages 1 to 3 (single-file App.jsx + supabaseClient.js + data.js)
@@ -1752,6 +1752,11 @@ function printDoc(title, inner) {
   w.document.write('<html><head><title>' + title + '</title><meta charset="utf-8"><style>' + DOC_CSS + '</style></head><body>' + inner + '</body></html>')
   w.document.close(); w.focus(); setTimeout(() => { try { w.print() } catch (e) {} }, 400)
 }
+function safePrint(title, build) {
+  let html
+  try { html = build() } catch (e) { try { toast('Could not build the document: ' + ((e && e.message) || e), 'warn') } catch (_) { window.alert('Could not build the document.') } return }
+  printDoc(title, html)
+}
 function docHead(origin) {
   return '<div class="head"><img src="' + origin + '/rhsc-mark.png" style="height:44px"><div><strong>REALMS HEALTHCARE SERVICES CONSULTING LIMITED</strong><br><span class="muted">Licensed HEFAMAA monitoring operator, Lagos State</span></div></div>'
 }
@@ -2686,11 +2691,15 @@ function ReportsPage({ facilities, userId, scope, role }) {
           <div className="rep-main"><span className="fname">{v.facility_name}</span><span className="fmeta">{v.area} &middot; {(v.arrival_time || v.created_at || '').slice(0, 10)}</span></div>
           <div className="rep-mid">{v.score != null ? <Chip rag={v.overall_rating} pct={v.score} /> : <span className={'chip ' + (v.status || 'engaged')}>{v.status === 'monitored' ? 'Assessed' : v.status === 'debriefed' ? 'Debriefed' : 'Engaged'}</span>}{v.debrief && v.debrief.closure_recommended && <span className="risk-badge high">Closure</span>}{v.debrief && v.debrief.escalated && <span className="risk-badge high">Escalated</span>}{v.debrief && v.debrief.genesys_interest && <span className="risk-badge low">Genesys</span>}{needsApproval(v) && <span className={'appr-chip ' + approvalState(v)}>{approvalState(v) === 'approved' ? 'Approved' : approvalState(v) === 'returned' ? 'Returned' : 'Pending'}</span>}</div>
           <div className="rep-actions">
-            {hasFirstAssessment(v) && <button className="mini primary" onClick={() => printDoc('Monitoring Report', buildMonitoringReport(v, origin))}>1st assessment</button>}
-            <button className="mini" onClick={() => doc(v, 'report')}>Report</button>
-            <button className="mini" onClick={() => doc(v, 'letter')}>Letter</button>
-            <button className="mini" onClick={() => printDoc('HEFAMAA Inspection Report', buildInspectionReport(v, v.debrief || deriveDebrief(v), origin))}>Inspection</button>
-            <button className="mini" onClick={() => printDoc('HEFAMAA Form', buildHefamaaDoc(v, origin))}>HEFAMAA</button>
+            {hasFirstAssessment(v) ? <>
+              <button className="mini primary" onClick={() => safePrint('Monitoring Report', () => buildMonitoringReport(v, origin))}>Monitoring report</button>
+              <button className="mini" onClick={() => safePrint('Inspection Report', () => buildInspectionReport(v, v.debrief || deriveDebrief(v), origin))}>Inspection</button>
+            </> : <>
+              <button className="mini" onClick={() => safePrint('Monitoring Report', () => buildReport(v, v.debrief || deriveDebrief(v), origin))}>Report</button>
+              <button className="mini" onClick={() => safePrint('Compliance Letter', () => buildLetter(v, v.debrief || deriveDebrief(v), origin))}>Letter</button>
+              <button className="mini" onClick={() => safePrint('Inspection Report', () => buildInspectionReport(v, v.debrief || deriveDebrief(v), origin))}>Inspection</button>
+              <button className="mini" onClick={() => safePrint('HEFAMAA Form', () => buildHefamaaDoc(v, origin))}>HEFAMAA</button>
+            </>}
             {!readOnly && <button className="mini" onClick={() => setNotifyId(notifyId === v.id ? null : v.id)}>Notify</button>}
           </div>
           {!readOnly && notifyId === v.id && <NotifyPanel v={v} summary={summary} />}
@@ -3355,6 +3364,9 @@ const css = `
 .realms .planner-controls { display:flex; flex-wrap:wrap; align-items:center; gap:12px; margin-bottom:14px; }
 .realms .field.inline { flex-direction:row; align-items:center; gap:8px; }
 .realms .field.inline input { width:70px; }
+.realms .field.inline input[type=date] { width:auto; min-width:160px; }
+.realms input[type=date] { min-width:150px; }
+@media (pointer:coarse){ .realms .field.inline input[type=date], .realms input[type=date] { min-width:172px; font-size:16px; } }
 .realms .plan-days { display:grid; grid-template-columns:repeat(auto-fill,minmax(280px,1fr)); gap:14px; }
 .realms .plan-day { background:#fff; border:1px solid var(--line); border-left:3px solid var(--p); border-radius:12px; padding:14px 16px; }
 .realms .plan-day-head { display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:8px; }
