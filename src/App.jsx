@@ -4,7 +4,7 @@ import 'leaflet/dist/leaflet.css'
 import { supabase, MODE } from './supabaseClient.js'
 import { facilities as FAC, assignments as ASG, visits as VIS, notifications as NOTIF, calls as CALLS, access as ACC, facilitiesFromCSV, orderRoute, clusterDays, clusterDaysByDate, googleMapsDirUrl, geocode, uploadEvidence, sendNotify, askAI, seedSampleData, clearAllData } from './data.js'
 
-const BUILD = 'field-2026-07-18i'
+const BUILD = 'field-2026-07-18j'
 
 /*
   REALMS FIELD — Stages 1 to 3 (single-file App.jsx + supabaseClient.js + data.js)
@@ -2808,7 +2808,7 @@ function AnalyticsBody({ facilities }) {
   const donutData = [{ label: 'Green', value: rag.green, color: '#2E7D46' }, { label: 'Amber', value: rag.amber, color: '#C77D0A' }, { label: 'Red', value: rag.red, color: '#B4442E' }, { label: 'Not scored', value: unscored.length, color: '#B9AEC9' }]
 
   // compliance trend over time (by month) — scored visits only
-  const byMonth = {}; rated.forEach(v => { const m = (v.arrival_time || v.created_at || '').slice(0, 7); if (!m) return; (byMonth[m] = byMonth[m] || []).push(v.score) })
+  const byMonth = {}; rated.forEach(v => { const m = (v.visit_date || (v.assessment && v.assessment.date) || v.arrival_time || v.created_at || '').slice(0, 7); if (!m) return; (byMonth[m] = byMonth[m] || []).push(v.score) })
   const trend = Object.keys(byMonth).sort().map(m => ({ label: monthLabel(m), value: Math.round(byMonth[m].reduce((a, b) => a + b, 0) / byMonth[m].length) }))
 
   // team / monitor performance
