@@ -4,7 +4,7 @@ import 'leaflet/dist/leaflet.css'
 import { supabase, MODE } from './supabaseClient.js'
 import { facilities as FAC, assignments as ASG, visits as VIS, notifications as NOTIF, calls as CALLS, access as ACC, facilitiesFromCSV, orderRoute, clusterDays, clusterDaysByDate, googleMapsDirUrl, geocode, uploadEvidence, sendNotify, askAI, seedSampleData, clearAllData } from './data.js'
 
-const BUILD = 'field-2026-07-18j'
+const BUILD = 'field-2026-07-18m'
 
 /*
   REALMS FIELD — Stages 1 to 3 (single-file App.jsx + supabaseClient.js + data.js)
@@ -197,11 +197,11 @@ const ROLES = [
 const ROLE_TABS = {
   team_leader: ['dashboard', 'facilities', 'map', 'engage', 'monitor', 'debrief', 'secondassessment', 'assign', 'approvals', 'reports'],
   field_monitor: ['dashboard', 'facilities', 'map', 'engage', 'monitor', 'debrief', 'secondassessment'],
-  rhsc_hq: ['dashboard', 'facilities', 'map', 'secondassessment', 'reports', 'approvals', 'integrity', 'followups', 'assistant', 'settings'],
+  rhsc_hq: ['dashboard', 'facilities', 'map', 'secondassessment', 'reports', 'approvals', 'integrity', 'followups', 'access', 'assistant', 'settings'],
   hefamaa_reviewer: ['dashboard', 'facilities', 'reports'],
   facility_proprietor: ['dashboard', 'myfacility']
 }
-const TAB_LABEL = { dashboard: 'Dashboard', facilities: 'Facilities', map: 'Map & Route', engage: 'Engage', monitor: 'Monitor', debrief: 'Debrief', secondassessment: 'Second Assessment', assign: 'Assign', reports: 'Reports', analytics: 'Analytics', myfacility: 'My Facility', followups: 'Follow-ups', settings: 'Settings', assistant: 'AI Assistant', approvals: 'Approvals', integrity: 'Integrity' }
+const TAB_LABEL = { dashboard: 'Dashboard', facilities: 'Facilities', map: 'Map & Route', engage: 'Engage', monitor: 'Monitor', debrief: 'Debrief', secondassessment: 'Second Assessment', assign: 'Assign', reports: 'Reports', analytics: 'Analytics', myfacility: 'My Facility', followups: 'Follow-ups', settings: 'Settings', assistant: 'AI Assistant', approvals: 'Approvals', integrity: 'Integrity', access: 'Access requests' }
 const CAN_EDIT = ['team_leader', 'field_monitor', 'rhsc_hq']
 const AREA_COLORS = ['#6D4B8E', '#3E86C9', '#C7549C', '#5FA35A', '#D08A2E', '#7E63A0', '#4AA3A3', '#B0562E', '#6C6FD0', '#C0603C']
 
@@ -1985,10 +1985,14 @@ function DebriefPage({ userId, facilities }) {
         const cs = getSettings(); const csMsg = 'RHSC: monitoring completed at ' + active.facility_name + '. Please call the facility to follow up.'
         // The facility hears from us directly, so a demand for money has somewhere to go.
         const fac = (facilities || []).find(f => f.id === active.facility_id || f.name === active.facility_name)
-        if (fac && fac.phone) {
+        const encPhone = (active.person_in_charge && active.person_in_charge.phone) || ''
+        const facNum = (fac && fac.phone) || encPhone
+        // a number captured at the visit sticks to the facility, so follow-ups can dial it later
+        if (fac && !fac.phone && encPhone) { try { await FAC.update(fac.id, { phone: encPhone }) } catch (e) {} }
+        if (facNum) {
           const fm = 'RHSC/HEFAMAA: your facility was monitored today. This visit is free of charge and our officers must never request money, gifts or favours. If anything was asked of you, report it in confidence to ' + CONTACT.phone + '.'
-          try { sendNotify({ channel: 'sms', to: fac.phone, message: fm }) } catch (e) {}
-          try { sendNotify({ channel: 'whatsapp', to: fac.phone, message: fm }) } catch (e) {}
+          try { sendNotify({ channel: 'sms', to: facNum, message: fm }) } catch (e) {}
+          try { sendNotify({ channel: 'whatsapp', to: facNum, message: fm }) } catch (e) {}
           try { await NOTIF.add({ type: 'integrity_notice', visit_id: active.id, facility_name: active.facility_name, area: active.area, channel: 'sms', status: 'sent', message: fm }, userId) } catch (e) {}
         }
         if (cs.cs_email) { try { sendNotify({ channel: 'email', to: cs.cs_email, subject: 'Visit completed: ' + active.facility_name, message: csMsg }) } catch (e) {} }
@@ -2122,25 +2126,53 @@ function ProprietorPage({ facilityId, facilities }) {
 }
 
 /* ---------- customer service follow-ups ---------- */
-function FollowUpsPage({ userId, identity }) {
+function fuDaysSince(d) { if (!d) return null; const t = new Date((d.length > 10 ? d.slice(0, 10) : d) + 'T00:00:00').getTime(); if (isNaN(t)) return null; return Math.max(0, Math.floor((Date.now() - t) / 86400000)) }
+function FollowUpsPage({ userId, identity, facilities, onChange }) {
   const [visits, setVisits] = useState([])
   const [notes, setNotes] = useState([])
   const [callLog, setCallLog] = useState([])
   const [q, setQ] = useState('')
+  const [filter, setFilter] = useState('awaiting')
   const [openId, setOpenId] = useState(null)
   const [form, setForm] = useState({ outcome: 'Reached', notes: '', caller: '', integrity: 'Not asked' })
   const [busy, setBusy] = useState(false)
   const [briefs, setBriefs] = useState({})
+  const [showLog, setShowLog] = useState(false)
+  const [logTab, setLogTab] = useState('calls')
+  const [copied, setCopied] = useState('')
   async function refresh() {
     try { setVisits(await VIS.list()) } catch (e) {}
     try { setNotes(await NOTIF.list()) } catch (e) {}
     try { setCallLog(await CALLS.list()) } catch (e) {}
   }
   useEffect(() => { refresh() }, [])
-  const anyDone = visits.some(v => v.status === 'debriefed' && !(v.debrief && v.debrief.first_visit))
-  const done = visits.filter(v => v.status === 'debriefed' && !(v.debrief && v.debrief.first_visit) && matchQ(v, q))
+
+  const phoneMap = {}
+  ;(facilities || []).forEach(f => { if (!f) return; if (f.id) phoneMap['id:' + f.id] = f.phone || ''; if (f.name) phoneMap['n:' + f.name.toLowerCase()] = f.phone || '' })
+  const facPhone = v => phoneMap['id:' + v.facility_id] || phoneMap['n:' + (v.facility_name || '').toLowerCase()] || (v.person_in_charge && v.person_in_charge.phone) || ''
+  const telHref = n => 'tel:' + String(n).replace(/[^0-9+]/g, '')
   function callsFor(id) { return callLog.filter(c => c.visit_id === id) }
+  const completedAt = v => ((v.debrief && v.debrief.updatedAt) || v.visit_date || v.arrival_time || v.created_at || '').slice(0, 10)
+  function integrityFlagged(id) { return callsFor(id).some(c => c.integrity === 'Payment or gift was requested') }
+  function statusOf(v) {
+    const last = callsFor(v.id)[0]
+    if (integrityFlagged(v.id)) return 'escalated'
+    if (!last) return 'awaiting'
+    if (last.outcome === 'Escalated') return 'escalated'
+    return 'called'
+  }
+
+  const all = visits.filter(v => v.status === 'debriefed' && !(v.debrief && v.debrief.first_visit))
+  const counts = { awaiting: 0, called: 0, escalated: 0, integrity: 0 }
+  all.forEach(v => { counts[statusOf(v)]++; if (integrityFlagged(v.id)) counts.integrity++ })
+  const prio = { escalated: 0, awaiting: 1, called: 2 }
+  const shown = all
+    .filter(v => filter === 'all' || statusOf(v) === filter)
+    .filter(v => matchQ(v, q))
+    .sort((a, b) => { const d = prio[statusOf(a)] - prio[statusOf(b)]; return d !== 0 ? d : (completedAt(a) || '').localeCompare(completedAt(b) || '') })
+
   function openForm(v) { setOpenId(v.id); setForm({ outcome: 'Reached', notes: '', caller: (identity && identity.name) || '', integrity: 'Not asked' }) }
+  function copyNum(n) { try { navigator.clipboard.writeText(n); setCopied(n); setTimeout(() => setCopied(''), 1400) } catch (e) {} }
   async function saveCall(v) {
     setBusy(true)
     try {
@@ -2150,23 +2182,60 @@ function FollowUpsPage({ userId, identity }) {
         try { await NOTIF.add({ type: 'integrity_alert', visit_id: v.id, facility_name: v.facility_name, area: v.area, channel: 'email', status: 'sent', message: m }, userId) } catch (e) {}
         try { sendNotify({ channel: 'email', to: OWNER_EMAIL, subject: 'Integrity alert: ' + v.facility_name, message: m }) } catch (e) {}
         toast('Integrity alert raised with the executive office.', 'warn')
-      }
-      setOpenId(null); await refresh()
+      } else { toast('Call logged.') }
+      setOpenId(null); await refresh(); if (onChange) onChange()
     } catch (e) {} finally { setBusy(false) }
   }
+  function aiBrief(v) {
+    return { system: 'You brief RHSC customer service before they call a facility about a completed monitoring visit. In 3 to 4 sentences summarise the outcome, the key gaps, and what to ask on the call. Use only the data.', prompt: JSON.stringify({ facility: v.facility_name, area: v.area, history: visits.filter(x => x.facility_name === v.facility_name).map(x => ({ date: (x.visit_date || x.arrival_time || x.created_at || '').slice(0, 10), rating: x.overall_rating, score: x.score, status: x.status, gaps: ((x.debrief && x.debrief.gaps) || []).map(g => g.label) })) }), max_tokens: 350 }
+  }
+
+  const kpis = [
+    { key: 'awaiting', v: counts.awaiting, l: 'Awaiting call', tone: 'amber' },
+    { key: 'called', v: counts.called, l: 'Called', tone: 'green' },
+    { key: 'escalated', v: counts.escalated, l: 'Escalated', tone: 'red' },
+    { key: 'all', v: all.length, l: 'All follow-ups', tone: 'plain' },
+  ]
+
   return (<div className="page">
     <div className="ptitle"><div><p className="eyebrow">Customer service</p><h2>Visit follow-ups</h2></div></div>
-    <p className="page-lede">When a visit is completed, customer service is notified to call the facility and hear how it went. Log each call here.</p>
-    {anyDone && <div className="list-tools"><SearchBox value={q} onChange={setQ} placeholder="Search facilities…" /></div>}
-    {done.length === 0 ? <p className="empty">{anyDone ? 'No visits match your search.' : 'No completed visits to follow up yet.'}</p> :
-      <div className="mon-list">{done.map(v => {
-        const cs = callsFor(v.id); const last = cs[0]
-        return (<div className="fu-card" key={v.id}>
-          <div className="fu-head">
-            <div><span className="fname">{v.facility_name}</span><span className="fmeta">{v.area} &middot; completed {((v.debrief && v.debrief.updatedAt) || v.arrival_time || '').slice(0, 10)}</span></div>
-            <div className="fu-right">{last ? <span className="chip green">Called: {last.outcome}</span> : <span className="chip amber">Awaiting call</span>}<AIButton className="mini" label="AI briefing" build={() => { const hist = visits.filter(x => x.facility_name === v.facility_name).map(x => ({ date: (x.arrival_time || x.created_at || '').slice(0, 10), rating: x.overall_rating, score: x.score, status: x.status, gaps: ((x.debrief && x.debrief.gaps) || []).map(g => g.label) })); return { system: 'You brief RHSC customer service before they call a facility about a completed monitoring visit. In 3 to 4 sentences summarise the outcome, the key gaps, and what to ask on the call. Use only the data.', prompt: JSON.stringify({ facility: v.facility_name, area: v.area, history: hist }), max_tokens: 350 } }} onText={txt => setBriefs(b => ({ ...b, [v.id]: txt }))} /><button className="mini" onClick={() => openId === v.id ? setOpenId(null) : openForm(v)}>{openId === v.id ? 'Close' : 'Log call'}</button></div>
+    <p className="page-lede">When a monitoring visit is completed, customer service calls the facility to hear how it went — and to give any demand for money somewhere to go. Work the queue below, oldest first.</p>
+
+    {counts.integrity > 0 && <div className="fu-flag"><span className="fu-flag-ic">!</span><div><strong>{counts.integrity} integrity {counts.integrity === 1 ? 'flag' : 'flags'} raised.</strong> A facility reported that money, a gift or a favour was requested during monitoring. These sit at the top of the queue and are escalated to the executive office.</div></div>}
+
+    <div className="fu-kpis">{kpis.map(k => (
+      <button key={k.key} className={'fu-kpi ' + k.tone + (filter === k.key ? ' on' : '')} onClick={() => setFilter(k.key)}>
+        <span className="fu-kpi-v">{k.v}</span><span className="fu-kpi-l">{k.l}</span>
+      </button>))}
+    </div>
+
+    <div className="fu-toolbar">
+      <div className="fu-segs">{[['awaiting', 'Awaiting'], ['called', 'Called'], ['escalated', 'Escalated'], ['all', 'All']].map(([k, l]) => (
+        <button key={k} className={'fu-seg' + (filter === k ? ' on' : '')} onClick={() => setFilter(k)}>{l}{k !== 'all' && counts[k] ? <span className="fu-seg-n">{counts[k]}</span> : null}</button>))}
+      </div>
+      <SearchBox value={q} onChange={setQ} placeholder="Search facilities…" />
+    </div>
+
+    {shown.length === 0 ? <p className="empty">{all.length ? 'Nothing in this view — try another filter.' : 'No completed monitoring visits to follow up yet. When a visit is debriefed, it appears here automatically.'}</p> :
+      <div className="fu-queue">{shown.map(v => {
+        const cs = callsFor(v.id); const last = cs[0]; const st = statusOf(v)
+        const phone = facPhone(v); const wait = st === 'awaiting' ? fuDaysSince(completedAt(v)) : null
+        const chip = st === 'escalated' ? <span className="chip red">Escalated</span> : st === 'called' ? <span className="chip green">Called &middot; {last.outcome}</span> : <span className="chip amber">Awaiting call</span>
+        return (<div className={'fu-card2 ' + st} key={v.id}>
+          <div className="fu-c-top">
+            <div className="fu-c-id">
+              <span className="fname">{v.facility_name}</span>
+              <span className="fmeta">{v.area || '\u2014'} &middot; completed {completedAt(v) || '\u2014'}{wait != null ? <span className="fu-wait">{wait === 0 ? 'today' : 'waiting ' + wait + 'd'}</span> : null}</span>
+            </div>
+            {chip}
           </div>
-          {briefs[v.id] && <div className="ai-panel"><h4><span className="ai-spark">✦</span> Call briefing</h4><p className="ai-text">{briefs[v.id]}</p></div>}
+          <div className="fu-c-actions">
+            {phone ? <a className="mini call" href={telHref(phone)}>{'\u260e'} Call</a> : <span className="mini disabled">No number on file</span>}
+            {phone && <button className="mini ghost" onClick={() => copyNum(phone)}>{copied === phone ? 'Copied \u2713' : phone}</button>}
+            <AIButton className="mini" label="AI briefing" build={() => aiBrief(v)} onText={txt => setBriefs(b => ({ ...b, [v.id]: txt }))} />
+            <button className={'mini' + (openId === v.id ? ' on' : '')} onClick={() => openId === v.id ? setOpenId(null) : openForm(v)}>{openId === v.id ? 'Close' : cs.length ? 'Log another call' : 'Log call'}</button>
+          </div>
+          {briefs[v.id] && <div className="ai-panel"><h4><span className="ai-spark">{'\u2726'}</span> Call briefing</h4><p className="ai-text">{briefs[v.id]}</p></div>}
           {openId === v.id && <div className="fu-form">
             <div className="fgrid two">
               <label className="field sm"><span>Outcome</span><select value={form.outcome} onChange={e => setForm({ ...form, outcome: e.target.value })}>{['Reached', 'No answer', 'Call back', 'Escalated'].map(o => <option key={o}>{o}</option>)}</select></label>
@@ -2178,17 +2247,18 @@ function FollowUpsPage({ userId, identity }) {
             <label className="field sm"><span>Notes</span><textarea rows="2" value={form.notes} onChange={e => setForm({ ...form, notes: e.target.value })} placeholder="What did the facility say about the visit?" /></label>
             <button className="btn small primary" onClick={() => saveCall(v)} disabled={busy}>{busy ? 'Saving\u2026' : 'Save call'}</button>
           </div>}
-          {cs.length > 0 && <ul className="fu-calls">{cs.map((c, i) => (<li key={i}><strong>{c.outcome}</strong> &middot; {(c.created_at || '').slice(0, 16).replace('T', ' ')}{c.caller ? ' \u00b7 ' + c.caller : ''}{c.notes ? ' \u2014 ' + c.notes : ''}</li>))}</ul>}
+          {cs.length > 0 && <ul className="fu-timeline">{cs.map((c, i) => (<li key={i} className={c.integrity === 'Payment or gift was requested' ? 'flag' : ''}><span className="fu-dot" /><div className="fu-t-body"><span className="fu-t-head"><strong>{c.outcome}</strong><span className="fu-t-when">{(c.created_at || '').slice(0, 16).replace('T', ' ')}{c.caller ? ' \u00b7 ' + c.caller : ''}</span></span>{c.notes ? <span className="fu-t-note">{c.notes}</span> : null}</div></li>))}</ul>}
         </div>)
       })}</div>}
 
-    <SectionHead eyebrow="Logs" title="Notification log" />
-    {notes.length === 0 ? <p className="empty sm">No notifications yet.</p> :
-      <ul className="log-list">{notes.slice(0, 50).map((n, i) => (<li key={i}><span className="log-when">{(n.created_at || '').slice(0, 16).replace('T', ' ')}</span><span className="log-msg">{n.message || (n.type + ' ' + (n.facility_name || ''))}</span></li>))}</ul>}
-
-    <SectionHead eyebrow="Logs" title="Call log" />
-    {callLog.length === 0 ? <p className="empty sm">No calls logged yet.</p> :
-      <ul className="log-list">{callLog.slice(0, 50).map((c, i) => (<li key={i}><span className="log-when">{(c.created_at || '').slice(0, 16).replace('T', ' ')}</span><span className="log-msg">{c.facility_name} &middot; {c.outcome}{c.caller ? ' \u00b7 ' + c.caller : ''}{c.notes ? ' \u2014 ' + c.notes : ''}</span></li>))}</ul>}
+    <button className="fu-logtoggle" onClick={() => setShowLog(s => !s)}>{showLog ? '\u2013 Hide activity log' : '+ Show activity log'}</button>
+    {showLog && <div className="fu-logwrap">
+      <div className="fu-segs sm">{[['calls', 'Call log'], ['notes', 'Notifications']].map(([k, l]) => (<button key={k} className={'fu-seg' + (logTab === k ? ' on' : '')} onClick={() => setLogTab(k)}>{l}</button>))}</div>
+      {logTab === 'calls' ? (callLog.length === 0 ? <p className="empty sm">No calls logged yet.</p> :
+        <ul className="log-list">{callLog.slice(0, 50).map((c, i) => (<li key={i}><span className="log-when">{(c.created_at || '').slice(0, 16).replace('T', ' ')}</span><span className="log-msg">{c.facility_name} &middot; {c.outcome}{c.caller ? ' \u00b7 ' + c.caller : ''}{c.notes ? ' \u2014 ' + c.notes : ''}</span></li>))}</ul>)
+        : (notes.length === 0 ? <p className="empty sm">No notifications yet.</p> :
+        <ul className="log-list">{notes.slice(0, 50).map((n, i) => (<li key={i}><span className="log-when">{(n.created_at || '').slice(0, 16).replace('T', ' ')}</span><span className="log-msg">{n.message || (n.type + ' ' + (n.facility_name || ''))}</span></li>))}</ul>)}
+    </div>}
   </div>)
 }
 
@@ -2409,7 +2479,6 @@ function SettingsPage({ user, identity, facilities }) {
       <p className="hintline">Generate first-draft Yorùbá, Hausa and Igbo for the website strings, to give a native speaker to review before use. Downloads a JSON file.</p>
       <AIButton label="Generate translations" build={() => { const en = {}; Object.keys(TR).forEach(k => { en[k] = TR[k].en }); return { system: 'You are a professional Nigerian translator. Translate the given English UI strings into Yoruba (yo), Hausa (ha) and Igbo (ig). Return ONLY JSON of the form {"yo":{key:translation},"ha":{...},"ig":{...}} using the same keys. Natural, concise, suitable for a professional healthcare firm.', prompt: JSON.stringify(en), max_tokens: 2000 } }} onText={txt => { try { download('realms-translations.json', txt.replace(/```json|```/g, '').trim(), 'application/json'); toast('Translations generated and downloaded for review.') } catch (e) { toast('Could not save the file.', 'warn') } }} />
     </div>
-    <AccessPanel identity={identity} user={user} />
   </div>)
 }
 
@@ -2464,9 +2533,16 @@ function PendingAccess({ kind, user, facilities, identity, onSignOut, onBack }) 
     </div>
   </div>)
 }
-function AccessPanel({ identity, user }) {
+function AccessRequestsPage({ identity, user, onChange }) {
+  return (<div className="page">
+    <div className="ptitle"><div><p className="eyebrow">Administration</p><h2>Access requests</h2></div></div>
+    <p className="page-lede">People asking to join the RHSC workspace or claim a facility. Approve or decline each below — the count in the menu clears as you work through them.</p>
+    <AccessPanel identity={identity} user={user} onChange={onChange} bare />
+  </div>)
+}
+function AccessPanel({ identity, user, onChange, bare }) {
   const [rows, setRows] = useState([]); const [busy, setBusy] = useState('')
-  async function refresh() { try { setRows(await ACC.list()) } catch (e) {} }
+  async function refresh() { try { const r = await ACC.list(); setRows(r); if (onChange) onChange() } catch (e) {} }
   useEffect(() => { refresh() }, [])
   async function decide(r, status) {
     setBusy(r.id)
@@ -2890,7 +2966,8 @@ function TabIcon({ id }) {
     settings: 'M12 15a3 3 0 100-6 3 3 0 000 6zM19 12a7 7 0 00-.1-1l2-1.6-2-3.4-2.4 1a7 7 0 00-1.7-1l-.3-2.6H9.5l-.3 2.6a7 7 0 00-1.7 1l-2.4-1-2 3.4L3.1 11a7 7 0 000 2l-2 1.6 2 3.4 2.4-1a7 7 0 001.7 1l.3 2.6h4.9l.3-2.6a7 7 0 001.7-1l2.4 1 2-3.4-2-1.6a7 7 0 00.1-1z',
     assistant: 'M12 3l2 5 5 2-5 2-2 5-2-5-5-2 5-2zM19 15l1 2.5L22 19l-2 1-1 2.5-1-2.5L16 19l2-1z',
     approvals: 'M9 12l2 2 4-4M12 3l7 4v5c0 4.5-3 8.3-7 9-4-.7-7-4.5-7-9V7z',
-    integrity: 'M12 3l7 4v5c0 4.5-3 8.3-7 9-4-.7-7-4.5-7-9V7zM12 8v4M12 15h.01'
+    integrity: 'M12 3l7 4v5c0 4.5-3 8.3-7 9-4-.7-7-4.5-7-9V7zM12 8v4M12 15h.01',
+    access: 'M10 11a4 4 0 100-8 4 4 0 000 8zM3 21v-1a7 7 0 019.5-6.5M15 18l2 2 4-4'
   }[id] || 'M4 4h16v16H4z'
   return (<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d={p} /></svg>)
 }
@@ -2921,17 +2998,17 @@ function TopBarApp({ identity, realRole, viewAsName, onViewAs, onEditName, onSig
     <div className="tb-right"><button className="who" onClick={onEditName} title="Edit your name">{identity.first}</button><button className="signin" onClick={onSignOut}>Sign out</button></div>
   </header>)
 }
-function Sidebar({ role, appTab, setAppTab, collapsed, setCollapsed, open, setOpen }) {
+function Sidebar({ role, appTab, setAppTab, collapsed, setCollapsed, open, setOpen, badges }) {
   const r = roleById(role); const tabs = ROLE_TABS[role] || ['dashboard']
   return (<>
     <div className={'scrim' + (open ? ' show' : '')} onClick={() => setOpen(false)} />
     <aside className={'sidebar' + (collapsed ? ' collapsed' : '') + (open ? ' open' : '')}>
       <div className="sb-head"><span className="sb-role">{r ? r.label : 'Workspace'}</span></div>
-      <nav className="sb-nav">{tabs.map(t => (
-        <button key={t} className={'sb-item' + (appTab === t ? ' active' : '')} onClick={() => { setAppTab(t); setOpen(false) }} title={TAB_LABEL[t]}>
-          <span className="sb-ico"><TabIcon id={t} /></span><span className="sb-lab">{TAB_LABEL[t]}</span>
+      <nav className="sb-nav">{tabs.map(t => { const n = badges && badges[t]; return (
+        <button key={t} className={'sb-item' + (appTab === t ? ' active' : '')} onClick={() => { setAppTab(t); setOpen(false) }} title={TAB_LABEL[t] + (n ? ' (' + n + ' waiting)' : '')}>
+          <span className="sb-ico"><TabIcon id={t} />{n ? <span className="sb-badge">{n > 99 ? '99+' : n}</span> : null}</span><span className="sb-lab">{TAB_LABEL[t]}</span>{n ? <span className="sb-badge-lab">{n > 99 ? '99+' : n}</span> : null}
         </button>
-      ))}</nav>
+      ) })}</nav>
       <button className="sb-collapse" onClick={() => setCollapsed(c => !c)} title="Collapse menu">
         <svg viewBox="0 0 24 24" stroke="currentColor" fill="none" strokeWidth="2"><path d={collapsed ? 'M9 6l6 6-6 6' : 'M15 6l-6 6 6 6'} /></svg><span className="sb-lab">Collapse</span>
       </button>
@@ -2949,7 +3026,25 @@ export default function App() {
   const [pendKind, setPendKind] = useState('rhsc_hq')
   const [myFacility, setMyFacility] = useState(null)
   const [appTab, setAppTab] = useState('dashboard')
+  const [badges, setBadges] = useState({})
   const [facs, setFacs] = useState([])
+  async function refreshBadges() {
+    try { const rows = await ACC.list(); setBadges(b => ({ ...b, access: rows.filter(r => r.status === 'pending').length })) } catch (e) {}
+    try {
+      const [vs, cl] = await Promise.all([VIS.list(), CALLS.list()])
+      const called = new Set(cl.map(c => c.visit_id))
+      const awaiting = vs.filter(v => v.status === 'debriefed' && !(v.debrief && v.debrief.first_visit) && !called.has(v.id)).length
+      setBadges(b => ({ ...b, followups: awaiting }))
+    } catch (e) {}
+  }
+  useEffect(() => {
+    if (!user || !role) { setBadges({}); return }
+    const t = ROLE_TABS[role] || []
+    if (!t.includes('access') && !t.includes('followups')) return
+    let live = true; const run = () => { if (live) refreshBadges() }
+    run(); const iv = setInterval(run, 60000)
+    return () => { live = false; clearInterval(iv) }
+  }, [user, role, appTab])
   const [navCollapsed, setNavCollapsed] = useState(false)
   const [navOpen, setNavOpen] = useState(false)
   const [viewAs, setViewAs] = useState(null)
@@ -3108,11 +3203,12 @@ export default function App() {
     else if (appTab === 'secondassessment') body = <SecondAssessmentPage facilities={facs} identity={effId} userId={user.id} role={effRole} />
     else if (appTab === 'reports') body = <ReportsPage facilities={facs} userId={user.id} role={effRole} />
     else if (appTab === 'myfacility') body = <ProprietorPage facilityId={myFacility} facilities={facs} />
-    else if (appTab === 'followups') body = <FollowUpsPage userId={user.id} identity={identity} />
+    else if (appTab === 'followups') body = <FollowUpsPage userId={user.id} identity={identity} facilities={facs} onChange={refreshBadges} />
     else if (appTab === 'settings') body = <SettingsPage user={user} identity={identity} facilities={facs} />
     else if (appTab === 'assistant') body = <AssistantPage facilities={facs} />
     else if (appTab === 'approvals') body = <ApprovalsPage userId={user.id} identity={effId} role={effRole} />
     else if (appTab === 'integrity') body = <IntegrityPage facilities={facs} />
+    else if (appTab === 'access') body = <AccessRequestsPage identity={effId} user={user} onChange={refreshBadges} />
     else if (appTab === 'assign') body = <AssignPage list={facs} userId={user.id} />
     else body = <Dashboard identity={effId} role={effRole} onOpen={setAppTab} facilities={facs} onSeed={loadSample} onClear={clearAll} dbError={dbError} />
   } else {
@@ -3134,7 +3230,7 @@ export default function App() {
       <TopBarApp identity={effId} realRole={role} viewAsName={viewAs ? viewAs.name : ''} onViewAs={doViewAs} onEditName={editName} onSignOut={signOut} onToggleNav={() => setNavOpen(o => !o)} />
       {viewAs && (<div className="viewas-bar">Viewing as {viewAs.name} &middot; {(roleById(viewAs.role) || {}).label}<button onClick={() => doViewAs('')}>Return to my view</button></div>)}
       <div className="shell">
-        <Sidebar role={effRole} appTab={appTab} setAppTab={setAppTab} collapsed={navCollapsed} setCollapsed={setNavCollapsed} open={navOpen} setOpen={setNavOpen} />
+        <Sidebar role={effRole} appTab={appTab} setAppTab={setAppTab} collapsed={navCollapsed} setCollapsed={setNavCollapsed} open={navOpen} setOpen={setNavOpen} badges={badges} />
         <main className="app-main">{body}</main>
       </div>
     </div>)
@@ -3784,8 +3880,13 @@ const css = `
 .realms .sb-item { display:flex; align-items:center; gap:12px; padding:10px 12px; border:0; background:none; border-radius:10px; color:#5A4C74; font-size:14.5px; text-align:left; width:100%; transition:.14s; }
 .realms .sb-item:hover { background:var(--lav1); color:var(--p); }
 .realms .sb-item.active { background:linear-gradient(90deg,var(--p),var(--p-mid)); color:#fff; box-shadow:0 6px 16px rgba(122,52,168,.24); }
-.realms .sb-ico { width:22px; height:22px; flex-shrink:0; display:grid; place-items:center; }
+.realms .sb-ico { width:22px; height:22px; flex-shrink:0; display:grid; place-items:center; position:relative; }
 .realms .sb-ico svg { width:20px; height:20px; }
+.realms .sb-badge-lab { margin-left:auto; min-width:20px; height:20px; padding:0 6px; border-radius:10px; background:#B4442E; color:#fff; font-size:11.5px; font-weight:700; display:inline-flex; align-items:center; justify-content:center; font-variant-numeric:tabular-nums; }
+.realms .sb-item.active .sb-badge-lab { background:#fff; color:var(--p); }
+.realms .sb-badge { display:none; position:absolute; top:-6px; left:12px; min-width:16px; height:16px; padding:0 4px; border-radius:8px; background:#B4442E; color:#fff; font-size:10px; font-weight:700; align-items:center; justify-content:center; font-variant-numeric:tabular-nums; box-shadow:0 0 0 2px #fff; }
+.realms .sidebar.collapsed .sb-badge { display:inline-flex; }
+.realms .sidebar.collapsed .sb-badge-lab { display:none; }
 .realms .sidebar.collapsed .sb-lab { display:none; }
 .realms .sidebar.collapsed .sb-item { justify-content:center; padding:11px; }
 .realms .sb-collapse { display:flex; align-items:center; gap:12px; padding:10px 12px; border:0; border-top:1px solid var(--line); background:none; color:#8A7AA6; font-size:13.5px; margin-top:8px; }
@@ -4012,6 +4113,55 @@ const css = `
 .realms .log-list li:first-child { border-top:none; }
 .realms .log-when { color:#8A7AA6; white-space:nowrap; font-variant-numeric:tabular-nums; }
 .realms .log-msg { color:#3A2B54; }
+
+/* --- follow-ups redesign --- */
+.realms .fu-flag { display:flex; gap:12px; align-items:flex-start; background:#FBE9E6; border:1px solid #F0C9BF; border-radius:var(--r-md); padding:13px 16px; margin:0 0 18px; font-size:14px; color:#7A2E1E; line-height:1.5; }
+.realms .fu-flag strong { color:#B4442E; }
+.realms .fu-flag-ic { flex:none; width:22px; height:22px; border-radius:50%; background:#B4442E; color:#fff; font-weight:700; display:flex; align-items:center; justify-content:center; font-size:14px; margin-top:1px; }
+.realms .fu-kpis { display:grid; grid-template-columns:repeat(4,1fr); gap:10px; margin:0 0 16px; }
+.realms .fu-kpi { text-align:left; padding:14px 16px; background:#fff; border:1.5px solid var(--line); border-radius:var(--r-md); cursor:pointer; transition:.16s; display:flex; flex-direction:column; gap:4px; }
+.realms .fu-kpi:hover { border-color:var(--v); box-shadow:var(--e1); }
+.realms .fu-kpi.on { border-color:var(--p); box-shadow:var(--e2); background:var(--lav1); }
+.realms .fu-kpi-v { font-size:28px; font-weight:700; line-height:1; color:var(--p-deep); font-variant-numeric:tabular-nums; }
+.realms .fu-kpi-l { font-size:12.5px; color:#7A6A93; }
+.realms .fu-kpi.amber .fu-kpi-v { color:#9A5B12; }
+.realms .fu-kpi.green .fu-kpi-v { color:#2E7D46; }
+.realms .fu-kpi.red .fu-kpi-v { color:#B4442E; }
+.realms .fu-toolbar { display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; margin:0 0 16px; }
+.realms .fu-segs { display:inline-flex; background:var(--lav2); border-radius:22px; padding:3px; gap:2px; }
+.realms .fu-segs.sm { margin-bottom:12px; }
+.realms .fu-seg { font-family:inherit; font-size:13px; padding:7px 15px; border:none; background:transparent; color:#6A5A87; border-radius:20px; cursor:pointer; display:inline-flex; align-items:center; gap:7px; transition:.15s; }
+.realms .fu-seg.on { background:#fff; color:var(--p-deep); font-weight:600; box-shadow:var(--e1); }
+.realms .fu-seg-n { font-size:11px; min-width:18px; height:18px; padding:0 5px; border-radius:9px; background:var(--v); color:#fff; display:inline-flex; align-items:center; justify-content:center; font-variant-numeric:tabular-nums; }
+.realms .fu-seg.on .fu-seg-n { background:var(--p); }
+.realms .fu-queue { display:grid; gap:12px; }
+.realms .fu-card2 { background:#fff; border:1px solid var(--line); border-left:3px solid var(--v); border-radius:var(--r-md); padding:15px 18px; box-shadow:var(--e1); transition:box-shadow .18s ease, border-color .18s ease; }
+.realms .fu-card2:hover { box-shadow:var(--e2); }
+.realms .fu-card2.awaiting { border-left-color:#D9A340; }
+.realms .fu-card2.called { border-left-color:#5FA35A; }
+.realms .fu-card2.escalated { border-left-color:#B4442E; background:linear-gradient(180deg,#FDF4F2,#fff 60%); }
+.realms .fu-c-top { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; }
+.realms .fu-c-id { display:flex; flex-direction:column; gap:2px; min-width:0; }
+.realms .fu-wait { display:inline-block; margin-left:8px; font-size:11.5px; font-weight:600; color:#9A5B12; background:#FBF3E6; border:1px solid #F0D9B5; padding:1px 8px; border-radius:11px; }
+.realms .fu-c-actions { display:flex; flex-wrap:wrap; gap:8px; margin-top:12px; }
+.realms a.mini.call { text-decoration:none; border-color:#BFE3CB; color:#2E7D46; background:#E6F4EA; font-weight:600; display:inline-flex; align-items:center; gap:5px; }
+.realms a.mini.call:hover { background:#d7eede; border-color:#9ED2AE; }
+.realms .mini.ghost { color:#6A5A87; font-variant-numeric:tabular-nums; }
+.realms .mini.disabled { color:#A89BBE; background:var(--lav1); border-style:dashed; cursor:default; }
+.realms .mini.on { border-color:var(--p); background:var(--lav1); }
+.realms .fu-timeline { list-style:none; margin:14px 0 0; padding:12px 0 0; border-top:1px solid var(--lav2); display:grid; gap:11px; }
+.realms .fu-timeline li { display:flex; gap:11px; align-items:flex-start; }
+.realms .fu-dot { flex:none; width:9px; height:9px; border-radius:50%; background:var(--v); margin-top:5px; box-shadow:0 0 0 3px var(--lav2); }
+.realms .fu-timeline li.flag .fu-dot { background:#B4442E; box-shadow:0 0 0 3px #F5D9D2; }
+.realms .fu-t-body { display:flex; flex-direction:column; gap:2px; min-width:0; }
+.realms .fu-t-head { display:flex; align-items:baseline; gap:9px; flex-wrap:wrap; }
+.realms .fu-t-head strong { font-size:13.5px; color:var(--p-deep); }
+.realms .fu-t-when { font-size:12px; color:#8A7AA6; font-variant-numeric:tabular-nums; }
+.realms .fu-t-note { font-size:13px; color:#5A4C74; line-height:1.45; }
+.realms .fu-logtoggle { margin:22px 0 0; font-family:inherit; font-size:13px; color:var(--p); background:none; border:none; cursor:pointer; padding:4px 0; }
+.realms .fu-logtoggle:hover { color:var(--p-deep); text-decoration:underline; }
+.realms .fu-logwrap { margin-top:12px; }
+@media (max-width:640px){ .realms .fu-kpis { grid-template-columns:repeat(2,1fr); } .realms .fu-toolbar { flex-direction:column; align-items:stretch; } .realms .fu-segs { overflow-x:auto; } }
 .realms .hef-wrap { border:1px solid var(--line); border-radius:14px; padding:14px 16px; margin-bottom:18px; background:#fff; }
 .realms .hef-title { cursor:pointer; display:flex; align-items:center; justify-content:space-between; font-weight:600; color:var(--p-deep); font-size:16px; }
 .realms .hef-total { font-size:12px; color:var(--v); background:var(--lav2); border-radius:12px; padding:3px 10px; }
