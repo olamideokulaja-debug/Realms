@@ -4,7 +4,7 @@ import 'leaflet/dist/leaflet.css'
 import { supabase, MODE } from './supabaseClient.js'
 import { facilities as FAC, assignments as ASG, visits as VIS, notifications as NOTIF, calls as CALLS, access as ACC, facilitiesFromCSV, orderRoute, clusterDays, clusterDaysByDate, googleMapsDirUrl, geocode, uploadEvidence, sendNotify, askAI, seedSampleData, clearAllData } from './data.js'
 
-const BUILD = 'field-2026-07-18o'
+const BUILD = 'field-2026-07-18p'
 
 /*
   REALMS FIELD — Stages 1 to 3 (single-file App.jsx + supabaseClient.js + data.js)
@@ -2983,7 +2983,7 @@ function AnalyticsBody({ facilities, onOpen, role }) {
     </div>
 
     <div className="an-panel">
-      <div className="dash-exp-head"><h3>Compliance by facility</h3><SearchBox value={q} onChange={setQ} placeholder="Search facilities\u2026" /></div>
+      <div className="dash-exp-head"><h3>Compliance by facility</h3><SearchBox value={q} onChange={setQ} placeholder="Search facilities…" /></div>
       <div className="dash-exp">
         <div className="dash-exp-donut">
           {(rated.length + unscored.length) === 0 ? <p className="empty sm">No assessments yet.</p> : <DonutInteractive data={donutData} active={ragF} onPick={k => setRagF(f => f === k ? 'all' : k)} />}
