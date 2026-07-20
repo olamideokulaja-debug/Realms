@@ -4,7 +4,7 @@ import 'leaflet/dist/leaflet.css'
 import { supabase, MODE } from './supabaseClient.js'
 import { facilities as FAC, assignments as ASG, visits as VIS, notifications as NOTIF, calls as CALLS, access as ACC, facilitiesFromCSV, orderRoute, clusterDays, clusterDaysByDate, googleMapsDirUrl, geocode, uploadEvidence, sendNotify, askAI, seedSampleData, clearAllData } from './data.js'
 
-const BUILD = 'field-2026-07-18p'
+const BUILD = 'field-2026-07-18r'
 
 /*
   REALMS FIELD — Stages 1 to 3 (single-file App.jsx + supabaseClient.js + data.js)
@@ -804,6 +804,9 @@ function MapRoutePage({ list, role, userId }) {
   const [days, setDays] = useState(5)
   const [scope, setScope] = useState('due')
   const [order, setOrder] = useState('date') // 'date' = oldest first (2nd round), 'geo' = by geography
+  const [mode, setMode] = useState('auto') // 'auto' = system plan, 'manual' = pick facilities
+  const [picks, setPicks] = useState({})
+  const [pq, setPq] = useState('')
   const [plan, setPlan] = useState(null)
   const [planErr, setPlanErr] = useState('')
   const [openDay, setOpenDay] = useState(0)
@@ -859,6 +862,11 @@ function MapRoutePage({ list, role, userId }) {
     const stops = (items || []).map(f => { if (!f) return null; if (hasCoords(f) && f.geo_confirmed !== false) return f.lat + ',' + f.lng; return encodeURIComponent(f.name + (f.address ? ', ' + f.address : '') + ', Lagos') }).filter(Boolean)
     return stops.length ? 'https://www.google.com/maps/dir/' + stops.join('/') : ''
   }
+  function navUrl(f) {
+    if (!f) return ''
+    const dest = (hasCoords(f) && f.geo_confirmed !== false) ? (f.lat + ',' + f.lng) : encodeURIComponent(f.name + (f.address ? ', ' + f.address : '') + ', Lagos')
+    return 'https://www.google.com/maps/dir/?api=1&destination=' + dest + '&travelmode=driving'
+  }
   function dayLabel(items) {
     const c = {}; items.forEach(f => { const l = localityOf(f); if (l) c[l] = (c[l] || 0) + 1 })
     const best = Object.keys(c).sort((a, b) => c[b] - c[a])[0]
@@ -868,6 +876,15 @@ function MapRoutePage({ list, role, userId }) {
     const ds = items.map(baselineDate).filter(Boolean).sort()
     if (!ds.length) return ''
     return ds[0] === ds[ds.length - 1] ? ds[0] : ds[0] + ' \u2192 ' + ds[ds.length - 1]
+  }
+  function buildManual() {
+    setPlanErr('')
+    const chosen = list.filter(f => picks[f.id])
+    if (!chosen.length) { setPlanErr('Tick the facilities you plan to visit.'); return }
+    const withPins = chosen.filter(hasCoords)
+    const ordered = (withPins.length ? orderRoute(withPins) : []).concat(chosen.filter(f => !hasCoords(f)))
+    setPlan([{ day: 1, area: 'Selected route', items: ordered }]); setOpenDay(0)
+    toast(ordered.length + ' stop' + (ordered.length === 1 ? '' : 's') + ' routed, nearest-first.')
   }
   function planRoutes() {
     setPlanErr(''); setPlan(null); setOpenDay(0)
@@ -950,6 +967,11 @@ function MapRoutePage({ list, role, userId }) {
 
         {tab === 'plan' && (<>
           <div className="mr-card">
+            <div className="seg mr-mode">
+              <button type="button" className={'segb' + (mode === 'auto' ? ' on' : '')} onClick={() => { setMode('auto'); setPlan(null); setPlanErr('') }}>Auto plan</button>
+              <button type="button" className={'segb' + (mode === 'manual' ? ' on' : '')} onClick={() => { setMode('manual'); setPlan(null); setPlanErr('') }}>Pick manually</button>
+            </div>
+            {mode === 'auto' ? (<>
             <div className="mr-controls">
               <label className="field sm"><span>Facilities</span>
                 <select value={scope} onChange={e => { setScope(e.target.value); setPlan(null) }}>
@@ -970,6 +992,22 @@ function MapRoutePage({ list, role, userId }) {
             </div>
             <button className="btn primary wide" onClick={planRoutes} disabled={!planPool.length}>Plan {Math.min(days, Math.ceil(planPool.length / Math.max(1, perDay)))} day{planPool.length && Math.min(days, Math.ceil(planPool.length / Math.max(1, perDay))) === 1 ? '' : 's'}</button>
             <p className="hintline">{planPool.length} of {scopePool.length} will be planned{scopePool.length > planPool.length ? ', the rest next run' : ''}.{unmapped ? ' ' + unmapped + ' have no pin yet.' : ''}</p>
+            </>) : (<>
+            <p className="hintline">Tick the facilities you plan to visit. Stops are ordered nearest-first, and you can add any facility you pass in the field.</p>
+            <input className="searchbox" value={pq} onChange={e => setPq(e.target.value)} placeholder="Search facilities…" />
+            <div className="pick-list">{filtered.filter(f => matchQ(f, pq)).slice(0, 150).map(f => (
+              <label key={f.id} className={'pick-item' + (picks[f.id] ? ' on' : '')}>
+                <input type="checkbox" checked={!!picks[f.id]} onChange={() => setPicks(p => ({ ...p, [f.id]: !p[f.id] }))} />
+                <span className="pi-main"><span className="pi-name">{f.name}</span><span className="pi-meta">{[f.area, f.address].filter(Boolean).join(' \u00b7 ') || 'No details'}{!hasCoords(f) ? ' \u00b7 no pin' : ''}</span></span>
+              </label>))}
+            </div>
+            {filtered.filter(f => matchQ(f, pq)).length > 150 && <p className="hintline">Showing 150 \u2014 search to narrow the list.</p>}
+            <div className="pick-actions">
+              <span className="pick-n">{Object.values(picks).filter(Boolean).length} selected</span>
+              {Object.values(picks).filter(Boolean).length > 0 && <button className="mini ghost" onClick={() => setPicks({})}>Clear</button>}
+              <button className="btn primary" onClick={buildManual} disabled={!Object.values(picks).filter(Boolean).length}>Build route</button>
+            </div>
+            </>)}
           </div>
 
           {planErr && <p className="warnline">{planErr}</p>}
@@ -983,9 +1021,9 @@ function MapRoutePage({ list, role, userId }) {
                 <span className="mr-day-c">{open ? '\u2212' : '+'}</span>
               </button>
               {open && (<div className="mr-day-body">
-                <ol className="plan-list">{d.items.map((f, j) => { const bd = baselineDate(f); return (<li key={j}><span className="pf-name">{f.name}</span>{f.address && <em>{f.address}</em>}{bd && <em className="pf-tel">First assessed {bd}</em>}</li>) })}</ol>
+                <ol className="plan-list">{d.items.map((f, j) => { const bd = baselineDate(f); return (<li key={j}><span className="pf-name">{f.name}</span>{f.address && <em>{f.address}</em>}{bd && <em className="pf-tel">First assessed {bd}</em>}<a className="pf-nav" href={navUrl(f)} target="_blank" rel="noreferrer">{'\u260e'} Navigate</a></li>) })}</ol>
                 <div className="mr-day-actions">
-                  {url && <a className="btn small ghost" href={url} target="_blank" rel="noreferrer">Open in Google Maps</a>}
+                  {url && <a className="btn small ghost" href={url} target="_blank" rel="noreferrer">Start route in Google Maps (turn-by-turn)</a>}
                 </div>
                 {canAssign && <div className="plan-assign">
                   <select className="sel" value={(assignForm[dayKey] || {}).monitor || ''} onChange={e => setAssignForm(s => ({ ...s, [dayKey]: { ...(s[dayKey] || {}), monitor: e.target.value } }))}>
@@ -998,7 +1036,7 @@ function MapRoutePage({ list, role, userId }) {
             </div>)
           })}</div>}
 
-          {!plan && !planErr && <p className="empty sm">Set the numbers above and plan the days. {order === 'date' ? 'Days run oldest-first \u2014 the team continues the round from the facilities they first assessed, not the last ones \u2014 and stops within a day are still ordered by how close they are.' : 'Each day is grouped by how close the facilities are to each other.'}</p>}
+          {mode === 'auto' && !plan && !planErr && <p className="empty sm">Set the numbers above and plan the days. {order === 'date' ? 'Days run oldest-first \u2014 the team continues the round from the facilities they first assessed, not the last ones \u2014 and stops within a day are still ordered by how close they are.' : 'Each day is grouped by how close the facilities are to each other.'}</p>}
         </>)}
 
         {tab === 'cover' && isHQ && (<>
@@ -1233,6 +1271,7 @@ function EngagePage({ list, identity, role, userId }) {
   const [greeted, setGreeted] = useState(false)
   const [busy, setBusy] = useState(false); const [msg, setMsg] = useState(''); const [done, setDone] = useState(false)
   const [ref] = useState(() => 'RF-' + new Date().toISOString().slice(0, 10).replace(/-/g, '') + '-' + String(Math.floor(Math.random() * 9000) + 1000))
+  const [q, setQ] = useState('')
 
   const [asgs, setAsgs] = useState([]); const [todayVisits, setTodayVisits] = useState([])
   const todayISO = new Date().toISOString().slice(0, 10)
@@ -1303,6 +1342,17 @@ function EngagePage({ list, identity, role, userId }) {
     {msg && <p className="auth-msg block">{msg}</p>}
 
     {step === 0 && (<div className="engage-pick">
+      <SearchBox value={q} onChange={setQ} placeholder="Search all facilities…" />
+      {q.trim() ? (() => {
+        const hits = list.filter(f => matchQ(f, q))
+        return hits.length === 0 ? <p className="empty">No facilities match "{q}".</p> :
+          (<div className="cluster"><div className="cluster-head"><h3>Results</h3><span className="cluster-count">{hits.length}</span></div>
+            <div className="frows">{hits.slice(0, 60).map(f => (<button className="frow pickable" key={f.id} onClick={() => chooseFacility(f)}>
+              <div className="fmain"><span className="fname">{f.name}</span><span className="fmeta">{[f.category, f.area, f.address].filter(Boolean).join(' \u00b7 ') || 'No details'}{visitedToday[f.id] ? ' \u00b7 checked in' : ''}</span></div>
+              <span className="mini">Select</span></button>))}</div>
+            {hits.length > 60 && <p className="hintline">Showing 60 of {hits.length} \u2014 keep typing to narrow.</p>}
+          </div>)
+      })() : (<>
       {myDay.length > 0 && (<div className="myday">
         <div className="myday-head"><h3>Today's round, {todayStr}</h3><span className="plan-count">{myDay.length} assigned</span></div>
         <div className="frows">{myDay.map(f => (<button className="frow pickable" key={'my' + f.id} onClick={() => chooseFacility(f)}>
@@ -1318,6 +1368,7 @@ function EngagePage({ list, identity, role, userId }) {
             <span className="mini">Select</span>
           </button>))}</div>
         </div>))}
+      </>)}
     </div>)}
 
     {step === 1 && facility && (<div className="engage-card">
@@ -3011,17 +3062,21 @@ function AnalyticsBody({ facilities, onOpen, role }) {
       {trend.length === 0 ? <p className="empty sm">No scored visits in this range.</p> : <LineChart points={trend} />}
     </div>
 
-    {reins.total > 0 && <div className="an-panel">
+    <div className="an-panel">
       <h3>Re-inspection outcomes</h3>
       <p className="hintline">Movement between the first visit and a follow-up assessment. The headline figures above already reflect each facility's most recent visit; this panel shows the change.</p>
-      <div className="reins-row">
-        <div className="reins-stat"><span className="reins-v g">{reins.improved}</span><span className="reins-l">Improved</span></div>
-        <div className="reins-stat"><span className="reins-v a">{reins.same}</span><span className="reins-l">No change</span></div>
-        <div className="reins-stat"><span className="reins-v r">{reins.declined}</span><span className="reins-l">Declined</span></div>
-        <div className="reins-stat"><span className="reins-v">{reins.total}</span><span className="reins-l">Re-inspected</span></div>
-      </div>
-      {reins.recTotal > 0 && <p className="hintline">{reins.resolved} of {reins.recTotal} first-visit recommendations resolved across re-inspected facilities.</p>}
-    </div>}
+      {reins.total === 0
+        ? <p className="empty sm">No re-inspections recorded yet. As second assessments are completed, the improved / no-change / declined split will appear here.</p>
+        : <>
+          <div className="reins-row">
+            <div className="reins-stat"><span className="reins-v g">{reins.improved}</span><span className="reins-l">Improved</span></div>
+            <div className="reins-stat"><span className="reins-v a">{reins.same}</span><span className="reins-l">No change</span></div>
+            <div className="reins-stat"><span className="reins-v r">{reins.declined}</span><span className="reins-l">Declined</span></div>
+            <div className="reins-stat"><span className="reins-v">{reins.total}</span><span className="reins-l">Re-inspected</span></div>
+          </div>
+          {reins.recTotal > 0 && <p className="hintline">{reins.resolved} of {reins.recTotal} first-visit recommendations resolved across re-inspected facilities.</p>}
+        </>}
+    </div>
 
     <div className="an-two">
       <div className="an-panel"><h3>Team performance</h3>
@@ -4327,6 +4382,21 @@ const css = `
 .realms .bar-row.click.on .bar-lab { font-weight:600; color:var(--p-deep); }
 @media (max-width:720px){ .realms .dash-kpis { grid-template-columns:repeat(3,1fr); } .realms .dash-exp { grid-template-columns:1fr; } .realms .dash-hero { flex-direction:column; align-items:flex-start; } }
 @media (max-width:440px){ .realms .dash-kpis { grid-template-columns:repeat(2,1fr); } }
+
+/* --- map/route: manual picker + navigate --- */
+.realms .mr-mode { margin-bottom:12px; }
+.realms .pick-list { max-height:320px; overflow-y:auto; display:grid; gap:5px; margin:10px 0; padding-right:2px; }
+.realms .pick-item { display:flex; align-items:center; gap:10px; padding:9px 11px; border:1px solid var(--line); border-radius:10px; cursor:pointer; transition:.14s; }
+.realms .pick-item:hover { border-color:var(--v); background:var(--lav1); }
+.realms .pick-item.on { border-color:var(--p); background:var(--lav2); }
+.realms .pick-item input { width:17px; height:17px; accent-color:var(--p); flex:none; }
+.realms .pi-main { display:flex; flex-direction:column; gap:1px; min-width:0; }
+.realms .pi-name { font-size:14px; color:var(--p-deep); font-weight:500; }
+.realms .pi-meta { font-size:12px; color:#8A7AA6; }
+.realms .pick-actions { display:flex; align-items:center; gap:12px; margin-top:6px; }
+.realms .pick-n { font-size:13px; color:var(--p-deep); font-weight:600; margin-right:auto; }
+.realms .pf-nav { display:inline-block; margin-top:4px; font-size:12.5px; color:#2E7D46; text-decoration:none; font-weight:600; }
+.realms .pf-nav:hover { text-decoration:underline; }
 @media (max-width:640px){ .realms .fu-kpis { grid-template-columns:repeat(2,1fr); } .realms .fu-toolbar { flex-direction:column; align-items:stretch; } .realms .fu-segs { overflow-x:auto; } }
 .realms .hef-wrap { border:1px solid var(--line); border-radius:14px; padding:14px 16px; margin-bottom:18px; background:#fff; }
 .realms .hef-title { cursor:pointer; display:flex; align-items:center; justify-content:space-between; font-weight:600; color:var(--p-deep); font-size:16px; }
