@@ -4,7 +4,7 @@ import 'leaflet/dist/leaflet.css'
 import { supabase, MODE } from './supabaseClient.js'
 import { facilities as FAC, assignments as ASG, visits as VIS, notifications as NOTIF, calls as CALLS, access as ACC, facilitiesFromCSV, orderRoute, clusterDays, clusterDaysByDate, googleMapsDirUrl, geocode, uploadEvidence, sendNotify, askAI, seedSampleData, clearAllData } from './data.js'
 
-const BUILD = 'field-2026-07-18m'
+const BUILD = 'field-2026-07-18n'
 
 /*
   REALMS FIELD — Stages 1 to 3 (single-file App.jsx + supabaseClient.js + data.js)
@@ -1103,6 +1103,7 @@ function SecondAssessmentPage({ facilities, identity, userId, role }) {
     const row = {
       facility_id: f.id, facility_name: f.name, area: f.area, status: 'second', round: 2,
       baseline_visit_id: (first && first.id) || null, visit_date: today, arrival_time: new Date().toISOString(),
+      score: assessment.pct_score != null ? assessment.pct_score : null, overall_rating: ragFromPct(assessment.pct_score),
       team: [{ name: (identity && identity.name) || 'RHSC Field Monitoring Team', role: 'Team' }],
       monitoring: { second_assessment: assessment }, assessment, improvement: imp,
       debrief: { first_visit: false, second_visit: true, narrative: 'Second assessment on ' + today + '. ' + imp.verdict + (imp.recTotal ? ' \u2014 ' + imp.resolved + ' of ' + imp.recTotal + ' first-visit recommendations resolved.' : '.') }
@@ -2870,16 +2871,24 @@ function AnalyticsBody({ facilities }) {
   useEffect(() => { VIS.list().then(setVisits).catch(() => {}) }, [])
   const vis = visits
   const areas = Array.from(new Set(facilities.map(f => f.area || 'Unassigned')))
-  const rated = vis.filter(v => v.score != null)
-  const unscored = vis.filter(v => v.score == null && ((v.assessment && v.assessment.visited_unscored) || v.overall_rating === 'unscored'))
+  const vdate = v => (v.visit_date || (v.assessment && v.assessment.date) || v.arrival_time || v.created_at || '')
+  // one current record per facility (latest assessment wins), so a re-inspection supersedes the first visit
+  const latestByFac = {}; vis.forEach(v => { const id = v.facility_id || ('n:' + (v.facility_name || '')); if (!id) return; if (!latestByFac[id] || vdate(v) > vdate(latestByFac[id])) latestByFac[id] = v })
+  const current = Object.values(latestByFac)
+  const rated = current.filter(v => v.score != null)
+  const unscored = current.filter(v => v.score == null && ((v.assessment && v.assessment.visited_unscored) || v.overall_rating === 'unscored'))
   const avg = rated.length ? Math.round(rated.reduce((a, v) => a + v.score, 0) / rated.length) : null
   const compliant = rated.filter(v => v.overall_rating === 'green').length
   const complianceRate = rated.length ? Math.round(compliant / rated.length * 100) : null
   const rag = { green: 0, amber: 0, red: 0 }; rated.forEach(v => { if (v.overall_rating && rag[v.overall_rating] != null) rag[v.overall_rating]++ })
   const byArea = {}; vis.forEach(v => { const a = v.area || 'Unassigned'; byArea[a] = (byArea[a] || 0) + 1 })
   const areaRows = Object.keys(byArea).sort().map(a => ({ a, n: byArea[a] })); const maxArea = Math.max(1, ...areaRows.map(r => r.n))
-  const latest = {}; vis.forEach(v => { const id = v.facility_id; if (!id) return; if (!latest[id] || (v.created_at || '') > (latest[id].created_at || '')) latest[id] = v })
+  const latest = {}; vis.forEach(v => { const id = v.facility_id; if (!id) return; if (!latest[id] || vdate(v) > vdate(latest[id])) latest[id] = v })
   const points = facilities.filter(hasCoords).map(f => ({ lat: f.lat, lng: f.lng, name: f.name, rag: latest[f.id] ? latest[f.id].overall_rating : null }))
+  // re-inspection outcomes (round-2 visits)
+  const seconds = vis.filter(v => v.round === 2 || v.status === 'second' || (v.debrief && v.debrief.second_visit))
+  const reins = { total: seconds.length, improved: 0, declined: 0, same: 0, resolved: 0, recTotal: 0 }
+  seconds.forEach(v => { const im = v.improvement || {}; if (im.verdict === 'Improved') reins.improved++; else if (im.verdict === 'Declined') reins.declined++; else reins.same++; reins.resolved += im.resolved || 0; reins.recTotal += im.recTotal || 0 })
   const cards = [{ v: facilities.length, l: 'Facilities' }, { v: vis.length, l: 'Visits' }, { v: rated.length, l: 'Assessed' }, { v: unscored.length, l: 'Visited \u00b7 not scored' }, { v: avg == null ? '-' : avg + '%', l: 'Average score' }, { v: complianceRate == null ? '-' : complianceRate + '%', l: 'Green rate' }]
   const donutData = [{ label: 'Green', value: rag.green, color: '#2E7D46' }, { label: 'Amber', value: rag.amber, color: '#C77D0A' }, { label: 'Red', value: rag.red, color: '#B4442E' }, { label: 'Not scored', value: unscored.length, color: '#B9AEC9' }]
 
@@ -2912,6 +2921,17 @@ function AnalyticsBody({ facilities }) {
       <p className="hintline">Average compliance score by month.</p>
       <LineChart points={trend} />
     </div>
+    {reins.total > 0 && <div className="an-panel">
+      <h3>Re-inspection outcomes</h3>
+      <p className="hintline">Movement between the first visit and a follow-up assessment. The headline figures above already reflect each facility's most recent visit; this panel shows the change.</p>
+      <div className="reins-row">
+        <div className="reins-stat"><span className="reins-v g">{reins.improved}</span><span className="reins-l">Improved</span></div>
+        <div className="reins-stat"><span className="reins-v a">{reins.same}</span><span className="reins-l">No change</span></div>
+        <div className="reins-stat"><span className="reins-v r">{reins.declined}</span><span className="reins-l">Declined</span></div>
+        <div className="reins-stat"><span className="reins-v">{reins.total}</span><span className="reins-l">Re-inspected</span></div>
+      </div>
+      {reins.recTotal > 0 && <p className="hintline">{reins.resolved} of {reins.recTotal} first-visit recommendations resolved across re-inspected facilities.</p>}
+    </div>}
     <div className="an-two">
       <div className="an-panel"><h3>Team performance</h3>
         {monitors.length === 0 ? <p className="empty sm">No visits yet.</p> : <div className="perf">{monitors.map(m => {
@@ -4161,6 +4181,12 @@ const css = `
 .realms .fu-logtoggle { margin:22px 0 0; font-family:inherit; font-size:13px; color:var(--p); background:none; border:none; cursor:pointer; padding:4px 0; }
 .realms .fu-logtoggle:hover { color:var(--p-deep); text-decoration:underline; }
 .realms .fu-logwrap { margin-top:12px; }
+.realms .reins-row { display:grid; grid-template-columns:repeat(4,1fr); gap:12px; margin:6px 0 4px; }
+.realms .reins-stat { text-align:center; padding:14px 8px; background:var(--lav1); border:1px solid var(--line); border-radius:var(--r-md); }
+.realms .reins-v { display:block; font-size:30px; font-weight:700; line-height:1; color:var(--p-deep); font-variant-numeric:tabular-nums; }
+.realms .reins-v.g { color:#2E7D46; } .realms .reins-v.a { color:#9A5B12; } .realms .reins-v.r { color:#B4442E; }
+.realms .reins-l { display:block; margin-top:6px; font-size:12.5px; color:#7A6A93; }
+@media (max-width:560px){ .realms .reins-row { grid-template-columns:repeat(2,1fr); } }
 @media (max-width:640px){ .realms .fu-kpis { grid-template-columns:repeat(2,1fr); } .realms .fu-toolbar { flex-direction:column; align-items:stretch; } .realms .fu-segs { overflow-x:auto; } }
 .realms .hef-wrap { border:1px solid var(--line); border-radius:14px; padding:14px 16px; margin-bottom:18px; background:#fff; }
 .realms .hef-title { cursor:pointer; display:flex; align-items:center; justify-content:space-between; font-weight:600; color:var(--p-deep); font-size:16px; }
