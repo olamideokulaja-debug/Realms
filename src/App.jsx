@@ -4,7 +4,7 @@ import 'leaflet/dist/leaflet.css'
 import { supabase, MODE } from './supabaseClient.js'
 import { facilities as FAC, assignments as ASG, visits as VIS, notifications as NOTIF, calls as CALLS, access as ACC, facilitiesFromCSV, orderRoute, clusterDays, clusterDaysByDate, googleMapsDirUrl, geocode, uploadEvidence, sendNotify, askAI, seedSampleData, clearAllData } from './data.js'
 
-const BUILD = 'field-2026-07-18n'
+const BUILD = 'field-2026-07-18o'
 
 /*
   REALMS FIELD — Stages 1 to 3 (single-file App.jsx + supabaseClient.js + data.js)
@@ -534,7 +534,7 @@ function Dashboard({ identity, role, onOpen, facilities, onSeed, onClear, dbErro
     </div>) : (!hasData && onSeed && (<div className="seed-card anim"><div><strong>No facilities yet.</strong><span>Load the live facility register (Alimosho &amp; Ifako-Ijaiye) to begin.</span></div><button className="btn small primary" onClick={onSeed}>Load live facilities</button></div>))}
 
     {showAnalytics
-      ? (<div className="dash-analytics anim"><AnalyticsBody facilities={facilities} /></div>)
+      ? (<div className="dash-analytics anim"><AnalyticsBody facilities={facilities} onOpen={onOpen} role={role} /></div>)
       : (<div className="dash-quick anim">{quick.map(q => (<div className="dq" key={q.l}><span className="dq-v">{q.v}</span><span className="dq-l">{q.l}</span></div>))}</div>)}
     <p className="dash-intro anim">Your tools are on the left. The ones marked ready are live now; the rest unlock as the build grows.</p>
     <div className="tool-grid">{(r ? r.tools : []).map(([name, stage, tab], i) => {
@@ -2866,13 +2866,36 @@ function LineChart({ points }) {
     {points.map((p, i) => (<g key={i}><circle cx={x(i)} cy={y(p.value)} r="4" fill="#6D4B8E" /><text x={x(i)} y={H - pad + 16} textAnchor="middle" className="lc-x">{p.label}</text><text x={x(i)} y={y(p.value) - 10} textAnchor="middle" className="lc-v">{p.value}</text></g>))}
   </svg>)
 }
-function AnalyticsBody({ facilities }) {
+function CountVal({ n }) { const v = useCountUp(typeof n === 'number' ? n : 0); return <>{typeof n === 'number' ? v : n}</> }
+function DonutInteractive({ data, active, onPick }) {
+  const total = data.reduce((s, d) => s + d.value, 0) || 1; const R = 54, C = 2 * Math.PI * R; let off = 0
+  return (<div className="donut">
+    <svg viewBox="0 0 140 140" className="donut-svg">
+      <circle cx="70" cy="70" r={R} fill="none" stroke="#EDE7F4" strokeWidth="18" />
+      {data.map((d, i) => { const dash = d.value / total * C; const dim = active !== 'all' && active !== d.key; const el = (<circle key={i} cx="70" cy="70" r={R} fill="none" stroke={d.color} strokeWidth={active === d.key ? 22 : 18} strokeDasharray={dash + ' ' + (C - dash)} strokeDashoffset={-off} transform="rotate(-90 70 70)" opacity={dim ? 0.28 : 1} style={{ cursor: 'pointer', transition: '.2s' }} onClick={() => onPick(d.key)} />); off += dash; return el })}
+      <text x="70" y="67" textAnchor="middle" className="donut-num">{total}</text>
+      <text x="70" y="85" textAnchor="middle" className="donut-lab">assessed</text>
+    </svg>
+    <div className="donut-legend">{data.map((d, i) => (<button key={i} className={'dl' + (active === d.key ? ' on' : '')} onClick={() => onPick(d.key)}><span className="dot" style={{ background: d.color }} />{d.label}<em>{d.value}</em></button>))}</div>
+  </div>)
+}
+function AnalyticsBody({ facilities, onOpen, role }) {
   const [visits, setVisits] = useState([])
+  const [calls, setCalls] = useState([])
+  const [access, setAccess] = useState([])
+  const [ragF, setRagF] = useState('all')
+  const [areaF, setAreaF] = useState('all')
+  const [range, setRange] = useState('all')
+  const [q, setQ] = useState('')
   useEffect(() => { VIS.list().then(setVisits).catch(() => {}) }, [])
+  useEffect(() => { CALLS.list().then(setCalls).catch(() => {}) }, [])
+  useEffect(() => { ACC.list().then(setAccess).catch(() => {}) }, [])
+  const go = tab => { if (onOpen && tab) onOpen(tab) }
+  const tabsFor = ROLE_TABS[role] || []
   const vis = visits
-  const areas = Array.from(new Set(facilities.map(f => f.area || 'Unassigned')))
   const vdate = v => (v.visit_date || (v.assessment && v.assessment.date) || v.arrival_time || v.created_at || '')
-  // one current record per facility (latest assessment wins), so a re-inspection supersedes the first visit
+  const areasList = Array.from(new Set(facilities.map(f => f.area || 'Unassigned'))).sort()
+
   const latestByFac = {}; vis.forEach(v => { const id = v.facility_id || ('n:' + (v.facility_name || '')); if (!id) return; if (!latestByFac[id] || vdate(v) > vdate(latestByFac[id])) latestByFac[id] = v })
   const current = Object.values(latestByFac)
   const rated = current.filter(v => v.score != null)
@@ -2880,47 +2903,114 @@ function AnalyticsBody({ facilities }) {
   const avg = rated.length ? Math.round(rated.reduce((a, v) => a + v.score, 0) / rated.length) : null
   const compliant = rated.filter(v => v.overall_rating === 'green').length
   const complianceRate = rated.length ? Math.round(compliant / rated.length * 100) : null
-  const rag = { green: 0, amber: 0, red: 0 }; rated.forEach(v => { if (v.overall_rating && rag[v.overall_rating] != null) rag[v.overall_rating]++ })
-  const byArea = {}; vis.forEach(v => { const a = v.area || 'Unassigned'; byArea[a] = (byArea[a] || 0) + 1 })
-  const areaRows = Object.keys(byArea).sort().map(a => ({ a, n: byArea[a] })); const maxArea = Math.max(1, ...areaRows.map(r => r.n))
-  const latest = {}; vis.forEach(v => { const id = v.facility_id; if (!id) return; if (!latest[id] || vdate(v) > vdate(latest[id])) latest[id] = v })
-  const points = facilities.filter(hasCoords).map(f => ({ lat: f.lat, lng: f.lng, name: f.name, rag: latest[f.id] ? latest[f.id].overall_rating : null }))
-  // re-inspection outcomes (round-2 visits)
+  const coverage = facilities.length ? Math.round((rated.length + unscored.length) / facilities.length * 100) : null
+  const rag = { green: 0, amber: 0, red: 0 }; rated.forEach(v => { if (rag[v.overall_rating] != null) rag[v.overall_rating]++ })
+
+  const called = new Set(calls.map(c => c.visit_id))
+  const awaitingCalls = vis.filter(v => v.status === 'debriefed' && !(v.debrief && v.debrief.first_visit) && !called.has(v.id)).length
   const seconds = vis.filter(v => v.round === 2 || v.status === 'second' || (v.debrief && v.debrief.second_visit))
+  const secondFac = new Set(seconds.map(v => v.facility_id))
+  const firstBase = {}; vis.forEach(v => { if ((v.debrief && v.debrief.first_visit) || (v.assessment && v.assessment.ruid)) { const id = v.facility_id; if (id && !firstBase[id]) firstBase[id] = v } })
+  const secondDue = Object.keys(firstBase).filter(id => !secondFac.has(id)).length
+  const accessPending = access.filter(r => r.status === 'pending').length
+  const needsAttention = rated.filter(v => v.overall_rating === 'red' || v.overall_rating === 'amber').length
+
+  const ragOf = v => v.score != null ? v.overall_rating : (((v.assessment && v.assessment.visited_unscored) || v.overall_rating === 'unscored') ? 'unscored' : null)
+  const explore = current
+    .map(v => ({ v, f: facilities.find(f => f.id === v.facility_id) || { name: v.facility_name, area: v.area } }))
+    .filter(({ v }) => ragF === 'all' || ragOf(v) === ragF)
+    .filter(({ f, v }) => areaF === 'all' || (f.area || v.area || 'Unassigned') === areaF)
+    .filter(({ v }) => matchQ(v, q))
+    .sort((a, b) => (a.v.score == null ? 999 : a.v.score) - (b.v.score == null ? 999 : b.v.score))
+
+  const latest = {}; vis.forEach(v => { const id = v.facility_id; if (!id) return; if (!latest[id] || vdate(v) > vdate(latest[id])) latest[id] = v })
+  const points = facilities.filter(hasCoords)
+    .filter(f => areaF === 'all' || (f.area || 'Unassigned') === areaF)
+    .map(f => ({ lat: f.lat, lng: f.lng, name: f.name, rag: latest[f.id] ? (latest[f.id].score != null ? latest[f.id].overall_rating : 'unscored') : null }))
+    .filter(p => ragF === 'all' || (p.rag || 'none') === ragF)
+
+  const byMonth = {}; rated.forEach(v => { const m = vdate(v).slice(0, 7); if (!m) return; (byMonth[m] = byMonth[m] || []).push(v.score) })
+  let months = Object.keys(byMonth).sort(); if (range !== 'all') months = months.slice(-parseInt(range, 10))
+  const trend = months.map(m => ({ label: monthLabel(m), value: Math.round(byMonth[m].reduce((a, b) => a + b, 0) / byMonth[m].length) }))
+
   const reins = { total: seconds.length, improved: 0, declined: 0, same: 0, resolved: 0, recTotal: 0 }
   seconds.forEach(v => { const im = v.improvement || {}; if (im.verdict === 'Improved') reins.improved++; else if (im.verdict === 'Declined') reins.declined++; else reins.same++; reins.resolved += im.resolved || 0; reins.recTotal += im.recTotal || 0 })
-  const cards = [{ v: facilities.length, l: 'Facilities' }, { v: vis.length, l: 'Visits' }, { v: rated.length, l: 'Assessed' }, { v: unscored.length, l: 'Visited \u00b7 not scored' }, { v: avg == null ? '-' : avg + '%', l: 'Average score' }, { v: complianceRate == null ? '-' : complianceRate + '%', l: 'Green rate' }]
-  const donutData = [{ label: 'Green', value: rag.green, color: '#2E7D46' }, { label: 'Amber', value: rag.amber, color: '#C77D0A' }, { label: 'Red', value: rag.red, color: '#B4442E' }, { label: 'Not scored', value: unscored.length, color: '#B9AEC9' }]
 
-  // compliance trend over time (by month) — scored visits only
-  const byMonth = {}; rated.forEach(v => { const m = (v.visit_date || (v.assessment && v.assessment.date) || v.arrival_time || v.created_at || '').slice(0, 7); if (!m) return; (byMonth[m] = byMonth[m] || []).push(v.score) })
-  const trend = Object.keys(byMonth).sort().map(m => ({ label: monthLabel(m), value: Math.round(byMonth[m].reduce((a, b) => a + b, 0) / byMonth[m].length) }))
-
-  // team / monitor performance
   const perf = {}; vis.forEach(v => { (v.team || []).forEach(t => { const k = t.name; if (!k) return; const m = perf[k] = perf[k] || { name: k, role: t.role, visits: 0, sum: 0, scored: 0 }; m.visits++; if (v.score != null) { m.sum += v.score; m.scored++ } }) })
   const monitors = Object.values(perf).map(m => ({ ...m, avg: m.scored ? Math.round(m.sum / m.scored) : null })).sort((a, b) => b.visits - a.visits).slice(0, 6)
 
-  // facility risk ranking
   const now = Date.now()
-  const risk = facilities.map(f => {
-    const lv = latest[f.id]; let s = 0
-    if (lv) { if (lv.overall_rating === 'red') s += 3; else if (lv.overall_rating === 'amber') s += 2; else if (!lv.overall_rating) s += 1 } else s += 1
-    const dl = lv && lv.debrief && lv.debrief.remediation_deadline
-    if (dl && new Date(dl + 'T00:00:00').getTime() < now) s += 2
-    return { f, s, rag: lv ? lv.overall_rating : null }
-  }).sort((a, b) => b.s - a.s)
+  const risk = facilities.map(f => { const lv = latest[f.id]; let s = 0; if (lv) { if (lv.overall_rating === 'red') s += 3; else if (lv.overall_rating === 'amber') s += 2; else if (!lv.overall_rating) s += 1 } else s += 1; const dl = lv && lv.debrief && lv.debrief.remediation_deadline; if (dl && new Date(dl + 'T00:00:00').getTime() < now) s += 2; return { f, s, rag: lv ? lv.overall_rating : null } }).sort((a, b) => b.s - a.s)
   const topRisk = risk.filter(r => r.s >= 2).slice(0, 6)
 
+  const byArea = {}; vis.forEach(v => { const a = v.area || 'Unassigned'; byArea[a] = (byArea[a] || 0) + 1 })
+  const areaRows = Object.keys(byArea).sort().map(a => ({ a, n: byArea[a] })); const maxArea = Math.max(1, ...areaRows.map(r => r.n))
+
+  const summary = rated.length
+    ? coverage + '% of the estate assessed \u00b7 ' + complianceRate + '% green' + (needsAttention ? ' \u00b7 ' + needsAttention + ' need attention' : '') + (awaitingCalls ? ' \u00b7 ' + awaitingCalls + ' awaiting a follow-up call' : '')
+    : 'No assessments recorded yet. Load or capture visits to see the picture here.'
+
+  const kpis = [
+    { l: 'Facilities', v: facilities.length, tab: 'facilities', tone: 'p', show: true },
+    { l: 'Assessed', v: rated.length + unscored.length, tab: 'facilities', tone: 'p', show: true },
+    { l: 'Need attention', v: needsAttention, tab: 'reports', tone: 'r', show: tabsFor.includes('reports') },
+    { l: 'Awaiting calls', v: awaitingCalls, tab: 'followups', tone: 'a', show: tabsFor.includes('followups') },
+    { l: 'Second visits due', v: secondDue, tab: 'secondassessment', tone: 'p', show: tabsFor.includes('secondassessment') },
+    { l: 'Access requests', v: accessPending, tab: 'access', tone: 'r', show: tabsFor.includes('access') }
+  ].filter(k => k.show)
+
+  const ragChips = [['all', 'All', rated.length + unscored.length], ['green', 'Green', rag.green], ['amber', 'Amber', rag.amber], ['red', 'Red', rag.red], ['unscored', 'Not scored', unscored.length]]
+  const donutData = [{ label: 'Green', value: rag.green, color: '#2E7D46', key: 'green' }, { label: 'Amber', value: rag.amber, color: '#C77D0A', key: 'amber' }, { label: 'Red', value: rag.red, color: '#B4442E', key: 'red' }, { label: 'Not scored', value: unscored.length, color: '#B9AEC9', key: 'unscored' }]
+  const legend = [['green', 'Green', rag.green], ['amber', 'Amber', rag.amber], ['red', 'Red', rag.red], ['unscored', 'Not scored', unscored.length]]
+
   return (<>
-    <div className="an-cards">{cards.map(c => (<StatCard key={c.l} value={c.v} label={c.l} />))}</div>
-    <div className="an-two">
-      <div className="an-panel"><h3>Compliance outcomes</h3>{(rated.length + unscored.length) === 0 ? <p className="empty sm">No assessments yet.</p> : <Donut data={donutData} />}</div>
-      <div className="an-panel ring-panel"><h3>Green rate</h3><Ring pct={complianceRate} label="Rated green at the most recent visit" /></div>
+    <div className="dash-hero">
+      <div className="dash-hero-ring"><Ring pct={complianceRate} label={avg == null ? 'No scores yet' : 'Avg score ' + avg + '%'} /></div>
+      <div className="dash-hero-body">
+        <p className="dash-hero-sum">{summary}</p>
+        <div className="dash-hero-cov">
+          <div className="cov-bar"><div className="cov-fill" style={{ width: (coverage || 0) + '%' }} /></div>
+          <span className="cov-cap">{rated.length + unscored.length} of {facilities.length} facilities visited</span>
+        </div>
+        <div className="dash-hero-legend">{legend.map(([k, l, n]) => (<span key={k} className={'hero-leg ' + k}><span className="hr-dot" />{l}<em>{n}</em></span>))}</div>
+      </div>
     </div>
-    <div className="an-panel"><h3>Compliance trend</h3>
-      <p className="hintline">Average compliance score by month.</p>
-      <LineChart points={trend} />
+
+    <div className="dash-kpis">{kpis.map(k => (
+      <button key={k.l} className={'dash-kpi tone-' + k.tone} onClick={() => go(k.tab)}>
+        <span className="dk-v"><CountVal n={k.v} /></span><span className="dk-l">{k.l}</span><span className="dk-go">Open {'\u2192'}</span>
+      </button>))}
     </div>
+
+    <div className="an-panel">
+      <div className="dash-exp-head"><h3>Compliance by facility</h3><SearchBox value={q} onChange={setQ} placeholder="Search facilities\u2026" /></div>
+      <div className="dash-exp">
+        <div className="dash-exp-donut">
+          {(rated.length + unscored.length) === 0 ? <p className="empty sm">No assessments yet.</p> : <DonutInteractive data={donutData} active={ragF} onPick={k => setRagF(f => f === k ? 'all' : k)} />}
+        </div>
+        <div className="dash-exp-list">
+          <div className="dash-exp-filters">
+            <div className="fu-segs sm wrap">{ragChips.map(([k, l, n]) => <button key={k} className={'fu-seg' + (ragF === k ? ' on' : '')} onClick={() => setRagF(k)}>{l}{n ? <span className="fu-seg-n">{n}</span> : null}</button>)}</div>
+            <select className="dash-area-sel" value={areaF} onChange={e => setAreaF(e.target.value)}><option value="all">All areas</option>{areasList.map(a => <option key={a} value={a}>{a}</option>)}</select>
+          </div>
+          {explore.length === 0 ? <p className="empty sm">No facilities match these filters.</p> :
+            <ul className="dash-flist">{explore.slice(0, 60).map(({ v, f }, i) => (
+              <li key={i} onClick={() => go('facilities')}>
+                <span className="df-name">{f.name || v.facility_name}<em>{f.area || v.area || 'Unassigned'}</em></span>
+                {v.score != null ? <Chip rag={v.overall_rating} pct={v.score} /> : <span className="chip amber">Not scored</span>}
+              </li>))}</ul>}
+          {explore.length > 60 && <p className="hintline">Showing 60 of {explore.length}. Refine with search or filters.</p>}
+        </div>
+      </div>
+    </div>
+
+    <div className="an-panel">
+      <div className="dash-exp-head"><h3>Compliance trend</h3>
+        <div className="fu-segs sm">{[['6', '6m'], ['12', '12m'], ['all', 'All']].map(([k, l]) => <button key={k} className={'fu-seg' + (range === k ? ' on' : '')} onClick={() => setRange(k)}>{l}</button>)}</div>
+      </div>
+      {trend.length === 0 ? <p className="empty sm">No scored visits in this range.</p> : <LineChart points={trend} />}
+    </div>
+
     {reins.total > 0 && <div className="an-panel">
       <h3>Re-inspection outcomes</h3>
       <p className="hintline">Movement between the first visit and a follow-up assessment. The headline figures above already reflect each facility's most recent visit; this panel shows the change.</p>
@@ -2932,6 +3022,7 @@ function AnalyticsBody({ facilities }) {
       </div>
       {reins.recTotal > 0 && <p className="hintline">{reins.resolved} of {reins.recTotal} first-visit recommendations resolved across re-inspected facilities.</p>}
     </div>}
+
     <div className="an-two">
       <div className="an-panel"><h3>Team performance</h3>
         {monitors.length === 0 ? <p className="empty sm">No visits yet.</p> : <div className="perf">{monitors.map(m => {
@@ -2941,18 +3032,21 @@ function AnalyticsBody({ facilities }) {
       </div>
       <div className="an-panel"><h3>Facilities needing attention</h3>
         {topRisk.length === 0 ? <p className="empty sm">Nothing flagged.</p> : <div className="risk">{topRisk.map(r => (
-          <div className="risk-row" key={r.f.id}><span className="risk-name">{r.f.name}<em>{r.f.area || 'Unassigned'}</em></span><span className={'risk-badge ' + riskLevel(r.s).toLowerCase()}>{riskLevel(r.s)} risk</span></div>
+          <div className="risk-row" key={r.f.id} onClick={() => go('facilities')} style={{ cursor: 'pointer' }}><span className="risk-name">{r.f.name}<em>{r.f.area || 'Unassigned'}</em></span><span className={'risk-badge ' + riskLevel(r.s).toLowerCase()}>{riskLevel(r.s)} risk</span></div>
         ))}</div>}
       </div>
     </div>
+
     <div className="an-panel"><h3>Visits by area</h3>
+      <p className="hintline">Tap a bar to filter the facility list above.</p>
       {areaRows.length === 0 ? <p className="empty sm">No visits yet.</p> : <div className="bars">{areaRows.map(r => (
-        <div className="bar-row" key={r.a}><span className="bar-lab">{r.a}</span><div className="bar-track"><div className="bar-fill" style={{ width: (r.n / maxArea * 100) + '%' }} /></div><span className="bar-n">{r.n}</span></div>
+        <div className={'bar-row click' + (areaF === r.a ? ' on' : '')} key={r.a} onClick={() => setAreaF(a => a === r.a ? 'all' : r.a)}><span className="bar-lab">{r.a}</span><div className="bar-track"><div className="bar-fill" style={{ width: (r.n / maxArea * 100) + '%' }} /></div><span className="bar-n">{r.n}</span></div>
       ))}</div>}
     </div>
+
     <div className="an-panel"><h3>Geographic outcomes</h3>
-      <p className="hintline">Each facility is coloured by its most recent visit outcome. Grey means not yet assessed.</p>
-      {points.length === 0 ? <p className="empty sm">No mapped facilities yet.</p> : <HeatMap points={points} />}
+      <p className="hintline">Each facility is coloured by its most recent visit outcome{ragF !== 'all' || areaF !== 'all' ? ' (filtered)' : ''}. Grey means not yet assessed.</p>
+      {points.length === 0 ? <p className="empty sm">No mapped facilities match.</p> : <HeatMap points={points} />}
     </div>
   </>)
 }
@@ -4187,6 +4281,52 @@ const css = `
 .realms .reins-v.g { color:#2E7D46; } .realms .reins-v.a { color:#9A5B12; } .realms .reins-v.r { color:#B4442E; }
 .realms .reins-l { display:block; margin-top:6px; font-size:12.5px; color:#7A6A93; }
 @media (max-width:560px){ .realms .reins-row { grid-template-columns:repeat(2,1fr); } }
+
+/* --- dashboard redesign --- */
+.realms .dash-hero { display:flex; gap:22px; align-items:center; background:linear-gradient(120deg,#F3EEFA,#FBF6FF 55%,#F6EEF6); border:1px solid var(--line); border-radius:var(--r-lg); padding:20px 24px; margin:0 0 16px; box-shadow:var(--e1); }
+.realms .dash-hero-ring { flex:none; }
+.realms .dash-hero-body { flex:1; min-width:0; }
+.realms .dash-hero-sum { font-size:17px; line-height:1.5; color:var(--p-deep); margin:0 0 14px; font-weight:500; }
+.realms .dash-hero-cov { margin-bottom:14px; }
+.realms .cov-bar { height:9px; background:#E7DEF2; border-radius:6px; overflow:hidden; }
+.realms .cov-fill { height:100%; background:linear-gradient(90deg,var(--p),var(--p-mid)); border-radius:6px; transition:width .9s cubic-bezier(.2,.8,.2,1); }
+.realms .cov-cap { display:block; margin-top:6px; font-size:12.5px; color:#7A6A93; }
+.realms .dash-hero-legend { display:flex; flex-wrap:wrap; gap:16px; }
+.realms .hero-leg { display:inline-flex; align-items:center; gap:6px; font-size:13px; color:#5A4C74; }
+.realms .hero-leg em { font-style:normal; font-weight:700; color:var(--p-deep); font-variant-numeric:tabular-nums; }
+.realms .hero-leg .hr-dot { width:9px; height:9px; border-radius:50%; }
+.realms .hero-leg.green .hr-dot { background:#2E7D46; } .realms .hero-leg.amber .hr-dot { background:#C77D0A; } .realms .hero-leg.red .hr-dot { background:#B4442E; } .realms .hero-leg.unscored .hr-dot { background:#B9AEC9; }
+.realms .dash-kpis { display:grid; grid-template-columns:repeat(6,1fr); gap:10px; margin:0 0 18px; }
+.realms .dash-kpi { position:relative; text-align:left; padding:16px 14px 14px; background:#fff; border:1px solid var(--line); border-radius:var(--r-md); cursor:pointer; overflow:hidden; transition:.16s; display:flex; flex-direction:column; gap:3px; }
+.realms .dash-kpi::before { content:''; position:absolute; left:0; top:0; bottom:0; width:3px; background:var(--p); }
+.realms .dash-kpi.tone-r::before { background:#B4442E; } .realms .dash-kpi.tone-a::before { background:#D9A340; }
+.realms .dash-kpi:hover { box-shadow:var(--e2); transform:translateY(-2px); border-color:var(--v); }
+.realms .dk-v { font-size:30px; font-weight:700; line-height:1; color:var(--p-deep); font-variant-numeric:tabular-nums; }
+.realms .dash-kpi.tone-r .dk-v { color:#B4442E; } .realms .dash-kpi.tone-a .dk-v { color:#9A5B12; }
+.realms .dk-l { font-size:12.5px; color:#6A5A87; }
+.realms .dk-go { font-size:11.5px; color:var(--v); opacity:0; transition:.16s; margin-top:2px; }
+.realms .dash-kpi:hover .dk-go { opacity:1; }
+.realms .dash-exp-head { display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; margin-bottom:6px; }
+.realms .dash-exp-head h3 { margin:0; }
+.realms .dash-exp { display:grid; grid-template-columns:220px 1fr; gap:20px; align-items:start; margin-top:10px; }
+.realms .dash-exp-donut { display:flex; justify-content:center; }
+.realms .donut-legend .dl { background:none; border:0; font-family:inherit; font-size:13px; color:#5A4C74; display:flex; align-items:center; gap:7px; width:100%; padding:3px 6px; border-radius:8px; cursor:pointer; transition:.14s; }
+.realms .donut-legend .dl:hover { background:var(--lav1); }
+.realms .donut-legend .dl.on { background:var(--lav2); font-weight:600; color:var(--p-deep); }
+.realms .dash-exp-filters { display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; margin-bottom:10px; }
+.realms .fu-segs.wrap { flex-wrap:wrap; }
+.realms .dash-area-sel { font-family:inherit; font-size:13px; padding:7px 12px; border:1px solid var(--line); border-radius:20px; background:#fff; color:var(--p-deep); }
+.realms .dash-flist { list-style:none; margin:0; padding:0; max-height:340px; overflow-y:auto; display:grid; gap:6px; }
+.realms .dash-flist li { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:9px 12px; border:1px solid var(--line); border-radius:10px; cursor:pointer; transition:.14s; }
+.realms .dash-flist li:hover { border-color:var(--v); background:var(--lav1); }
+.realms .df-name { display:flex; flex-direction:column; gap:1px; font-size:14px; color:var(--p-deep); min-width:0; }
+.realms .df-name em { font-style:normal; font-size:12px; color:#8A7AA6; }
+.realms .bar-row.click { cursor:pointer; border-radius:8px; padding:2px 4px; transition:.14s; }
+.realms .bar-row.click:hover { background:var(--lav1); }
+.realms .bar-row.click.on .bar-fill { background:linear-gradient(90deg,var(--p),var(--p-mid)); }
+.realms .bar-row.click.on .bar-lab { font-weight:600; color:var(--p-deep); }
+@media (max-width:720px){ .realms .dash-kpis { grid-template-columns:repeat(3,1fr); } .realms .dash-exp { grid-template-columns:1fr; } .realms .dash-hero { flex-direction:column; align-items:flex-start; } }
+@media (max-width:440px){ .realms .dash-kpis { grid-template-columns:repeat(2,1fr); } }
 @media (max-width:640px){ .realms .fu-kpis { grid-template-columns:repeat(2,1fr); } .realms .fu-toolbar { flex-direction:column; align-items:stretch; } .realms .fu-segs { overflow-x:auto; } }
 .realms .hef-wrap { border:1px solid var(--line); border-radius:14px; padding:14px 16px; margin-bottom:18px; background:#fff; }
 .realms .hef-title { cursor:pointer; display:flex; align-items:center; justify-content:space-between; font-weight:600; color:var(--p-deep); font-size:16px; }
