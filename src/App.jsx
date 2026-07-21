@@ -1,4623 +1,4553 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react'
-import { createClient } from '@supabase/supabase-js'
+import React, { useEffect, useRef, useState } from 'react'
+import L from 'leaflet'
+import 'leaflet/dist/leaflet.css'
+import { supabase, MODE } from './supabaseClient.js'
+import { facilities as FAC, assignments as ASG, visits as VIS, notifications as NOTIF, calls as CALLS, access as ACC, facilitiesFromCSV, orderRoute, clusterDays, clusterDaysByDate, googleMapsDirUrl, geocode, uploadEvidence, sendNotify, askAI, seedSampleData, clearAllData } from './data.js'
 
-/* ============================================================================
-   MCCTI CoopEco - single-file application (src/App.jsx)
-   Stage 1: Landing and brand
-   Stage 2: Deployable stack and entry flow (Supabase auth + kv, roles, identity)
-   Stage 3: Cooperative Registry & Governance (SEKAT layer) - registration,
-            society dashboard, annual returns, officer review/approval, auditor
-            examination, timestamped audit trail, area-office oversight
-   ==========================================================================*/
+const BUILD = 'field-2026-07-18r'
 
-/* ------------------------------ config -------------------------------- */
-const SB_URL = import.meta.env.VITE_SUPABASE_URL
-const SB_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY
-const supa = SB_URL && SB_KEY ? createClient(SB_URL, SB_KEY) : null
-const hasSupabase = Boolean(supa)
-/* Demo/sample data.
-   - No Supabase (preview/demo build): always ON, so the app is explorable.
-   - Live Supabase: OFF unless VITE_DEMO_DATA="true". A production database must never be
-     seeded with fictional cooperatives, members or loans. */
-const DEMO_DATA = !hasSupabase || String(import.meta.env.VITE_DEMO_DATA || '').toLowerCase() === 'true'
+/*
+  REALMS FIELD — Stages 1 to 3 (single-file App.jsx + supabaseClient.js + data.js)
+  Stage 1: tabbed public site. Stage 2: auth, role picker, dashboard.
+  Stage 3 (Map): facilities with area clustering, CSV import, Leaflet map,
+  nearest-neighbour route ordering, hand-off to Google Maps, Team Leader assignment.
+  Runs in demo mode (browser storage) until Supabase keys are set.
+*/
 
-/* --------------------------- content data ----------------------------- */
-const AREA_LENS = [
-  { id: 'state', label: 'State-wide', tag: 'All 21 area offices', coops: '13,000', members: '150,000+', active: '~15%', corridor: false },
-  { id: 'ikeja', label: 'Ikeja', tag: 'Headquarters, Alausa', coops: '2,140', members: '31,400', active: '31%', corridor: false },
-  { id: 'ikorodu', label: 'Ikorodu', tag: 'Priority corridor', coops: '1,080', members: '12,600', active: '9%', corridor: true },
-  { id: 'epe', label: 'Epe', tag: 'Priority corridor', coops: '640', members: '7,300', active: '6%', corridor: true },
-  { id: 'badagry', label: 'Badagry', tag: 'Priority corridor', coops: '520', members: '5,900', active: '5%', corridor: true },
-  { id: 'ibeju', label: 'Ibeju-Lekki', tag: 'Priority corridor', coops: '410', members: '4,700', active: '4%', corridor: true },
-]
-const REGISTER = [
-  { name: 'Omoluabi Traders Multipurpose Coop', office: 'Ikeja', id: 'LAG-CS-24-018842', status: 'Approved' },
-  { name: 'Idera Market Women Cooperative Society', office: 'Mushin', id: 'LAG-CS-24-019110', status: 'Under review' },
-  { name: 'Ajo Isokan Savings Coop', office: 'Ikorodu', id: 'LAG-CS-24-019204', status: 'Annual returns due' },
-  { name: 'Eko Artisans Thrift and Credit Coop', office: 'Lagos Island', id: 'LAG-CS-24-019260', status: 'Approved' },
-  { name: 'Badagry Fishers Multipurpose Coop', office: 'Badagry', id: 'LAG-CS-24-019318', status: 'KYC pending' },
-  { name: 'Epe Farmers Produce Cooperative', office: 'Epe', id: 'LAG-CS-24-019377', status: 'Under review' },
-  { name: 'Alaba Traders Investment Coop', office: 'Ojo', id: 'LAG-CS-24-019401', status: 'Approved' },
-  { name: 'Ilaje Transport Owners Coop', office: 'Ibeju-Lekki', id: 'LAG-CS-24-019455', status: 'Registration filed' },
-  { name: 'Idumota Textile Merchants Coop', office: 'Lagos Island', id: 'LAG-CS-24-019488', status: 'Annual returns due' },
-  { name: 'Surulere Caterers and Vendors Coop', office: 'Surulere', id: 'LAG-CS-24-019512', status: 'Approved' },
-]
-const MODULES = [
-  { n: '01', title: 'Cooperative Registry & Governance', lens: 'SEKAT layer', ai: false, body: 'Online registration with a tracking ID, by-laws and trustees, area-office assignment, annual returns and CAP15 supervision, with officer review and a timestamped audit trail on every action.' },
-  { n: '02', title: 'Member & MSME Analytics', lens: 'QooP layer', ai: true, body: 'Member onboarding and KYC, enterprise profiling across turnover, employment, sector and cash flow, and an AI credit score that sets a lending threshold and risk band.' },
-  { n: '03', title: 'LASMECO Financing', lens: 'Access to finance', ai: false, body: 'The seven-step journey from intent to disbursement. Loans up to ₦10,000,000 at 9% per annum, eligibility gated on cooperative membership and platform compliance, human approval at disbursement.' },
-  { n: '04', title: 'Digital Wallet & Payments', lens: 'No-cash by design', ai: false, body: 'Member savings and contributions, esusu and ajo cycles digitised, transfers, withdrawals and escrow, settled through Paystack and Flutterwave. Every flow traceable, no cash handling.' },
-  { n: '05', title: 'Marketplace & Directory', lens: 'Commerce and search', ai: false, body: 'A searchable cooperative directory with premium listings and a coop-merchant marketplace, opening government-linked commerce to societies across all 57 LGAs and LCDAs.' },
-  { n: '06', title: 'Governance Intelligence', lens: 'For leadership', ai: true, body: 'Real-time dashboards for the Director, Permanent Secretary, Honourable Commissioner and Governor’s office. Cooperative activity, loan performance, MSME health per LGA and fraud alerts.' },
-]
-const ROLES = [
-  { id: 'society', icon: 'society', title: 'Cooperative Society', desc: 'Register, file returns, manage members and contributions.', defaultTitle: 'Society Administrator' },
-  { id: 'member', icon: 'member', title: 'Member / MSME', desc: 'Onboard, get profiled and scored, save and apply for LASMECO.', defaultTitle: 'Cooperative Member' },
-  { id: 'officer', icon: 'officer', title: 'Cooperative Officer', desc: 'Review, audit and approve across the 21 area offices.', defaultTitle: 'Cooperative Officer' },
-  { id: 'auditor', icon: 'auditor', title: 'Auditor', desc: 'Examine financial returns and sign off on the audit trail.', defaultTitle: 'Cooperative Auditor' },
-  { id: 'sterling', icon: 'partner', title: 'Sterling Bank', desc: 'KYC and assessment, 50% guarantee, and disbursement.', defaultTitle: 'Sterling Bank' },
-  { id: 'boi', icon: 'boi', title: 'Bank of Industry', desc: 'Final approval and loan funding for LASMECO.', defaultTitle: 'Bank of Industry' },
-  { id: 'assetmatrix', icon: 'vault', title: 'Asset Matrix MFB', desc: 'Platform revenue escrow and distribution.', defaultTitle: 'Asset Matrix MFB' },
-  { id: 'accelerator', icon: 'accelerator', title: 'Accelerator Programme', desc: 'Recruit, train and prepare MSMEs; recommend loan amounts.', defaultTitle: 'Accelerator Programme' },
-  { id: 'leadership', icon: 'leadership', title: 'Leadership / Admin', desc: 'Real-time oversight of the cooperative economy.', defaultTitle: 'MCCTI Leadership' },
-  { id: 'reviewer', icon: 'leadership', title: 'Partner Reviewer', desc: 'Time-limited, read-only review of the Leadership workspace.', defaultTitle: 'Partner Reviewer' },
-]
-const PERSONAS = [
-  ['Cooperative societies', 'One registration, one record, one audit trail.'],
-  ['Members and MSMEs', 'A profile, a score, and a route to finance.'],
-  ['Cooperative officers', 'Every society across 21 offices, in view.'],
-  ['Auditors', 'Returns examined, sign-off recorded.'],
-  ['State leadership', 'The cooperative economy, in real time.'],
-]
-/* Review access: time-limited, read-only Leadership view for partner review (QooP, SEKAT).
-   Change REVIEW_ACCESS_UNTIL to extend or revoke. Reviewers cannot open KYC documents or change any record. */
-const REVIEW_ACCESS_UNTIL = '2026-07-31T23:59:59+01:00'
-function reviewAccessExpired() { return Date.now() > new Date(REVIEW_ACCESS_UNTIL).getTime() }
-function reviewDaysLeft() { return Math.max(0, Math.ceil((new Date(REVIEW_ACCESS_UNTIL).getTime() - Date.now()) / 86400000)) }
-const OFFICIALS = {
-  'review.qoop@coopeco.ng': { name: 'QooP Review', title: 'Reviewer (QooP)', office: 'QooP', role: 'reviewer' },
-  'review.sekat@coopeco.ng': { name: 'SEKAT Review', title: 'Reviewer (SEKAT)', office: 'SEKAT', role: 'reviewer' },
-  'commissioner@mccti.lg.gov.ng': { name: 'Honourable Commissioner', title: 'Honourable Commissioner', office: 'MCCTI', role: 'leadership' },
-  'permsec@mccti.lg.gov.ng': { name: 'Permanent Secretary', title: 'Permanent Secretary', office: 'MCCTI', role: 'leadership' },
-  'director@mccti.lg.gov.ng': { name: 'Director of Cooperatives', title: 'Director, Cooperative Services', office: 'Directorate of Cooperative Services', role: 'officer' },
-  'registrar@mccti.lg.gov.ng': { name: 'Area Registrar', title: 'Cooperative Officer', office: 'Ikeja Area Office', role: 'officer' },
-  'boi@lasmeco.ng': { name: 'Bank of Industry', title: 'BOI Loan Officer', office: 'Bank of Industry', role: 'boi' },
-  'sterling@lasmeco.ng': { name: 'Sterling Bank', title: 'Sterling Loan Officer', office: 'Sterling Bank', role: 'sterling' },
-  'escrow@assetmatrix.ng': { name: 'Asset Matrix MFB', title: 'Escrow Administrator', office: 'Asset Matrix Microfinance Bank', role: 'assetmatrix' },
-}
-const ROLE_CAPS = {
-  member: ['Complete KYC and MSME profile', 'View your credit score and band', 'Save and contribute (esusu / ajo)', 'Apply for LASMECO finance'],
-  partner: ['Process disbursements', 'Manage escrow and settlement', 'Oversee wallet transactions', 'Reconcile the revenue account'],
-}
-
-/* --------------------------- Stage 3 config --------------------------- */
-const AREA_OFFICES = ['Alausa (HQ)', 'Ikeja', 'Mushin', 'Ikorodu', 'Epe', 'Badagry', 'Ibeju-Lekki', 'Lagos Island', 'Surulere', 'Ojo', 'Agege', 'Oshodi', 'Kosofe', 'Alimosho', 'Eti-Osa', 'Somolu', 'Apapa', 'Amuwo-Odofin', 'Ifako-Ijaiye', 'Lagos Mainland', 'Ajeromi']
-const SECTORS = ['Trade', 'Thrift & Credit', 'Artisan', 'Agriculture', 'Transport', 'Manufacturing', 'Processing', 'Services', 'Multipurpose']
-const LASMECO_SECTORS = ['Agriculture', 'Manufacturing', 'Health', 'Tourism', 'Service Delivery', 'Circular Economy', 'Digital Economy']
-/* ---- Value Chain Cooperatives -------------------------------------------
-   A Value Chain Cooperative bundles primary cooperatives, their MSME members and
-   non-cooperative firms (e.g. an anchor buyer) into one coordinated commercial unit,
-   organised by stage. Cooperatives are assigned AUTOMATICALLY from their sector;
-   MCCTI can add or remove any cooperative by hand.
-   Designed to be upgradeable to a registered secondary cooperative under CAP 15. */
-const CHAIN_STAGE_TEMPLATES = {
-  'Agriculture': ['Inputs & Supply', 'Production', 'Aggregation', 'Processing', 'Logistics & Storage', 'Distribution & Market'],
-  'Manufacturing': ['Raw Materials', 'Production', 'Packaging & Quality', 'Logistics & Storage', 'Distribution & Market', 'Support Services'],
-  'Health': ['Supply & Equipment', 'Care & Service Delivery', 'Pharmacy & Distribution', 'Logistics & Storage', 'Support Services'],
-  'Tourism': ['Accommodation', 'Transport & Mobility', 'Attractions & Experiences', 'Food & Hospitality', 'Marketing & Booking'],
-  'Service Delivery': ['Inputs & Tools', 'Service Provision', 'Logistics & Storage', 'Distribution & Market', 'Support Services'],
-  'Circular Economy': ['Collection', 'Sorting & Aggregation', 'Recycling & Processing', 'Remanufacturing', 'Distribution & Market'],
-  'Digital Economy': ['Infrastructure', 'Development & Production', 'Platforms & Services', 'Distribution & Market', 'Support Services'],
-}
-// Which value chain a cooperative's own sector belongs to. null = MCCTI assigns by hand.
-const COOP_SECTOR_TO_CHAIN = { 'Agriculture': 'Agriculture', 'Processing': 'Manufacturing', 'Manufacturing': 'Manufacturing', 'Artisan': 'Manufacturing', 'Trade': 'Service Delivery', 'Transport': 'Service Delivery', 'Services': 'Service Delivery', 'Thrift & Credit': null, 'Multipurpose': null }
-// Where in the chain a cooperative most likely sits, matched against that chain's stages.
-const COOP_SECTOR_TO_STAGE = { 'Agriculture': 'Production', 'Manufacturing': 'Production', 'Artisan': 'Production', 'Processing': 'Processing', 'Transport': 'Logistics', 'Trade': 'Distribution', 'Services': 'Support', 'Thrift & Credit': 'Support', 'Multipurpose': 'Distribution' }
-const CHAIN_FEES = { registration: 50000, annual: 25000 } // PLACEHOLDER - confirm with MCCTI before go-live
-const CHAIN_STATUSES = ['Proposed', 'Active', 'Suspended']
-function chainSectorForCoop(coop) { return COOP_SECTOR_TO_CHAIN[coop && coop.sector] || null }
-function inferChainStage(coop, chain) {
-  const stages = (chain && chain.stages) || []
-  if (chainSectorForCoop(coop) === chain.sector) { // its own trade tells us where it sits
-    const want = COOP_SECTOR_TO_STAGE[coop && coop.sector] || 'Production'
-    const hit = stages.find((s) => s.toLowerCase().indexOf(want.toLowerCase()) > -1)
-    if (hit) return hit
-  }
-  return stages[1] || stages[0] || '' // routed in via its accelerator: default to the core delivery stage
-}
-async function listChains() { return (await kvList('chain:')).filter(Boolean) }
-async function saveChain(rec, ctx, action) {
-  const id = rec.chainId || 'VC-' + Math.random().toString(36).slice(2, 7).toUpperCase()
-  const next = { ...rec, chainId: id, updatedAt: new Date().toISOString(), createdAt: rec.createdAt || new Date().toISOString(), createdBy: rec.createdBy || (ctx && ctx.email) }
-  await kvSet('chain:' + id, next)
-  if (action && ctx) await addAudit({ trackingId: id, action, by: ctx.name, role: ctx.role, note: rec.name || '' })
-  return next
-}
-/* A cooperative belongs to a chain if EITHER:
-   - its own registered sector maps to the chain's sector (COOP_SECTOR_TO_CHAIN), OR
-   - any of its members applied for LASMECO in that sector, i.e. through that sector's
-     accelerator (a hospital coop applying via the Health Accelerator joins Health), OR
-   - MCCTI added it by hand.
-   Manual removals always win. */
-function chainCoopsVia(chain, loans, members) {
-  const s = new Set()
-  ;(loans || []).forEach((l) => { if (l.sector === chain.sector && l.coop) s.add(l.coop) })       // applied for LASMECO in this sector
-  ;(members || []).forEach((m) => { if (m.lasmecoSector === chain.sector && m.coop) s.add(m.coop) }) // profiled under this sector's accelerator
-  return s
-}
-function chainCoops(chain, coops, loans, members) {
-  const added = chain.added || [], removed = chain.removed || [], via = chainCoopsVia(chain, loans, members)
-  return coops.filter((c) => (removed.indexOf(c.trackingId) === -1) && (chainSectorForCoop(c) === chain.sector || via.has(c.name) || added.indexOf(c.trackingId) > -1))
-}
-function chainCoopSource(chain, coop, loans, members) {
-  if (chainCoopsVia(chain, loans, members).has(coop.name)) return 'Via ' + chain.sector + ' Accelerator'
-  if ((chain.added || []).indexOf(coop.trackingId) > -1) return 'Added by MCCTI'
-  return 'By sector'
-}
-function chainMembers(chain, coops, members, loans) {
-  const names = chainCoops(chain, coops, loans, members).map((c) => c.name)
-  return members.filter((m) => names.indexOf(m.coop) > -1 || m.lasmecoSector === chain.sector)
-}
-function chainMetrics(chain, coops, members, loans) {
-  const cs = chainCoops(chain, coops, loans, members), ms = chainMembers(chain, coops, members, loans)
-  const names = cs.map((c) => c.name)
-  const ls = (loans || []).filter((l) => names.indexOf(l.coop) > -1)
-  const jobs = ms.reduce((a, m) => a + ((m.msme && m.msme.employees) || 0), 0)
-  const turnover = ms.reduce((a, m) => a + (((m.msme && m.msme.monthlyTurnover) || 0) * 12), 0)
-  const npl = nplMetrics(ls)
-  const nav = cs.reduce((a, c) => a + (c.nav || 0), 0)
-  return { coops: cs, members: ms, loans: ls, jobs, turnover, nav, npl, contributions: cs.reduce((a, c) => a + (c.contributions || 0), 0) }
-}
-const STATUS_CLASS = { 'Filed': 'st-filed', 'Under review': 'st-review', 'Approved': 'st-approved', 'Returned': 'st-returned' }
-const CAP15_CLASS = { 'Compliant': 'st-approved', 'Returns due': 'st-review', 'Under audit': 'st-filed' }
-const LOAN_STATUS_CLASS = { 'Applied': 'st-filed', 'In training': 'st-review', 'Shortlisted': 'st-review', 'Coop validated': 'st-review', 'Bank assessment': 'st-review', 'BOI approved': 'st-approved', 'Disbursed': 'st-approved', 'Repaying': 'st-approved', 'Completed': 'st-approved', 'Declined': 'st-returned', 'Default': 'st-returned' }
-const TICKET_STATUS_CLASS = { 'Open': 'st-review', 'In progress': 'st-filed', 'Resolved': 'st-approved', 'Escalated': 'st-returned' }
-
-const SEED_COOPS = [
-  { name: 'Omoluabi Traders Multipurpose Coop', areaOffice: 'Ikeja', sector: 'Trade', status: 'Filed', cap15: 'Returns due', members: 212, contributions: 4800000, custodian: 'B. Ajomale', trustees: ['A. Ogun', 'K. Meadows'] },
-  { name: 'Idera Market Women Cooperative Society', areaOffice: 'Mushin', sector: 'Trade', status: 'Under review', cap15: 'Under audit', members: 340, contributions: 9200000, custodian: 'E. Emilia', trustees: ['T. Okafor'] },
-  { name: 'Ajo Isokan Savings Coop', areaOffice: 'Ikorodu', sector: 'Thrift & Credit', status: 'Filed', cap15: 'Returns due', members: 98, contributions: 2100000, custodian: 'G. Onuoha', trustees: ['D. Oguntoye'] },
-  { name: 'Eko Artisans Thrift and Credit Coop', areaOffice: 'Lagos Island', sector: 'Artisan', status: 'Approved', cap15: 'Compliant', members: 156, contributions: 6400000, custodian: 'S. Bello', trustees: ['R. Ade', 'M. Uche'] },
+const SITE_TABS = [
+  { id: 'home', label: 'Home' }, { id: 'services', label: 'Services' },
+  { id: 'monitoring', label: 'Facility Monitoring & Accreditation' }, { id: 'about', label: 'About' },
+  { id: 'leadership', label: 'Leadership & Staff' }, { id: 'contact', label: 'Contact' }
 ]
 
-/* ------------------------------ helpers ------------------------------- */
-function usePrefersReducedMotion() {
-  const [reduced, setReduced] = useState(false)
-  useEffect(() => {
-    const m = window.matchMedia('(prefers-reduced-motion: reduce)')
-    const on = () => setReduced(m.matches); on()
-    m.addEventListener?.('change', on)
-    return () => m.removeEventListener?.('change', on)
-  }, [])
-  return reduced
-}
-const initials = (n) => (n || '?').split(/\s+/).filter(Boolean).slice(0, 2).map((s) => s[0].toUpperCase()).join('')
-const deriveName = (email) => ((email || '').split('@')[0] || 'Member').split(/[._-]+/).filter(Boolean).map((s) => s[0].toUpperCase() + s.slice(1)).join(' ')
-function greeting() { const h = new Date().getHours(); return h < 12 ? 'Good morning' : h < 17 ? 'Good afternoon' : 'Good evening' }
-const roleTitle = (id) => (ROLES.find((r) => r.id === id) || {}).title || id
-const isReviewer = (ctx) => !!ctx && ctx.role === 'reviewer'
-const fmtNaira = (n) => '₦' + Number(n || 0).toLocaleString('en-NG')
-const fmtDate = (iso) => { try { return new Date(iso).toLocaleString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) } catch { return iso } }
-function genTrackingId() { const yy = String(new Date().getFullYear()).slice(2); const n = String(Math.floor(Math.random() * 1000000)).padStart(6, '0'); return 'LAG-CS-' + yy + '-' + n }
-const cx = (...a) => a.filter(Boolean).join(' ')
-
-/* --------------------------- storage layer ---------------------------- */
-const LS = {
-  get(k, f) { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : f } catch { return f } },
-  set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)) } catch {} },
-  del(k) { try { localStorage.removeItem(k) } catch {} },
-}
-const MEM = { read: () => LS.get('coopeco.kv', {}), write: (o) => LS.set('coopeco.kv', o) }
-async function kvGet(key) {
-  if (supa) { const { data } = await supa.from('kv').select('value').eq('key', key).maybeSingle(); return data?.value ?? null }
-  return MEM.read()[key] ?? null
-}
-let _kvBlocked = null // last write the database refused (usually a missing RLS policy for a key prefix)
-async function kvSet(key, value, uid) {
-  if (supa) {
-    const { error } = await supa.from('kv').upsert({ key, value, user_id: uid ?? null, updated_at: new Date().toISOString() })
-    if (error) {
-      _kvBlocked = { key, message: error.message, at: new Date().toISOString() }
-      console.warn('CoopEco: the database refused to save "' + key + '" — ' + error.message + '. Re-run supabase_setup.sql; the key prefix may have no RLS policy.')
-      throw new Error(error.message)
-    }
-    return
-  }
-  const o = MEM.read(); o[key] = value; MEM.write(o)
-}
-function kvBlocked() { return _kvBlocked }
-async function kvList(prefix) {
-  if (supa) { const { data } = await supa.from('kv').select('value').like('key', prefix + '%'); return (data || []).map((r) => r.value) }
-  const o = MEM.read(); return Object.keys(o).filter((k) => k.startsWith(prefix)).map((k) => o[k])
-}
-async function kvDelete(key) {
-  if (supa) { await supa.from('kv').delete().eq('key', key); return }
-  const o = MEM.read(); delete o[key]; MEM.write(o)
-}
-
-/* ---------------------------- data layer ------------------------------ */
-function buildProfile(email, role, name) {
-  const official = OFFICIALS[(email || '').toLowerCase()]
-  const finalRole = official?.role || role || 'member'
-  return { email, role: finalRole, name: official?.name || name || deriveName(email), title: official?.title || (ROLES.find((r) => r.id === finalRole)?.defaultTitle) || 'Member', office: official?.office || 'Lagos State' }
-}
-async function loadProfile(uid, email, meta) {
-  if (supa) { const { data } = await supa.from('kv').select('value').eq('key', 'profile:' + uid).maybeSingle(); if (data?.value) return data.value; return buildProfile(email, meta?.role, meta?.name) }
-  return buildProfile(email)
-}
-async function saveProfile(uid, profile) { if (supa) await supa.from('kv').upsert({ key: 'profile:' + uid, value: profile, user_id: uid, updated_at: new Date().toISOString() }) }
-async function loadSession() {
-  if (supa) {
-    const { data } = await supa.auth.getSession(); const user = data?.session?.user; if (!user) return null
-    return { email: user.email, id: user.id, profile: await loadProfile(user.id, user.email, user.user_metadata) }
-  }
-  const email = LS.get('coopeco.session', null); if (!email) return null
-  const u = LS.get('coopeco.users', {})[email]; if (!u) return null
-  return { email, id: 'demo:' + email, profile: buildProfile(email, u.role, u.name) }
-}
-async function signUp(email, password, role, name) {
-  email = email.trim().toLowerCase()
-  if (OFFICIALS[email] && OFFICIALS[email].role === 'reviewer' && reviewAccessExpired()) throw new Error('This review access expired on ' + new Date(REVIEW_ACCESS_UNTIL).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' }) + '. Contact MCCTI to extend it.')
-  if (supa) {
-    const { data, error } = await supa.auth.signUp({ email, password, options: { data: { role, name } } }); if (error) throw new Error(error.message)
-    const user = data.user; const profile = buildProfile(email, role, name); if (user) await saveProfile(user.id, profile)
-    if (!data.session) return { pending: true, profile }; return { email, id: user.id, profile }
-  }
-  const users = LS.get('coopeco.users', {}); users[email] = { email, password, role, name }; LS.set('coopeco.users', users); LS.set('coopeco.session', email)
-  return { email, id: 'demo:' + email, profile: buildProfile(email, role, name) }
-}
-async function signIn(email, password, chosenRole) {
-  email = email.trim().toLowerCase()
-  if (OFFICIALS[email] && OFFICIALS[email].role === 'reviewer' && reviewAccessExpired()) throw new Error('This review access expired on ' + new Date(REVIEW_ACCESS_UNTIL).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' }) + '. Contact MCCTI to extend it.')
-  if (supa) {
-    const { data, error } = await supa.auth.signInWithPassword({ email, password }); if (error) throw new Error(error.message)
-    const user = data.user; const profile = await loadProfile(user.id, email, user.user_metadata)
-    if (chosenRole && !OFFICIALS[email]) { profile.role = chosenRole; await saveProfile(user.id, profile) }
-    return { email, id: user.id, profile }
-  }
-  const u = LS.get('coopeco.users', {})[email]; if (!u) throw new Error('No account found for that email. Create one first.')
-  if (u.password && password && u.password !== password) throw new Error('That password does not match our records.')
-  LS.set('coopeco.session', email); return { email, id: 'demo:' + email, profile: buildProfile(email, chosenRole || u.role, u.name) }
-}
-async function signOutNow() { if (supa) await supa.auth.signOut(); else LS.del('coopeco.session') }
-
-/* registry */
-async function addAudit(e) { const id = 'audit:' + Date.now() + '-' + Math.random().toString(36).slice(2, 7); await kvSet(id, { ...e, at: e.at || new Date().toISOString() }) }
-async function listAudit(trackingId) { const all = await kvList('audit:'); const f = trackingId ? all.filter((a) => a.trackingId === trackingId) : all; return f.sort((a, b) => (a.at < b.at ? 1 : -1)) }
-async function listCoops() { return (await kvList('coop:')).sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1)) }
-async function getCoop(id) { return await kvGet('coop:' + id) }
-async function createCoop(rec, ctx) {
-  const trackingId = genTrackingId(); const now = new Date().toISOString()
-  const record = { trackingId, source: 'MCCTI', regNo: null, status: 'Filed', cap15: 'Returns due', members: 0, contributions: 0, trustees: [], returns: null, registrationFee: COOP_FEES.registration, feeStatus: 'Invoiced', createdBy: ctx.email, createdAt: now, updatedAt: now, ...rec }
-  await kvSet('coop:' + trackingId, record, ctx.uid)
-  await addAudit({ trackingId, action: 'Registration filed', by: ctx.name, role: ctx.role, note: '' })
-  return record
-}
-async function updateCoop(id, patch, ctx, action, note) {
-  const cur = await getCoop(id); if (!cur) return null
-  const next = { ...cur, ...patch, updatedAt: new Date().toISOString() }
-  await kvSet('coop:' + id, next, cur.user_id)
-  if (action) await addAudit({ trackingId: id, action, by: ctx.name, role: ctx.role, note: note || '' })
-  if (patch.status && ['Approved', 'Returned'].includes(patch.status) && cur.createdBy && !cur.createdBy.includes('@system') && !cur.createdBy.includes('seed@')) {
-    await notify({ to: cur.createdBy, title: 'Cooperative application ' + (patch.status === 'Approved' ? 'approved' : 'returned'), body: cur.name + ' (' + id + ')', event: 'coop' })
-  }
-  return next
-}
-async function fileReturns(id, returns, ctx) {
-  return updateCoop(id, { returns: { ...returns, filedBy: ctx.name, filedAt: new Date().toISOString() }, cap15: 'Under audit' }, ctx, 'Annual returns filed', '')
-}
-async function seedDemoRegistry() {
-  if (supa) return
-  if ((await kvList('coop:')).length) return
-  const base = Date.now() - 6 * 86400000
-  for (let i = 0; i < SEED_COOPS.length; i++) {
-    const s = SEED_COOPS[i]; const id = genTrackingId(); const created = new Date(base + i * 86400000).toISOString()
-    await kvSet('coop:' + id, { trackingId: id, source: 'MCCTI', regNo: null, returns: null, createdBy: 'seed@mccti.lg.gov.ng', createdAt: created, updatedAt: created, ...s })
-    await addAudit({ trackingId: id, action: 'Registration filed', by: s.custodian, role: 'society', note: '', at: created })
-    if (s.status !== 'Filed') await addAudit({ trackingId: id, action: 'Begin examination', by: 'Area Registrar', role: 'officer', note: '', at: new Date(base + i * 86400000 + 3600000).toISOString() })
-    if (s.status === 'Approved') await addAudit({ trackingId: id, action: 'Approved and signed off', by: 'Director of Cooperatives', role: 'officer', note: 'Compliant with CAP15', at: new Date(base + i * 86400000 + 7200000).toISOString() })
-  }
-  await syncFromSekat({ name: 'SEKAT gateway', role: 'officer', email: 'sekat@system' }, true)
-  await syncFromQoop({ name: 'QooP gateway', role: 'officer', email: 'qoop@system' }, true)
-  await seedDemoLoans()
-}
-
-/* ------------------- SEKAT -> MCCTI integration (one-way) ------------------
-   SEKAT is the source of truth for the legacy registry and audit data. Data
-   flows in one direction, SEKAT into MCCTI. Ingested societies are mirrored
-   read-only. The sample feed below stands in for the live SEKAT API/DB until
-   SEKAT_API_URL and SEKAT_API_KEY are configured; the field shape mirrors the
-   MicMac Coop Portal dataset (registration, custodian, trustees, bank, and the
-   full audit inputs with examination, approval and signature). */
-const SEKAT_FEED = [
-  { regNo: 'LSCS/IK/0453', name: 'Ikeja Grand Traders Cooperative', areaOffice: 'Ikeja', sector: 'Trade', custodian: 'F. Adekoyeni', trustees: ['A. Bello', 'K. Nwosu'], members: 410, contributions: 15200000, bank: { name: 'Asset Matrix MFB', accountName: 'Ikeja Grand Traders Coop', accountNumber: '0142xxxx88' }, status: 'Approved', cap15: 'Compliant', createdAt: '2019-11-04T09:00:00Z', audit: { income: 18400000, expenses: 12600000, balanceSheet: 31200000, disposalOfSurplus: 3200000, trialBalance: 31200000, personalLedgerBalances: 15200000, comparativeAnalysis: [{ year: 2022, surplus: 4100000 }, { year: 2023, surplus: 5800000 }], additionalInformation: 'Clean audit. No qualifications.', examinedBy: 'Area Auditor, Ikeja', approvedBy: 'Director of Cooperatives', signature: 'DoC/2024/0451' } },
-  { regNo: 'LSCS/SR/1188', name: 'Surulere United Artisans Coop', areaOffice: 'Surulere', sector: 'Artisan', custodian: 'M. Oladipo', trustees: ['J. Ekene'], members: 268, contributions: 8900000, bank: { name: 'Asset Matrix MFB', accountName: 'Surulere United Artisans', accountNumber: '0142xxxx12' }, status: 'Approved', cap15: 'Compliant', createdAt: '2020-03-19T09:00:00Z', audit: { income: 9600000, expenses: 7100000, balanceSheet: 14800000, disposalOfSurplus: 1400000, trialBalance: 14800000, personalLedgerBalances: 8900000, comparativeAnalysis: [{ year: 2022, surplus: 1900000 }, { year: 2023, surplus: 2500000 }], additionalInformation: 'Minor disclosure on asset revaluation.', examinedBy: 'Area Auditor, Surulere', approvedBy: 'Director of Cooperatives', signature: 'DoC/2024/1180' } },
-  { regNo: 'LSCS/IB/0761', name: 'Ibeju-Lekki Farmers Multipurpose Coop', areaOffice: 'Ibeju-Lekki', sector: 'Agriculture', custodian: 'S. Ilaje', trustees: ['O. Fela', 'B. Ade'], members: 134, contributions: 3600000, bank: { name: 'Asset Matrix MFB', accountName: 'Ibeju-Lekki Farmers Coop', accountNumber: '0142xxxx55' }, status: 'Under review', cap15: 'Under audit', createdAt: '2021-07-08T09:00:00Z', audit: { income: 4200000, expenses: 3100000, balanceSheet: 6900000, disposalOfSurplus: 500000, trialBalance: 6900000, personalLedgerBalances: 3600000, comparativeAnalysis: [{ year: 2023, surplus: 1100000 }], additionalInformation: 'Awaiting superior approval.', examinedBy: 'Area Auditor, Ibeju-Lekki', approvedBy: '', signature: '' } },
-  { regNo: 'LSCS/LI/0209', name: 'Idumota Textile Merchants Coop', areaOffice: 'Lagos Island', sector: 'Trade', custodian: 'C. Nnaji', trustees: ['R. Uche', 'P. Sanni'], members: 512, contributions: 21400000, bank: { name: 'Asset Matrix MFB', accountName: 'Idumota Textile Merchants', accountNumber: '0142xxxx77' }, status: 'Approved', cap15: 'Compliant', createdAt: '2018-06-14T09:00:00Z', audit: { income: 26800000, expenses: 19200000, balanceSheet: 44500000, disposalOfSurplus: 4600000, trialBalance: 44500000, personalLedgerBalances: 21400000, comparativeAnalysis: [{ year: 2022, surplus: 6200000 }, { year: 2023, surplus: 7600000 }], additionalInformation: 'Clean audit.', examinedBy: 'Area Auditor, Lagos Island', approvedBy: 'Director of Cooperatives', signature: 'DoC/2024/0207' } },
+const STAGES = [
+  { n: '01', t: 'Map', d: 'We obtain the assigned facility list, cluster locations by area and plan the most efficient route, cutting travel time and cost while covering more ground each day.' },
+  { n: '02', t: 'Engage', d: 'On arrival our team leader introduces the monitoring team, presents official identification and the monitoring letter, and establishes a cordial, respectful atmosphere.' },
+  { n: '03', t: 'Monitor', d: 'We assess each facility against the approved HEFAMAA checklist, verifying conditions on the ground and documenting findings with evidence, immediately.' },
+  { n: '04', t: 'Debrief', d: 'We give the proprietor a balanced summary: strengths acknowledged, gaps explained, corrective actions set with a clear timeline, and next steps confirmed.' }
 ]
-const sekatIdFor = (regNo) => 'SEKAT-' + String(regNo).replace(/[^A-Za-z0-9]+/g, '-')
-function sekatToCoop(r) {
-  const id = sekatIdFor(r.regNo); const now = new Date().toISOString()
-  const a = r.audit
-  return {
-    trackingId: id, source: 'SEKAT', regNo: r.regNo, name: r.name, areaOffice: r.areaOffice, sector: r.sector,
-    custodian: r.custodian, trustees: r.trustees || [], members: r.members || 0, contributions: r.contributions || 0,
-    bank: r.bank || null, bylaws: r.bylaws || 'On file at SEKAT', status: r.status || 'Approved', cap15: r.cap15 || 'Compliant',
-    returns: a ? { income: a.income, expenses: a.expenses, surplus: (a.income || 0) - (a.expenses || 0), balanceSheet: a.balanceSheet, disposalOfSurplus: a.disposalOfSurplus, trialBalance: a.trialBalance, personalLedgerBalances: a.personalLedgerBalances, comparativeAnalysis: a.comparativeAnalysis || [], notes: a.additionalInformation || '', filedBy: 'SEKAT', filedAt: now, examinedBy: a.examinedBy, approvedBy: a.approvedBy, signature: a.signature } : null,
-    createdBy: 'sekat@system', createdAt: r.createdAt || now, updatedAt: now, syncedAt: now,
-  }
-}
-async function getIntegration(name) { return (await kvGet('integration:' + (name || 'sekat'))) || { lastSync: null, count: 0 } }
-async function fetchLiveRecords(endpoint) {
-  try { const r = await fetch(endpoint); if (!r.ok) return null; const d = await r.json(); return (d && Array.isArray(d.data) && d.data.length) ? d.data : null } catch (e) { return null }
-}
-async function syncFromSekat(ctx, silent) {
-  const live = await fetchLiveRecords('/api/sekat-sync')
-  if (!live && !DEMO_DATA) return 0 // live database: never ingest the sample feed
-  const feed = live || SEKAT_FEED
-  let n = 0
-  for (const r of feed) {
-    const rec = sekatToCoop(r); await kvSet('coop:' + rec.trackingId, rec)
-    if (!silent) await addAudit({ trackingId: rec.trackingId, action: 'Synced from SEKAT', by: ctx.name || 'SEKAT gateway', role: 'officer', note: 'One-way ingest' })
-    n++
-  }
-  await kvSet('integration:sekat', { lastSync: new Date().toISOString(), count: n, source: live ? 'SEKAT live API' : 'SEKAT sample feed', live: Boolean(live) })
-  return n
-}
 
-/* ------------------------------ icons --------------------------------- */
-function RoleIcon({ name }) {
-  const p = { fill: 'none', stroke: 'currentColor', strokeWidth: 1.6, strokeLinecap: 'round', strokeLinejoin: 'round' }
-  const paths = {
-    society: <path {...p} d="M4 20h16M6 20V9l6-4 6 4v11M10 20v-5h4v5" />,
-    member: <><circle {...p} cx="12" cy="8" r="3.2" /><path {...p} d="M5 20c0-3.5 3-6 7-6s7 2.5 7 6" /></>,
-    officer: <><path {...p} d="M12 3l7 3v5c0 4.5-3 8-7 10-4-2-7-5.5-7-10V6z" /><path {...p} d="M9 12l2 2 4-4" /></>,
-    auditor: <><rect {...p} x="5" y="3" width="10" height="14" rx="1.5" /><path {...p} d="M8 7h4M8 10h4" /><circle {...p} cx="16" cy="16" r="3" /><path {...p} d="M18.4 18.4L21 21" /></>,
-    partner: <path {...p} d="M3 9l9-5 9 5M5 9v8m14-8v8M9 9v8m6-8v8M3 20h18" />,
-    boi: <><path {...p} d="M3 20h18M5 20v-9l5 3v-3l5 3v-3l4 2.5V20" /><path {...p} d="M8 8V4h3v2" /></>,
-    vault: <><rect {...p} x="4" y="6" width="16" height="12" rx="2" /><circle {...p} cx="12" cy="12" r="3" /><path {...p} d="M12 9v-.5M12 15v.5M9 12h-.5M15 12h.5" /></>,
-    accelerator: <><path {...p} d="M12 3c3 2 4.5 5 4.5 8.5L12 15l-4.5-3.5C7.5 8 9 5 12 3z" /><path {...p} d="M7.5 13l-2 4 3.2-1M16.5 13l2 4-3.2-1M12 9h.01" /></>,
-    leadership: <path {...p} d="M4 20V4M4 20h16M8 20v-6m4 6V9m4 11v-8" />,
-  }
-  return <svg viewBox="0 0 24 24" width="26" height="26" aria-hidden="true">{paths[name] || paths.member}</svg>
-}
-function Avatar({ name, photo, size = 44 }) {
-  if (photo) return <img className="avatar avatar-img" src={photo} alt="" style={{ width: size, height: size }} />
-  return <span className="avatar" style={{ width: size, height: size, fontSize: size * 0.36 }}>{initials(name)}</span>
-}
-const StatusChip = ({ status, kind }) => <span className={cx('chip', (kind === 'cap15' ? CAP15_CLASS : kind === 'loan' ? LOAN_STATUS_CLASS : kind === 'ticket' ? TICKET_STATUS_CLASS : STATUS_CLASS)[status] || 'st-review')}>{status}</span>
-const SourceBadge = ({ source }) => source ? <span className={cx('src-badge', source === 'SEKAT' ? 'src-sekat' : 'src-mccti')}>{source}</span> : null
-
-/* --------------------------- live register ---------------------------- */
-function LiveRegister({ areaId }) {
-  const reduced = usePrefersReducedMotion()
-  const label = (AREA_LENS.find((a) => a.id === areaId)?.label || '').toLowerCase().split('-')[0]
-  const pool = areaId === 'state' ? REGISTER : REGISTER.filter((r) => r.office.toLowerCase().includes(label))
-  const rows = pool.length ? pool : REGISTER
-  const [start, setStart] = useState(0)
-  useEffect(() => { if (reduced) return; const t = setInterval(() => setStart((s) => (s + 1) % rows.length), 3200); return () => clearInterval(t) }, [rows.length, reduced])
-  const visible = Array.from({ length: Math.min(4, rows.length) }, (_, i) => rows[(start + i) % rows.length])
-  return (
-    <aside className="register" aria-label="Live cooperative register (illustrative)">
-      <div className="register-frame">
-        <div className="register-head"><img className="reg-seal" src="/lagos-seal.png" alt="" aria-hidden="true" /><div><p className="reg-title">Cooperative Register</p><p className="reg-sub">Directorate of Cooperative Services</p></div><span className="reg-live">Live</span></div>
-        <div className="register-rows">
-          {visible.map((r, i) => (
-            <div className={cx('reg-row', i === 0 && 'is-new')} key={r.id + i}>
-              <div className="reg-row-main"><span className="reg-name">{r.name}</span><span className="reg-office">{r.office} area office</span></div>
-              <div className="reg-row-meta"><span className="reg-id">{r.id}</span><span className={'reg-status s-' + r.status.split(' ')[0].toLowerCase()}>{r.status}</span></div>
-            </div>
-          ))}
-        </div>
-        <div className="register-foot"><span>Instructions rotate as societies register</span><span className="reg-stamp">Teaser view</span></div>
-      </div>
-    </aside>
-  )
-}
-
-/* ----------------------------- landing -------------------------------- */
-/* ---------------------- interactive building blocks ------------------- */
-function useInView(threshold = 0.15) {
-  const ref = useRef(null), [inView, setInView] = useState(false)
-  useEffect(() => {
-    const el = ref.current; if (!el) return
-    const ob = new IntersectionObserver(([e]) => { if (e.isIntersecting) { setInView(true); ob.disconnect() } }, { threshold })
-    ob.observe(el); return () => ob.disconnect()
-  }, [threshold])
-  return [ref, inView]
-}
-function Reveal({ children, className = '', delay = 0, tag: Tag = 'div' }) {
-  const [ref, inView] = useInView()
-  return <Tag ref={ref} className={cx('reveal', inView && 'in', className)} style={delay ? { transitionDelay: delay + 'ms' } : undefined}>{children}</Tag>
-}
-function CountUp({ end, suffix = '', dur = 1500 }) {
-  const [ref, inView] = useInView(0.4), [val, setVal] = useState(0)
-  useEffect(() => {
-    if (!inView) return; let raf; const t0 = performance.now()
-    const tick = (t) => { const p = Math.min(1, (t - t0) / dur); const e = 1 - Math.pow(1 - p, 3); setVal(Math.round(end * e)); if (p < 1) raf = requestAnimationFrame(tick) }
-    raf = requestAnimationFrame(tick); return () => cancelAnimationFrame(raf)
-  }, [inView, end, dur])
-  return <span ref={ref}>{val.toLocaleString('en-NG')}{suffix}</span>
-}
-function Accordion({ items }) {
-  const [open, setOpen] = useState(0)
-  return (
-    <div className="acc">{items.map((it, i) => (
-      <div className={cx('acc-item', open === i && 'open')} key={i}>
-        <button className="acc-head" onClick={() => setOpen(open === i ? -1 : i)} aria-expanded={open === i}><span>{it.q}</span><span className="acc-ic" aria-hidden="true" /></button>
-        <div className="acc-panel"><div className="acc-inner">{it.a}</div></div>
-      </div>))}</div>
-  )
-}
-const LEADERS_PRINCIPAL = [
-  { img: '/leader-gov.jpg', initials: 'BS', name: 'Mr Babajide Sanwo-Olu', role: 'Executive Governor', body: 'Governor of Lagos State, championing the cooperative economy and the \u20A610 billion LASMECO financing initiative for MSME growth and inclusion.' },
-  { img: '/leader-deputy.jpg', initials: 'OH', name: 'Dr Obafemi Hamzat', role: 'Deputy Governor', body: 'Deputy Governor of Lagos State, supporting the administration\u2019s economic empowerment and grassroots development agenda.' },
+const PILLARS = [
+  { t: 'Facility monitoring', d: 'Routine, structured field monitoring of public and private health facilities against HEFAMAA standards, covering infrastructure, staffing, equipment, records, licensing and service alignment, with evidence captured and every finding graded.' },
+  { t: 'Accreditation support', d: 'Practical guidance that helps facilities meet and maintain the standards required for HEFAMAA licensing, translating regulatory requirements into a clear path to compliance.' },
+  { t: 'Quality assurance', d: 'Ongoing assessment that keeps standards high after the first visit, tracking corrective actions, scheduling re-inspections and measuring improvement over time.' },
+  { t: 'Training & consulting', d: 'Educational engagement for facility teams and advisory support for regulators and operators, building the knowledge that prevents non-compliance before it happens.' }
 ]
-const LEADERS_MINISTRY = [
-  { img: '/leader-hc.jpg', initials: 'FA', name: 'Mrs Folashade Ambrose-Medebem', role: 'Honourable Commissioner', body: 'Leads the Ministry of Commerce, Cooperatives, Trade and Investment, driving cooperative development, MSME growth and investment across Lagos State.' },
-  { img: '/leader-ps.jpg', initials: 'BO', name: 'Mr Babatunde Onigbanjo', role: 'Permanent Secretary', body: 'Oversees the administration of the Ministry and the delivery of its cooperative, trade and investment mandate across the area offices.' },
-  { img: '/leader-dir.jpg', initials: 'AA', name: 'Dr Adeyinka Adeyemi', role: 'Director of Cooperatives', body: 'Heads the Directorate of Cooperative Services, responsible for the registration, supervision and audit of cooperative societies State-wide.' },
-]
-const ABOUT_ITEMS = [
-  { q: 'The Ministry (MCCTI)', a: 'The Ministry of Commerce, Cooperatives, Trade and Investment formulates policy that stimulates business growth, cooperative development and investment in Lagos State. Through its Directorate of Cooperative Services it registers, supervises and audits cooperative societies across the State’s area offices.' },
-  { q: 'LASMECO', a: 'The Lagos State Access to Finance for SMEs through Cooperatives programme provides single-digit (9%) loans of up to ₦10 million to cooperative-based MSMEs, without conventional collateral, delivered with the Bank of Industry and Sterling Bank through a layered guarantee structure and sector Accelerators.' },
-  { q: 'SEKAT registry', a: 'SEKAT is the source of the legacy cooperative registry and audit records. In CoopEco, data flows one way from SEKAT into the platform, giving a single consolidated registry that officers and leadership can see.' },
-  { q: 'QooP analytics', a: 'QooP is the source of member and MSME analytics. Its KYC and enterprise data flows one way into CoopEco to power member profiles and explainable, advisory credit scoring for LASMECO.' },
-  { q: 'The platform (CoopEco)', a: 'MCCTI CoopEco unifies the registry, member analytics, LASMECO financing, wallets and governance intelligence into a single Ministry-owned platform, with role-aware workspaces and live oversight for leadership.' },
-]
-function LeaderPhoto({ l }) {
-  const [err, setErr] = useState(false)
-  return (l.img && !err)
-    ? <img src={l.img} alt={l.name} loading="lazy" onError={() => setErr(true)} />
-    : <span className="leader-mono">{l.initials}</span>
-}
-function LeaderCard({ l, i }) {
-  return (
-    <Reveal className="leader-card" delay={i * 80} tag="article">
-      <div className="leader-photo"><LeaderPhoto l={l} /><span className="leader-ring" aria-hidden="true" /></div>
-      <div className="leader-body"><span className="leader-role">{l.role}</span><h3>{l.name}</h3><p>{l.body}</p></div>
-    </Reveal>
-  )
-}
-const PRICING = [
-  { name: 'Cooperative registration', price: '\u20A650,000', unit: 'one-time', who: 'Cooperative societies', body: 'Join the platform and receive a tracking ID and a digital registry record.' },
-  { name: 'Annual returns filing', price: '\u20A615,000', unit: 'per year', who: 'Cooperative societies', body: 'File statutory annual financial returns for CAP15 supervision.' },
-  { name: 'CAP15 regulatory processing', price: '2.5%', unit: 'of surplus', who: 'Cooperative societies', body: 'Regulatory processing tied to declared operating surplus.' },
-  { name: 'LASMECO disbursement portal', price: '2.5%', unit: 'of disbursed funds', who: 'Financing pool', body: 'Portal and processing fee on loans disbursed through the platform.' },
-  { name: 'Directory & verification search', price: '\u20A62,000', unit: 'per lookup', who: 'Businesses & partners', body: 'Verify a cooperative\u2019s status and standing on demand.' },
-  { name: 'Digital wallet & payments', price: '1%', unit: 'per transaction', who: 'Members & societies', body: 'Wallet funding, savings and esusu movements via connected payment rails.' },
-  { name: 'Analytics & data subscriptions', price: 'Custom', unit: 'per agency', who: 'Agencies & partners', body: 'Aggregated, consented analytics on the cooperative economy.' },
-  { name: 'Accelerator & partner onboarding', price: 'Programme fee', unit: 'success-based', who: 'Accelerators & partners', body: 'Onboarding and success-based fees for programme partners.' },
-]
-const LANGS = [['en', 'English'], ['yo', 'Yor\u00f9b\u00e1'], ['ig', 'Igbo'], ['ha', 'Hausa'], ['pcm', 'Naij\u00e1']]
-const I18N = {
-  'nav.home': { en: 'Home', yo: 'Il\u00e9', ig: '\u1ee4l\u1ecd', ha: 'Gida', pcm: 'Home' },
-  'nav.modules': { en: 'Modules' },
-  'nav.pricing': { en: 'Pricing', yo: 'Iye ow\u00f3', ig: '\u1ecc\u1e45\u1ee5 ah\u1ecba', ha: 'Fara\u0161i', pcm: 'Price' },
-  'nav.leadership': { en: 'Leadership', yo: 'A\u1e63\u00e1\u00e1j\u00fa', ig: 'Nd\u00fa', ha: 'Shugabanci', pcm: 'Leadership' },
-  'nav.about': { en: 'About', yo: 'N\u00edpa wa', ig: 'Banyere any\u1ecb', ha: 'Game da mu', pcm: 'About us' },
-  'nav.platform': { en: 'Platform' },
-  'nav.verify': { en: 'Verify a co-op', yo: '\u1e62\u00e0y\u1eb9\u0300w\u00f2 \u1eb9gb\u1eb9\u0301', ig: 'Nyochaa \u00f2t\u00f9', ha: 'Tabbatar da \u0199ungiya', pcm: 'Check co-op' },
-  'cta.enter': { en: 'Enter platform', yo: 'W\u1ecd in\u00fa', ig: 'Banye', ha: 'Shiga', pcm: 'Enter' },
-  'hero.h1': { en: 'One State. One cooperative economy. One system.', yo: '\u00ccp\u00ednl\u1eb9\u0300 kan. \u1eccr\u1ecd\u0300-aj\u00e9 \u00e0j\u1ecd kan. \u00c8t\u00f2 kan.', ig: 'Otu Steeti. Otu ak\u1ee5\u0300 na \u1ee5ba \u00f2t\u00f9. Otu usoro.', ha: 'Jiha \u0257aya. Tattalin arziki \u0257aya. Tsari \u0257aya.', pcm: 'One State. One cooperative economy. One system.' },
-  'hero.cta': { en: 'Which best describes you?', yo: '\u00c8wo l\u00f3 b\u00e1 \u1ecd mu?', ig: 'Kedu nke kacha k\u1ecdwaa g\u1ecb?', ha: 'Wanne ya fi bayyana ka?', pcm: 'Which one be you?' },
-  'hero.ghost': { en: 'See the modules', yo: 'Wo \u00e0w\u1ecdn m\u00f3d\u00f9', ig: 'Lee modul', ha: 'Duba kayan aiki', pcm: 'See di modules' },
-}
-function t(key, lang) { const e = I18N[key]; if (!e) return key; return e[lang] || e.en || key }
-function Landing({ area, setArea, onEnter, lang = 'en', tab = 'home', onTab }) {
-  const current = AREA_LENS.find((a) => a.id === area) || AREA_LENS[0]
-  useEffect(() => { if (typeof window !== 'undefined') window.scrollTo({ top: 0 }) }, [tab])
-  return (
-    <main id="top" className={cx(tab !== 'home' && 'landing-sub')}>
-      {tab === 'home' && (<>
-        <section className="hero">
-          <img className="hero-watermark" src="/seal-watermark.png" alt="" aria-hidden="true" />
-          <div className="hero-copy">
-            <p className="eyebrow"><span className="eb-dot" />Lagos State &middot; A core economic governance reform</p>
-            <h1>{lang === 'en' ? <>One State.<br />One cooperative economy.<br /><span className="underline">One system.</span></> : t('hero.h1', lang)}</h1>
-            <p className="lead">13,000 registered cooperatives and 150,000+ members sit across two separate systems and a credit programme that cannot see them. MCCTI CoopEco consolidates the registry, member analytics, LASMECO financing, wallets and governance intelligence into a single, Ministry-owned platform.</p>
-            <div className="hero-cta"><button className="btn btn-gold" onClick={onEnter}>{t('hero.cta', lang)}</button><button className="btn btn-ghost" onClick={() => onTab && onTab('modules')}>{t('hero.ghost', lang)}</button></div>
-            {lang !== 'en' && <p className="lang-note">Translations are provisional and pending review by the Ministry’s language team. Detailed content remains in English for now.</p>}
-            <p className="hero-foot">Ministry-owned &middot; SPV-operated &middot; built for the cooperative economy</p>
-          </div>
-          <LiveRegister areaId={area} />
-        </section>
-        <section className="band" aria-label="Headline figures">
-          {[[13000, '', 'Registered cooperatives'], [150000, '+', 'MSME members'], [97, '%', 'MSMEs currently informal'], [21, '', 'Cooperative area offices']].map(([n, suf, l]) => (<div className="band-item" key={l}><span className="band-fig"><CountUp end={n} suffix={suf} /></span><span className="band-lab">{l}</span></div>))}
-        </section>
-        <section className="lens" id="lens">
-          <div className="section-head"><p className="eyebrow">Area office lens</p><h2>See the cooperative economy, office by office</h2><p className="section-sub">Switch between a State-wide view and any of the 21 cooperative area offices. The underserved Ikorodu, Epe, Badagry and Ibeju-Lekki corridors are where formalisation has furthest to travel.</p></div>
-          <div className="lens-tabs" role="tablist" aria-label="Area office">{AREA_LENS.map((a) => (<button key={a.id} role="tab" aria-selected={area === a.id} className={cx('lens-tab', area === a.id && 'is-on', a.corridor && 'is-corridor')} onClick={() => setArea(a.id)}>{a.label}</button>))}</div>
-          <div className="lens-readout">
-            <div className="lens-tag">{current.corridor && <span className="corridor-flag">Priority corridor</span>}<span className="lens-tag-text">{current.label} &middot; {current.tag}</span></div>
-            <div className="lens-figs"><div><span className="lf-fig">{current.coops}</span><span className="lf-lab">Cooperatives</span></div><div><span className="lf-fig">{current.members}</span><span className="lf-lab">Members</span></div><div><span className="lf-fig">{current.active}</span><span className="lf-lab">Digitally active</span></div></div>
-          </div>
-        </section>
-        <section className="explore">
-          <div className="section-head"><p className="eyebrow">Explore</p><h2>Take a closer look</h2></div>
-          <div className="explore-grid">{[['modules', 'Modules', 'The six modules the cooperative economy runs on'], ['platform', 'Platform', 'How the platform changes the arithmetic'], ['leadership', 'Leadership', 'The stewards behind MCCTI CoopEco'], ['about', 'About', 'The institutions and programmes behind it']].map(([id, title, desc]) => (<button className="explore-card" key={id} onClick={() => onTab && onTab(id)}><span className="explore-title">{title}</span><span className="explore-desc">{desc}</span><span className="explore-arrow" aria-hidden="true">&rarr;</span></button>))}</div>
-        </section>
-        <section className="quote"><img className="quote-seal" src="/lagos-seal.png" alt="" aria-hidden="true" /><blockquote><p>&ldquo;This engagement marks a fundamental reset of the cooperative digitalisation agenda in Lagos State: one registry, one member record, one governance framework, owned by the Ministry.&rdquo;</p><cite>Directorate of Cooperative Services, MCCTI</cite></blockquote></section>
-      </>)}
-      {tab === 'modules' && (<section className="modules page" id="modules">
-        <div className="section-head"><p className="eyebrow">Six modules, one platform</p><h2>Everything the cooperative economy runs on</h2></div>
-        <div className="mod-grid">{MODULES.map((m) => (<article className="mod-card" key={m.n}><div className="mod-top"><span className="mod-n">{m.n}</span><span className="mod-lens">{m.lens}</span></div><h3>{m.title}</h3><p>{m.body}</p>{m.ai && <span className="mod-ai">Summarised by MCCTI CoopEco</span>}</article>))}</div>
-        <div className="section-head" style={{ marginTop: '48px' }}><p className="eyebrow">Role-aware from the first screen</p><h2>Built for everyone who touches a cooperative</h2></div>
-        <div className="persona-grid">{PERSONAS.map(([tt, d]) => (<div className="persona" key={tt}><span className="persona-t">{tt}</span><span className="persona-d">{d}</span></div>))}</div>
-      </section>)}
-      {tab === 'platform' && (<section className="arc page" id="arc">
-        <div className="section-head"><p className="eyebrow">From fragmentation to one system</p><h2>How the platform changes the arithmetic</h2></div>
-        <div className="arc-steps">
-          <div className="arc-step"><span className="arc-n">01</span><h4>The problem: fragmentation</h4><p>The registry, the analytics layer and LASMECO operate in isolation. Data is duplicated, revenue is uncollected, fraud goes undetected, and Government cannot see its own economy.</p></div>
-          <div className="arc-arrow" aria-hidden="true">&rarr;</div>
-          <div className="arc-step"><span className="arc-n">02</span><h4>The solution: one unified platform</h4><p>Registry, KYC, analytics, wallets, disbursement and dashboards in a single Ministry-owned system. KYC at onboarding, timestamped trails, escrow flows, finance as the reward for compliance.</p></div>
-          <div className="arc-arrow" aria-hidden="true">&rarr;</div>
-          <div className="arc-step"><span className="arc-n">03</span><h4>The return: oversight and inclusion</h4><p>One register, one member record and one governance framework, at zero capital cost to the State, with full ownership retained by the Ministry. Cooperatives gain visibility, members gain access to finance, and Government gains a live view of the cooperative economy.</p></div>
-        </div>
-      </section>)}
-      {tab === 'leadership' && (<section className="leaders page" id="leadership">
-        <div className="section-head"><p className="eyebrow"><span className="eb-dot" />Leadership</p><h2>Stewards of the cooperative economy</h2><p className="section-sub">The State and Ministry leadership provide the policy direction, oversight and governance behind MCCTI CoopEco.</p></div>
-        <p className="leader-group-lab">Executive leadership</p>
-        <div className="leader-grid two">{LEADERS_PRINCIPAL.map((l, i) => <LeaderCard l={l} i={i} key={l.name} />)}</div>
-        <p className="leader-group-lab">Ministry leadership</p>
-        <div className="leader-grid">{LEADERS_MINISTRY.map((l, i) => <LeaderCard l={l} i={i} key={l.name} />)}</div>
-      </section>)}
-      {tab === 'about' && (<section className="about page" id="about">
-        <div className="section-head"><p className="eyebrow"><span className="eb-dot" />About</p><h2>What sits behind the platform</h2><p className="section-sub">The institutions and programmes that MCCTI CoopEco brings together.</p></div>
-        <Accordion items={ABOUT_ITEMS} />
-      </section>)}
-    </main>
-  )
-}
 
-/* ---------------------------- role + auth ----------------------------- */
-function RolePage({ onPick, onBack }) {
-  return (
-    <main className="flow"><div className="flow-inner">
-      <button className="flow-back" onClick={onBack}>&larr; Back</button>
-      <p className="eyebrow"><span className="eb-dot" />Enter the platform</p>
-      <h1 className="flow-title">Which best describes you?</h1>
-      <p className="flow-sub">Choose your role. The platform tailors every screen, and your pricing, to how you use it.</p>
-      <div className="role-page-grid">{ROLES.map((r) => (<button className="role-page-card" key={r.id} onClick={() => onPick(r.id)}><span className="role-ico"><RoleIcon name={r.icon} /></span><span className="role-title">{r.title}</span><span className="role-desc">{r.desc}</span><span className="role-go">Continue &rarr;</span></button>))}</div>
-    </div></main>
-  )
-}
-function AuthPage({ role, onDone, onBack, onPrivacy }) {
-  const [mode, setMode] = useState('create'), [email, setEmail] = useState(''), [password, setPassword] = useState(''), [name, setName] = useState('')
-  const [busy, setBusy] = useState(false), [err, setErr] = useState(''), [pending, setPending] = useState(false), [agree, setAgree] = useState(false)
-  const submit = async () => {
-    setErr(''); 
-    if (mode === 'create' && !agree) { setErr('Please consent to the processing of your data to continue.'); return }
-    setBusy(true)
-    try { if (!email || !password) throw new Error('Enter your email and a password.'); const res = mode === 'create' ? await signUp(email, password, role, name) : await signIn(email, password, role); if (res.pending) { setPending(true); setBusy(false); return } onDone(res) }
-    catch (e) { setErr(e.message || 'Something went wrong.') } setBusy(false)
-  }
-  if (pending) return (<main className="flow"><div className="flow-inner narrow"><p className="eyebrow"><span className="eb-dot" />Confirm your email</p><h1 className="flow-title">Almost there</h1><p className="flow-sub">We have sent a confirmation link to {email}. Open it to activate your account, then sign in.</p><button className="btn btn-gold" onClick={() => { setPending(false); setMode('signin') }}>Back to sign in</button></div></main>)
-  return (
-    <main className="flow"><div className="flow-inner narrow">
-      <button className="flow-back" onClick={onBack}>&larr; Change role</button>
-      <p className="eyebrow"><span className="eb-dot" />{roleTitle(role)}</p>
-      <h1 className="flow-title">{mode === 'create' ? 'Create your account' : 'Sign in'}</h1>
-      <p className="flow-sub">{mode === 'create' ? 'Your role is saved to your account and shapes your dashboard.' : 'Welcome back to MCCTI CoopEco.'}</p>
-      {!hasSupabase && <div className="demo-chip">Demo mode &middot; accounts are stored in this browser. Add Supabase keys to go live.</div>}
-      <div className="auth-form">
-        {mode === 'create' && <label className="field"><span>Full name</span><input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Adaeze Okonkwo" /></label>}
-        <label className="field"><span>Email</span><input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@example.com" /></label>
-        <label className="field"><span>Password</span><input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="At least 6 characters" onKeyDown={(e) => e.key === 'Enter' && submit()} /></label>
-        {err && <p className="auth-err">{err}</p>}
-        {mode === 'signin' && <button type="button" className="auth-forgot" onClick={async () => {
-          if (!email) { setErr('Enter your email above, then tap reset.'); return }
-          if (!hasSupabase) { toast('Password reset works once the platform is connected to Supabase. In demo mode, accounts live only in this browser.'); return }
-          setBusy(true)
-          try { const { error } = await supa.auth.resetPasswordForEmail(email, { redirectTo: (typeof window !== 'undefined' ? window.location.origin : undefined) }); if (error) throw new Error(error.message); toast('If that email has an account, a reset link is on its way.') } catch (e) { setErr(e.message || 'Could not send the reset email.') }
-          setBusy(false)
-        }}>Forgot password?</button>}
-        {mode === 'create' && <label className="consent-check"><input type="checkbox" checked={agree} onChange={(e) => setAgree(e.target.checked)} /><span>I consent to the processing of my data for cooperative administration, as described in the <button type="button" className="link-inline" onClick={onPrivacy}>Privacy notice</button>.</span></label>}
-        <button className="btn btn-gold auth-submit" onClick={submit} disabled={busy}>{busy ? 'Please wait…' : (mode === 'create' ? 'Create account' : 'Sign in')}</button>
-        <p className="auth-toggle">{mode === 'create' ? 'Already have an account?' : 'New to the platform?'}{' '}<button onClick={() => { setErr(''); setMode(mode === 'create' ? 'signin' : 'create') }}>{mode === 'create' ? 'Sign in' : 'Create one'}</button></p>
-      </div>
-    </div></main>
-  )
-}
+const COVERAGE = [ { label: 'Facilities monitored' }, { label: 'Areas & LGAs covered' }, { label: 'Monitoring visits completed' }, { label: 'Corrective actions to closure' } ]
 
-/* --------------------------- Stage 3: forms --------------------------- */
-function RegistrationForm({ ctx, onDone, onCancel }) {
-  const [f, setF] = useState({ name: '', areaOffice: AREA_OFFICES[1], sector: SECTORS[0], custodian: '', trustees: '', bylaws: '', members: '', contributions: '' })
-  const [busy, setBusy] = useState(false), [err, setErr] = useState(''), [done, setDone] = useState(null)
-  const set = (k) => (e) => setF({ ...f, [k]: e.target.value })
-  const submit = async () => {
-    setErr('')
-    if (!f.name.trim() || !f.custodian.trim()) { setErr('Society name and custodian are required.'); return }
+const PRINCIPLES = [
+  { t: 'Professional in approach', d: 'Structured planning, official identification and a courteous, consistent process on every engagement.' },
+  { t: 'Educational in engagement', d: 'We explain findings, their implications and the route to compliance, so partners and facilities improve.' },
+  { t: 'Firm in enforcement', d: 'Evidence-based assessment and clear corrective guidance that protect the people these facilities serve.' }
+]
+
+// Genesys = GeneSys Health Information Systems Limited (RHSC's EMR platform)
+const GENESYS_URL = 'https://www.genesys-health.com/'
+
+const SERVICES = [
+  { t: 'Strategy & advisory', d: 'Growth, market-entry and operational strategy for health providers, investors and government, grounded in evidence and delivered to implementation.', img: '/photos/g-boardroom.jpg' },
+  { t: 'Quality & accreditation', d: 'Readiness assessments and hands-on support that help facilities meet and hold the standards required for licensing and accreditation.', img: '/photos/g-corridor.jpg?v=4' },
+  { t: 'Facility Monitoring & Accreditation', d: 'As a licensed HEFAMAA monitoring operator, we carry out routine, evidence-based monitoring of health facilities across Lagos State.', img: '/photos/team.jpg', to: 'monitoring' },
+  { t: 'Training & capacity building', d: 'Practical training and mentoring for facility teams, regulators and operators, building the knowledge that prevents non-compliance.', img: '/photos/meeting.jpg' },
+  { t: 'Health financing', d: 'Advisory on health financing, insurance design and sustainable funding models for providers, programmes and the public sector.', img: '/photos/g-handshake.jpg?v=4' },
+  { t: 'Digital health & technology', d: 'Digital transformation for healthcare, powered by Genesys, our own Electronic Medical Records (EMR) platform, from patient records to real-time monitoring.', img: '/photos/g-health.jpg', href: GENESYS_URL }
+]
+
+const IMPACT_STATS = [ { v: '25+', l: 'Years of experience' }, { v: '1000+', l: 'Facilities monitored' }, { v: '20+', l: 'Projects delivered' } ]
+const PARTNERS = ['Vatebra Limited', 'Lagos State Ministry of Health', 'HEFAMAA']
+const CONTACT = {
+  email: 'info@realmsconsulting.com', phone: '+234 704 799 9337', whatsapp: '+234 704 799 9337',
+  address: '21 Fatai Arobieke Street, off Admiralty Way, Lekki Phase 1, Lagos',
+  hours: 'Monday to Friday, 9am to 5pm'
+}
+function isPlaceholder(v) { return !v || /^\[/.test(v) }
+const INTEGRITY_NOTICE = 'RHSC monitoring is carried out at no cost to the facility. Our officers must never request or accept money, gifts or favours, and no payment is ever required to pass an inspection or to obtain a report. If anyone asks you for anything, report it to ' + CONTACT.phone + ' or ' + CONTACT.email + '. Reports are treated in confidence.'
+function getSettings() {
+  const d = { cs_email: CONTACT.email, cs_phone: CONTACT.phone, cs_whatsapp: CONTACT.whatsapp }
+  try { const s = JSON.parse(localStorage.getItem('realms_settings') || '{}'); return { ...d, ...s, cs_email: s.cs_email || d.cs_email, cs_phone: s.cs_phone || d.cs_phone, cs_whatsapp: s.cs_whatsapp || d.cs_whatsapp } } catch (e) { return d }
+}
+function saveSettings(s) { try { localStorage.setItem('realms_settings', JSON.stringify(s)) } catch (e) {} }
+const ICONS = {
+  mail: 'M3 5h18v14H3zM3 6l9 7 9-7',
+  phone: 'M4 4h5l2 5-3 2a12 12 0 006 6l2-3 5 2v5a2 2 0 01-2 2A16 16 0 014 6a2 2 0 012-2',
+  chat: 'M4 4h16v11H8l-4 4z',
+  pin: 'M12 22s7-6.2 7-12a7 7 0 10-14 0c0 5.8 7 12 7 12zM12 10a2.5 2.5 0 100-5 2.5 2.5 0 000 5z',
+  clock: 'M12 22a10 10 0 100-20 10 10 0 000 20zM12 7v5l3 2',
+  lock: 'M6 11h12v10H6zM9 11V7a3 3 0 016 0v4'
+}
+function Ico({ name, size = 18 }) { return (<svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={ICONS[name]} /></svg>) }
+
+/* ---------- reusable AI action button ---------- */
+function AIButton({ label, busyLabel, build, onText, className }) {
+  const [busy, setBusy] = useState(false)
+  async function go() {
     setBusy(true)
     try {
-      const rec = await createCoop({ name: f.name.trim(), areaOffice: f.areaOffice, sector: f.sector, custodian: f.custodian.trim(), trustees: f.trustees.split(',').map((s) => s.trim()).filter(Boolean), bylaws: f.bylaws.trim(), members: Number(f.members) || 0, contributions: Number(f.contributions) || 0 }, ctx)
-      setDone(rec)
-    } catch (e) { setErr(e.message || 'Could not file the registration.') } setBusy(false)
+      const b = await build()
+      const r = await askAI(b)
+      if (!r.ok) { toast(r.reason === 'ai_not_configured' ? 'AI is not set up yet. Add ANTHROPIC_API_KEY in Vercel to enable it.' : 'The assistant could not respond. Please try again.', 'warn'); return }
+      onText(r.text || '')
+    } catch (e) { toast('The assistant could not respond.', 'warn') } finally { setBusy(false) }
   }
-  if (done) return (
-    <div className="panel success-panel">
-      <span className="success-mark">&#9670;</span>
-      <h3>Registration filed</h3>
-      <p>{done.name} has been submitted for review at the {done.areaOffice} area office.</p>
-      <div className="tracking"><span>Tracking ID</span><strong>{done.trackingId}</strong></div>
-      <p className="panel-note">A cooperative officer will examine and approve the registration. Every step is recorded on the audit trail.</p>
-      <button className="btn btn-gold" onClick={() => onDone(done)}>Go to my cooperative</button>
-    </div>
-  )
-  return (
-    <div className="panel">
-      <div className="panel-head"><h3>Register a cooperative society</h3><button className="link-back" onClick={onCancel}>Cancel</button></div>
-      <div className="form-grid">
-        <label className="field span2"><span>Society name</span><input value={f.name} onChange={set('name')} placeholder="e.g. Ikeja Traders Multipurpose Coop" /></label>
-        <label className="field"><span>Area office</span><select value={f.areaOffice} onChange={set('areaOffice')}>{AREA_OFFICES.map((a) => <option key={a}>{a}</option>)}</select></label>
-        <label className="field"><span>Cooperative sector</span><select value={f.sector} onChange={set('sector')}>{SECTORS.map((s) => <option key={s}>{s}</option>)}</select></label>
-        <label className="field"><span>Custodian / secretary</span><input value={f.custodian} onChange={set('custodian')} placeholder="Full name" /></label>
-        <label className="field"><span>Trustees (comma separated)</span><input value={f.trustees} onChange={set('trustees')} placeholder="Name one, Name two" /></label>
-        <label className="field"><span>Registered members</span><input type="number" value={f.members} onChange={set('members')} placeholder="0" /></label>
-        <label className="field"><span>Total contributions (₦)</span><input type="number" value={f.contributions} onChange={set('contributions')} placeholder="0" /></label>
-        <label className="field span2"><span>By-laws summary</span><textarea value={f.bylaws} onChange={set('bylaws')} placeholder="Objectives, governance structure, meeting cycle, admission and exit rules." rows={4} /></label>
-      </div>
-      {err && <p className="auth-err">{err}</p>}
-      <div className="panel-actions"><button className="btn btn-gold" onClick={submit} disabled={busy}>{busy ? 'Filing…' : 'File registration'}</button></div>
-      <p className="panel-note">Compliance: registration is filed under the Lagos CAP15 Cooperative Law. Approval requires officer sign-off. This is not legal advice.</p>
-    </div>
-  )
-}
-function ReturnsForm({ coop, ctx, onDone, onCancel }) {
-  const [f, setF] = useState({ income: '', expenses: '', balanceSheet: '', disposalOfSurplus: '', notes: '' })
-  const [busy, setBusy] = useState(false), [err, setErr] = useState('')
-  const set = (k) => (e) => setF({ ...f, [k]: e.target.value })
-  const surplus = (Number(f.income) || 0) - (Number(f.expenses) || 0)
-  const submit = async () => {
-    setErr(''); setBusy(true)
-    try { await fileReturns(coop.trackingId, { income: Number(f.income) || 0, expenses: Number(f.expenses) || 0, surplus, balanceSheet: Number(f.balanceSheet) || 0, disposalOfSurplus: Number(f.disposalOfSurplus) || 0, notes: f.notes.trim() }, ctx); onDone() }
-    catch (e) { setErr(e.message || 'Could not file returns.') } setBusy(false)
-  }
-  return (
-    <div className="panel">
-      <div className="panel-head"><h3>File annual returns</h3><button className="link-back" onClick={onCancel}>Cancel</button></div>
-      <p className="panel-sub">{coop.name} &middot; {coop.trackingId}</p>
-      <div className="form-grid">
-        <label className="field"><span>Total income (₦)</span><input type="number" value={f.income} onChange={set('income')} placeholder="0" /></label>
-        <label className="field"><span>Total expenses (₦)</span><input type="number" value={f.expenses} onChange={set('expenses')} placeholder="0" /></label>
-        <label className="field"><span>Balance sheet total (₦)</span><input type="number" value={f.balanceSheet} onChange={set('balanceSheet')} placeholder="0" /></label>
-        <label className="field"><span>Disposal of surplus (₦)</span><input type="number" value={f.disposalOfSurplus} onChange={set('disposalOfSurplus')} placeholder="0" /></label>
-        <div className="field span2 computed"><span>Surplus / (deficit), computed</span><strong className={surplus < 0 ? 'neg' : ''}>{fmtNaira(surplus)}</strong></div>
-        <label className="field span2"><span>Additional information</span><textarea value={f.notes} onChange={set('notes')} rows={3} placeholder="Trial balance notes, disclosures, any qualifications." /></label>
-      </div>
-      {err && <p className="auth-err">{err}</p>}
-      <div className="panel-actions"><button className="btn btn-gold" onClick={submit} disabled={busy}>{busy ? 'Filing…' : 'Submit returns for audit'}</button></div>
-      <p className="panel-note">Annual returns filing fee: {fmtNaira(COOP_FEES.annualReturns)} per year. CAP15 regulatory processing at 2.5% of surplus applies. This is not legal advice.</p>
-    </div>
-  )
+  return <button type="button" className={(className || 'btn ghost') + ' ai-btn'} onClick={go} disabled={busy}><span className="ai-spark" aria-hidden="true">✦</span>{busy ? (busyLabel || 'Thinking\u2026') : label}</button>
 }
 
-/* --------------------------- Stage 3: detail -------------------------- */
-function AuditTrail({ trackingId, refreshKey }) {
-  const [items, setItems] = useState(null)
-  useEffect(() => { let live = true; listAudit(trackingId).then((r) => live && setItems(r)); return () => { live = false } }, [trackingId, refreshKey])
-  if (!items) return <p className="muted-line">Loading trail…</p>
-  if (!items.length) return <p className="muted-line">No entries yet.</p>
-  return (
-    <ul className="timeline">
-      {items.map((a, i) => (
-        <li key={i} className="tl-item"><span className="tl-dot" /><div className="tl-body"><div className="tl-top"><span className="tl-action">{a.action}</span><span className="tl-time">{fmtDate(a.at)}</span></div><span className="tl-by">{a.by} &middot; {roleTitle(a.role)}</span>{a.note && <span className="tl-note">&ldquo;{a.note}&rdquo;</span>}</div></li>
-      ))}
-    </ul>
-  )
-}
-function CoopLasmecoApproval({ coop, ctx, onChanged }) {
-  const [docs, setDocs] = useState([]), [loans, setLoans] = useState([]), [busy, setBusy] = useState(false), [ov, setOv] = useState({ amount: '', reason: '' }), [showOv, setShowOv] = useState(false)
-  const reload = useCallback(() => { listDocs('coopaudit:' + coop.trackingId).then(setDocs); listLoans().then(setLoans) }, [coop.trackingId])
-  useEffect(() => { reload() }, [reload])
-  const ro = isReviewer(ctx)
-  const canDecide = !ro && ctx.role === 'leadership'
-  const audit = docs.find((d) => d.category === COOP_AUDIT_DOC)
-  const audited = coopAuditApproved(coop, docs)
-  const aged = coopCanIssueGuarantee(coop)
-  const room = coopGuaranteeRoom(coop, loans)
-  const approveAudit = async () => { setBusy(true); await setDocVerified('coopaudit:' + coop.trackingId, audit.id, true, ctx); setBusy(false); reload(); toast('Audit approved. This cooperative\u2019s members can now apply (once other checks pass).', 'success') }
-  const confirmAge = async () => { setBusy(true); const next = await updateCoop(coop.trackingId, { established12: true, establishedConfirmed: true, establishedDate: coop.establishedDate || new Date(Date.now() - 400 * 864e5).toISOString() }, ctx, 'Established 1+ year confirmed by MCCTI'); setBusy(false); onChanged && onChanged(next); toast('Confirmed. Cooperative may issue 25% guarantees.') }
-  const applyOverride = async () => {
-    const n = Number(ov.amount)
-    if (!n || !ov.reason.trim()) { toast('Enter an override amount and a reason.', 'error'); return }
-    setBusy(true); const next = await updateCoop(coop.trackingId, { guaranteeOverride: n }, ctx, 'Guarantee ceiling override: ' + fmtNaira(n) + ' \u2014 ' + ov.reason.trim()); setBusy(false); setShowOv(false); setOv({ amount: '', reason: '' }); onChanged && onChanged(next); toast('Override applied and logged.')
-  }
-  return (
-    <div className="returns-box"><h4>LASMECO lending readiness (MCCTI)</h4>
-      <div className="kyc-check">
-        <div className={cx('kyc-item', coop.status === 'Approved' && 'ok')}><span className="kyc-mark">{coop.status === 'Approved' ? '\u2713' : '\u25cb'}</span><span className="kyc-label">Cooperative admitted / approved</span></div>
-        <div className={cx('kyc-item', audited && 'ok')}><span className="kyc-mark">{audited ? '\u2713' : '\u25cb'}</span><span className="kyc-label">Independent audit {audit ? (audited ? 'approved' : 'uploaded \u2014 awaiting your approval') : 'not uploaded'}</span></div>
-        <div className={cx('kyc-item', aged && 'ok')}><span className="kyc-mark">{aged ? '\u2713' : '\u25cb'}</span><span className="kyc-label">In existence 1+ year {coop.establishedClaim && !coop.establishedConfirmed ? '\u2014 claimed, awaiting your confirmation' : ''}</span></div>
-      </div>
-      {canDecide && <div className="panel-actions">
-        {audit && !audited && <button className="btn btn-gold btn-sm" disabled={busy} onClick={approveAudit}>Approve audit</button>}
-        {!aged && <button className="btn btn-outline btn-sm" disabled={busy} onClick={confirmAge}>Confirm 1+ year in existence</button>}
-      </div>}
-      <div className="statgrid" style={{ marginTop: '12px' }}>
-        <div className="stat"><span className="stat-fig">{fmtNaira(room.pool)}</span><span className="stat-lab">Contributions pool</span></div>
-        <div className="stat"><span className="stat-fig">{fmtNaira(room.used)}</span><span className="stat-lab">Guarantees committed</span></div>
-        <div className="stat"><span className="stat-fig" style={{ color: 'var(--green)' }}>{fmtNaira(room.available)}</span><span className="stat-lab">Available{room.override ? ' (incl. override ' + fmtNaira(room.override) + ')' : ''}</span></div>
-      </div>
-      {canDecide && <div className="panel-actions"><button className="link-inline" onClick={() => setShowOv(!showOv)}>{showOv ? 'Cancel override' : 'Override guarantee ceiling'}</button></div>}
-      {canDecide && showOv && <div className="returns-box"><p className="chart-note">Use sparingly. An override raises this cooperative’s guarantee ceiling and is logged on the audit trail.</p><div className="form-grid"><label className="field"><span>Additional ceiling (₦)</span><input type="number" value={ov.amount} onChange={(e) => setOv({ ...ov, amount: e.target.value })} /></label><label className="field"><span>Reason</span><input value={ov.reason} onChange={(e) => setOv({ ...ov, reason: e.target.value })} placeholder="Basis for the exception" /></label></div><div className="panel-actions"><button className="btn btn-gold btn-sm" disabled={busy} onClick={applyOverride}>Apply override</button></div></div>}
-      <div className="trail-box" style={{ marginTop: '12px' }}><h5 style={{ margin: '0 0 8px', fontSize: '13px' }}>Independent audit document</h5>{ro && !DEMO_DATA ? <p className="panel-note">Hidden in review access (NDPR).</p> : <DocumentsPanel coopId={'coopaudit:' + coop.trackingId} ctx={ctx} canVerify={canDecide} canUpload={false} categories={[COOP_AUDIT_DOC]} onChange={reload} />}</div>
-    </div>
-  )
-}
-function CoopDetail({ coop, ctx, onClose, onChanged }) {
-  const [note, setNote] = useState(''), [busy, setBusy] = useState(false), [c, setC] = useState(coop), [rk, setRk] = useState(0)
-  const canExamine = ctx.role === 'officer' || ctx.role === 'leadership'
-  const canDecide = ctx.role === 'leadership'
-  const canAudit = ctx.role === 'auditor' || ctx.role === 'officer'
-  const act = async (patch, action, needNote) => {
-    if (needNote && !note.trim()) { toast('Add a note explaining the decision.'); return }
-    setBusy(true); const next = await updateCoop(c.trackingId, patch, ctx, action, note.trim()); setC(next); setNote(''); setRk((k) => k + 1); setBusy(false); onChanged && onChanged()
-  }
-  const examineReturns = async () => { setBusy(true); const next = await updateCoop(c.trackingId, { cap15: 'Compliant' }, ctx, 'Returns examined and signed off', note.trim()); setC(next); setNote(''); setRk((k) => k + 1); setBusy(false); onChanged && onChanged() }
-  return (
-    <div className="detail">
-      <div className="detail-head">
-        <div><h3>{c.name}</h3><p className="detail-sub">{c.trackingId}{c.regNo ? ' · Reg. ' + c.regNo : ''} &middot; {c.areaOffice} area office &middot; {c.sector}</p></div>
-        <button className="link-back" onClick={onClose}>&larr; Back to list</button>
-      </div>
-      <div className="detail-chips"><StatusChip status={c.status} /><StatusChip status={c.cap15} kind="cap15" /><SourceBadge source={c.source} /></div>
-      <div className="detail-grid">
-        <div className="field-ro"><span>Custodian</span><strong>{c.custodian || '—'}</strong></div>
-        <div className="field-ro"><span>Trustees</span><strong>{(c.trustees || []).join(', ') || '—'}</strong></div>
-        <div className="field-ro"><span>Members</span><strong>{Number(c.members || 0).toLocaleString('en-NG')}</strong></div>
-        <div className="field-ro"><span>Contributions</span><strong>{fmtNaira(c.contributions)}</strong></div>
-        {c.bank && <div className="field-ro span2"><span>Bank information</span><strong>{c.bank.name}{c.bank.accountName ? ' · ' + c.bank.accountName : ''}{c.bank.accountNumber ? ' · ' + c.bank.accountNumber : ''}</strong></div>}
-        <div className="field-ro span2"><span>By-laws</span><strong className="normal">{c.bylaws || 'Not supplied'}</strong></div>
-      </div>
-
-      {c.returns && (
-        <div className="returns-box">
-          <h4>Annual returns</h4>
-          <div className="returns-grid">
-            <div><span>Income</span><strong>{fmtNaira(c.returns.income)}</strong></div>
-            <div><span>Expenses</span><strong>{fmtNaira(c.returns.expenses)}</strong></div>
-            <div><span>Surplus</span><strong className={c.returns.surplus < 0 ? 'neg' : ''}>{fmtNaira(c.returns.surplus)}</strong></div>
-            <div><span>Balance sheet</span><strong>{fmtNaira(c.returns.balanceSheet)}</strong></div>
-            <div><span>Disposal of surplus</span><strong>{fmtNaira(c.returns.disposalOfSurplus)}</strong></div>
-            {c.returns.trialBalance != null && <div><span>Trial balance</span><strong>{fmtNaira(c.returns.trialBalance)}</strong></div>}
-            {c.returns.personalLedgerBalances != null && <div><span>Personal ledger balances</span><strong>{fmtNaira(c.returns.personalLedgerBalances)}</strong></div>}
-          </div>
-          {c.returns.comparativeAnalysis?.length ? (<div className="comp-analysis"><span className="ca-lab">Comparative analysis of operating surplus</span><div className="ca-rows">{c.returns.comparativeAnalysis.map((r) => (<span key={r.year} className="ca-row">{r.year}: <strong>{fmtNaira(r.surplus)}</strong></span>))}</div></div>) : null}
-          {c.returns.notes && <p className="returns-notes">{c.returns.notes}</p>}
-          <p className="muted-line">Filed by {c.returns.filedBy} on {fmtDate(c.returns.filedAt)}</p>
-          {(c.returns.examinedBy || c.returns.approvedBy) && <p className="muted-line">Examined by {c.returns.examinedBy || '—'} &middot; Approved by {c.returns.approvedBy || '—'}{c.returns.signature ? ' · Signature ' + c.returns.signature : ''}</p>}
-        </div>
-      )}
-
-      {c.source === 'SEKAT' && <div className="ro-note">This society is mirrored from SEKAT (read-only). Registration and audit changes are made in SEKAT and flow into MCCTI on the next sync. Data moves one way, SEKAT into MCCTI.</div>}
-
-      {c.source !== 'SEKAT' && (canExamine || canDecide || canAudit) && c.status !== 'Approved' && (
-        <div className="action-box">
-          <label className="field"><span>Decision note (required to approve, reject or sign off)</span><textarea value={note} onChange={(e) => setNote(e.target.value)} rows={2} placeholder="Findings from the document review, conditions, or the reason for the decision." /></label>
-          <div className="action-row">
-            {canExamine && c.status === 'Filed' && <button className="btn btn-gold btn-sm" disabled={busy} onClick={() => act({ status: 'Under review' }, 'Begin examination')}>Begin examination</button>}
-            {canDecide && (c.status === 'Filed' || c.status === 'Under review') && <button className="btn btn-gold btn-sm" disabled={busy} onClick={() => act({ status: 'Approved' }, 'Application approved by leadership', true)}>Approve &amp; sign off</button>}
-            {canDecide && (c.status === 'Filed' || c.status === 'Under review' || c.status === 'Returned') && <button className="btn btn-outline btn-sm" disabled={busy} onClick={() => act({ status: 'Returned' }, 'Application rejected / returned by leadership', true)}>Reject / return</button>}
-            {canAudit && c.returns && c.cap15 === 'Under audit' && <button className="btn btn-outline btn-sm" disabled={busy} onClick={examineReturns}>Examine returns &amp; sign off</button>}
-          </div>
-          {canExamine && !canDecide && <p className="panel-note">You can examine and record findings. Final approval or rejection of the application is made by MCCTI leadership after reviewing all documents.</p>}
-        </div>
-      )}
-
-      <CoopTierPanel coop={c} ctx={ctx} onChanged={onChanged} />
-      {(ctx.role === 'leadership' || ctx.role === 'officer' || isReviewer(ctx)) && <CoopLasmecoApproval coop={c} ctx={ctx} onChanged={(next) => { if (next) setC(next); setRk((k) => k + 1); onChanged && onChanged() }} />}
-      {(ctx.role === 'leadership' || isReviewer(ctx)) && <div className="returns-box"><h4>Member guarantee requests</h4><CoopGuaranteeApprovals coop={c} ctx={ctx} /></div>}
-      <div className="trail-box"><h4>Documents</h4>{isReviewer(ctx) && !DEMO_DATA ? <p className="panel-note">Documents are hidden in review access because this database holds real data (NDPR).</p> : <DocumentsPanel coopId={c.trackingId} ctx={ctx} canVerify={canExamine} canUpload={canExamine} />}</div>
-      <div className="trail-box"><h4>Audit trail</h4><AuditTrail trackingId={c.trackingId} refreshKey={rk} /></div>
-    </div>
-  )
-}
-
-/* ------------------------ Stage 3: workspaces ------------------------- */
-function StatCards({ coops }) {
-  const total = coops.length
-  const by = (s) => coops.filter((c) => c.status === s).length
-  const cards = [['Total societies', total], ['Awaiting review', by('Filed')], ['Under review', by('Under review')], ['Approved', by('Approved')]]
-  return <div className="statgrid">{cards.map(([l, v]) => (<div className="stat" key={l}><span className="stat-fig">{v}</span><span className="stat-lab">{l}</span></div>))}</div>
-}
-function useRegistry() {
-  const [coops, setCoops] = useState(null)
-  const reload = useCallback(() => listCoops().then(setCoops), [])
-  useEffect(() => { reload() }, [reload])
-  return [coops, reload]
-}
-function CoopTable({ coops, onOpen }) {
-  const [q, setQ] = useState(''), [st, setSt] = useState('All'), [sel, setSel] = useState(() => new Set())
-  if (!coops.length) return <p className="muted-line">No societies to show.</p>
-  const statuses = ['All', ...Array.from(new Set(coops.map((c) => c.status).filter(Boolean)))]
-  const filtered = coops.filter((c) => (st === 'All' || c.status === st) && (!q || [c.name, c.trackingId, c.areaOffice, c.sector].join(' ').toLowerCase().includes(q.toLowerCase())))
-  const toggle = (id) => { const n = new Set(sel); n.has(id) ? n.delete(id) : n.add(id); setSel(n) }
-  const allOn = filtered.length > 0 && filtered.every((c) => sel.has(c.trackingId))
-  const toggleAll = () => { const n = new Set(sel); if (allOn) filtered.forEach((c) => n.delete(c.trackingId)); else filtered.forEach((c) => n.add(c.trackingId)); setSel(n) }
-  const chosen = filtered.filter((c) => sel.has(c.trackingId))
-  const exportCsv = () => downloadCSV('cooperatives.csv', chosen.map((c) => ({ society: c.name, trackingId: c.trackingId, areaOffice: c.areaOffice, sector: c.sector, status: c.status, cap15: c.cap15, members: c.members || 0, contributions: c.contributions || 0 })))
-  return (
-    <div>
-      <div className="table-filter">
-        <input className="table-search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search society, ID, area office or sector…" aria-label="Search cooperatives" />
-        <select value={st} onChange={(e) => setSt(e.target.value)} aria-label="Filter by status">{statuses.map((s) => <option key={s}>{s}</option>)}</select>
-        <span className="table-count">{filtered.length} of {coops.length}</span>
-      </div>
-      {sel.size > 0 && <div className="bulk-bar"><span>{sel.size} selected</span><button className="btn btn-outline btn-sm" onClick={exportCsv}>Export CSV</button><button className="link-inline" onClick={() => setSel(new Set())}>Clear</button></div>}
-      {filtered.length ? <div className="rtable-wrap"><table className="rtable">
-        <thead><tr><th className="th-check"><input type="checkbox" checked={allOn} onChange={toggleAll} aria-label="Select all" /></th><th>Society</th><th>Tracking ID</th><th>Area office</th><th>Sector</th><th>Status</th><th>CAP15</th><th></th></tr></thead>
-        <tbody>{filtered.map((c) => (<tr key={c.trackingId} className={cx(sel.has(c.trackingId) && 'row-sel')}><td className="th-check"><input type="checkbox" checked={sel.has(c.trackingId)} onChange={() => toggle(c.trackingId)} aria-label={'Select ' + c.name} /></td><td className="td-name">{c.name}<SourceBadge source={c.source} /></td><td className="mono">{c.trackingId}</td><td>{c.areaOffice}</td><td>{c.sector}</td><td><StatusChip status={c.status} /></td><td><StatusChip status={c.cap15} kind="cap15" /></td><td><button className="btn-open" onClick={() => onOpen(c)}>Open</button></td></tr>))}</tbody>
-      </table></div> : <p className="muted-line">No societies match your search.</p>}
-    </div>
-  )
-}
-function SekatPanel({ ctx, onSynced }) {
-  const [info, setInfo] = useState(null), [busy, setBusy] = useState(false)
-  const load = () => getIntegration('sekat').then(setInfo)
-  useEffect(() => { load() }, [])
-  const run = async () => { setBusy(true); await syncFromSekat(ctx, false); await load(); setBusy(false); onSynced && onSynced() }
-  return (
-    <div className="sekat">
-      <div className="sekat-flow">
-        <div className="node src">SEKAT<span>Registry &amp; audit source</span></div>
-        <div className="flow-arrow">&rarr;<span>one-way</span></div>
-        <div className="node dst">MCCTI CoopEco<span>Unified registry</span></div>
-      </div>
-      <div className="sekat-status">
-        <div className="status-row"><span>Connection</span><span className={cx('pill', info?.live ? 'ok' : 'muted')}>{info?.live ? 'Live API' : 'Sample feed' + (hasSupabase ? '' : ' (demo)')}</span></div>
-        <div className="status-row"><span>Last sync</span><span className="mono">{info?.lastSync ? fmtDate(info.lastSync) : 'Never'}</span></div>
-        <div className="status-row"><span>Societies ingested</span><span className="mono">{info?.count ?? 0}</span></div>
-      </div>
-      <button className="btn btn-gold btn-sm" onClick={run} disabled={busy}>{busy ? 'Syncing…' : 'Run SEKAT sync'}</button>
-      <p className="panel-note">Data flows one way, from SEKAT into MCCTI. Synced societies are read-only here. When SEKAT_API_URL and SEKAT_API_KEY are set, the platform pulls the live SEKAT registry automatically; until then it ingests a representative sample that mirrors the SEKAT dataset (registration, custodian, trustees, bank and full audit inputs with examination, approval and signature). Compliance: data flow, retention and NDPR handling to be governed by the SEKAT integration agreement. This is not legal advice.</p>
-    </div>
-  )
-}
-function OfficerWorkspace({ ctx, section }) {
-  const [coops, reload] = useRegistry()
-  const [sel, setSel] = useState(null), [loanSel, setLoanSel] = useState(null)
-  const [loans, reloadLoans] = useLoans()
-  if (!coops) return <p className="muted-line">Loading registry…</p>
-  if (sel) return <CoopDetail coop={sel} ctx={ctx} onClose={() => { setSel(null); reload() }} onChanged={reload} />
-  if (loanSel) return <LoanDetail loan={loanSel} ctx={ctx} onClose={() => { setLoanSel(null); reloadLoans() }} onChanged={reloadLoans} />
-  const queue = coops.filter((c) => ['Filed', 'Under review', 'Returned'].includes(c.status))
-  const byOffice = AREA_OFFICES.map((o) => [o, coops.filter((c) => c.areaOffice === o).length]).filter(([, n]) => n)
-  const lasmecoQueue = (loans || []).filter((l) => l.status === 'Shortlisted')
-  return (
-    <div className="ws">
-      {section === 'overview' && <OfficerOverview coops={coops} />}
-      {section === 'queue' && <CoopTable coops={queue} onOpen={setSel} />}
-      {section === 'all' && <CoopTable coops={coops} onOpen={setSel} />}
-      {section === 'members' && <MembersAnalytics />}
-      {section === 'lasmeco' && (!loans ? <p className="muted-line">Loading…</p> : <><p className="muted-line">Applications awaiting cooperative validation and 25% guarantee. Open one to validate.</p><LoanTable loans={lasmecoQueue.length ? lasmecoQueue : loans} onOpen={setLoanSel} /></>)}
-      {section === 'offices' && <div className="rtable-wrap"><table className="rtable"><thead><tr><th>Area office</th><th>Societies</th></tr></thead><tbody>{byOffice.map(([o, n]) => (<tr key={o}><td>{o}</td><td className="mono">{n}</td></tr>))}</tbody></table></div>}
-      {section === 'audit' && <OfficerAuditLog />}
-      {section === 'reports' && <ReportsPanel role="officer" />}
-      {section === 'risk' && <RiskPanel />}
-      {section === 'integrations' && <IntegrationsPanel ctx={ctx} onSynced={reload} />}
-    </div>
-  )
-}
-function OfficerAuditLog() {
-  const [items, setItems] = useState(null)
-  useEffect(() => { listAudit().then((r) => setItems(r.slice(0, 40))) }, [])
-  if (!items) return <p className="muted-line">Loading…</p>
-  if (!items.length) return <p className="muted-line">No activity yet.</p>
-  return <div className="rtable-wrap"><table className="rtable"><thead><tr><th>When</th><th>Action</th><th>By</th><th>Society</th></tr></thead><tbody>{items.map((a, i) => (<tr key={i}><td className="mono">{fmtDate(a.at)}</td><td>{a.action}</td><td>{a.by}</td><td className="mono">{a.trackingId}</td></tr>))}</tbody></table></div>
-}
-function AuditorWorkspace({ ctx, section }) {
-  const [coops, reload] = useRegistry()
-  const [sel, setSel] = useState(null)
-  if (!coops) return <p className="muted-line">Loading returns…</p>
-  if (sel) return <CoopDetail coop={sel} ctx={ctx} onClose={() => { setSel(null); reload() }} onChanged={reload} />
-  const withReturns = coops.filter((c) => c.returns)
-  return (
-    <div className="ws">
-      {section === 'overview' && <AuditorOverview coops={coops} />}
-      {section === 'returns' && (withReturns.length ? <CoopTable coops={withReturns} onOpen={setSel} /> : <p className="muted-line">No returns have been filed yet.</p>)}
-      {section === 'all' && <CoopTable coops={coops} onOpen={setSel} />}
-    </div>
-  )
-}
-/* ---------------------------- charts + analytics ---------------------- */
-const CHART_C = { green: '#3E9E6B', gold: '#C6A15B', teal: '#4FA3A0', slate: '#7C858C', amber: '#D0975A', plum: '#9A7AA0', red: '#C0533A' }
-function Donut({ data, size = 150, thickness = 20, centerTop, centerBottom }) {
-  const total = data.reduce((a, d) => a + d.value, 0) || 1
-  const r = (size - thickness) / 2, circ = 2 * Math.PI * r
-  let off = 0
-  return (
-    <div className="donut-wrap">
-      <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} className="donut">
-        <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="var(--line-soft)" strokeWidth={thickness} />
-        <g transform={`rotate(-90 ${size / 2} ${size / 2})`}>
-          {data.map((d, i) => { const dash = (d.value / total) * circ; const el = <circle key={i} cx={size / 2} cy={size / 2} r={r} fill="none" stroke={d.color} strokeWidth={thickness} strokeDasharray={`${dash} ${circ - dash}`} strokeDashoffset={-off} strokeLinecap="butt" />; off += dash; return el })}
-        </g>
-        <text x="50%" y="46%" textAnchor="middle" className="donut-c1">{centerTop}</text>
-        <text x="50%" y="63%" textAnchor="middle" className="donut-c2">{centerBottom}</text>
-      </svg>
-      <div className="legend">{data.map((d, i) => (<div key={i} className="lg"><span className="lg-dot" style={{ background: d.color }} />{d.label}<b>{d.value}</b></div>))}</div>
-    </div>
-  )
-}
-function Bars({ data, unit }) {
-  const max = Math.max(1, ...data.map((d) => d.value))
-  if (!data.length) return <p className="muted-line">No data yet.</p>
-  return <div className="bars">{data.map((d, i) => (<div key={i} className="bar-row"><span className="bar-lab" title={d.label}>{d.label}</span><span className="bar-track"><span className="bar-fill" style={{ width: Math.max(2, d.value / max * 100) + '%', background: d.color || 'var(--gold)' }} /></span><span className="bar-val">{unit === 'naira' ? fmtNaira(d.value) : d.value}</span></div>))}</div>
-}
-function MiniArea({ points, color = CHART_C.green }) {
-  const w = 300, h = 80, max = Math.max(1, ...points), n = points.length
-  if (!n) return null
-  const step = n > 1 ? w / (n - 1) : w
-  const xy = points.map((v, i) => [i * step, h - (v / max) * (h - 12) - 6])
-  const line = 'M' + xy.map((p) => p[0].toFixed(1) + ' ' + p[1].toFixed(1)).join(' L ')
-  const area = line + ` L ${w} ${h} L 0 ${h} Z`
-  return <svg viewBox={`0 0 ${w} ${h}`} className="miniarea" preserveAspectRatio="none"><path d={area} fill={color} opacity=".14" /><path d={line} fill="none" stroke={color} strokeWidth="2.5" vectorEffect="non-scaling-stroke" /></svg>
-}
-function OfficerOverview({ coops }) {
-  const status = [['Approved', CHART_C.green], ['Under review', CHART_C.gold], ['Filed', CHART_C.slate], ['Returned', CHART_C.red]].map(([s, c]) => ({ label: s, value: coops.filter((x) => x.status === s).length, color: c })).filter((d) => d.value)
-  const cap = [['Compliant', CHART_C.green], ['Under audit', CHART_C.slate], ['Returns due', CHART_C.gold]].map(([s, c]) => ({ label: s, value: coops.filter((x) => x.cap15 === s).length, color: c })).filter((d) => d.value)
-  const offices = AREA_OFFICES.map((o) => ({ label: o, value: coops.filter((c) => c.areaOffice === o).length, color: CHART_C.green })).filter((d) => d.value).sort((a, b) => b.value - a.value).slice(0, 6)
-  return (<div className="analytics"><StatCards coops={coops} /><div className="chart-grid">
-    <section className="chart-card"><h4>Registration status</h4><Donut data={status} centerTop={String(coops.length)} centerBottom="societies" /></section>
-    <section className="chart-card"><h4>CAP15 compliance</h4><Donut data={cap} centerTop={String(coops.filter((c) => c.cap15 === 'Compliant').length)} centerBottom="compliant" /></section>
-    <section className="chart-card"><h4>Registry source</h4><Donut data={[{ label: 'SEKAT', value: coops.filter((c) => c.source === 'SEKAT').length, color: CHART_C.teal }, { label: 'MCCTI', value: coops.filter((c) => c.source !== 'SEKAT').length, color: CHART_C.gold }].filter((d) => d.value)} centerTop={String(coops.length)} centerBottom="total" /></section>
-    <section className="chart-card wide"><h4>Societies by area office</h4><Bars data={offices} /></section>
-  </div></div>)
-}
-function AuditorOverview({ coops }) {
-  const cap = [['Compliant', CHART_C.green], ['Under audit', CHART_C.gold], ['Returns due', CHART_C.slate]].map(([s, c]) => ({ label: s, value: coops.filter((x) => x.cap15 === s).length, color: c })).filter((d) => d.value)
-  const withReturns = coops.filter((c) => c.returns).length
-  return (<div className="analytics">
-    <div className="statgrid"><div className="stat"><span className="stat-fig">{withReturns}</span><span className="stat-lab">Returns filed</span></div><div className="stat"><span className="stat-fig">{coops.filter((c) => c.cap15 === 'Under audit').length}</span><span className="stat-lab">Awaiting examination</span></div><div className="stat"><span className="stat-fig">{coops.filter((c) => c.cap15 === 'Compliant').length}</span><span className="stat-lab">Signed off</span></div><div className="stat"><span className="stat-fig">{coops.length}</span><span className="stat-lab">Societies</span></div></div>
-    <div className="chart-grid"><section className="chart-card"><h4>CAP15 compliance</h4><Donut data={cap} centerTop={String(coops.filter((c) => c.cap15 === 'Compliant').length)} centerBottom="compliant" /></section></div>
-  </div>)
-}
-function LoanStageOverview({ loans, cards }) {
-  const stages = ['Applied', 'In training', 'Shortlisted', 'Coop validated', 'Bank assessment', 'BOI approved', 'Disbursed'].map((s) => ({ label: s, value: loans.filter((l) => l.status === s).length, color: CHART_C.gold }))
-  const sectors = Array.from(new Set(loans.map((l) => l.sector))).map((s) => ({ label: s, value: loans.filter((l) => l.sector === s).length, color: CHART_C.teal }))
-  const sched = loans.filter((l) => (l.schedule || []).length)
-  const outstanding = sched.reduce((a, l) => a + loanRepayState(l).outstanding, 0)
-  const arrears = sched.reduce((a, l) => a + loanRepayState(l).arrears, 0)
-  const repaid = sched.reduce((a, l) => a + loanRepayState(l).paid, 0)
-  return (<div className="analytics">
-    <div className="statgrid">{cards(loans).map(([lab, val]) => (<div className="stat" key={lab}><span className="stat-fig">{val}</span><span className="stat-lab">{lab}</span></div>))}</div>
-    {sched.length ? <div className="statgrid"><div className="stat"><span className="stat-fig">{fmtNaira(outstanding)}</span><span className="stat-lab">Portfolio outstanding</span></div><div className="stat"><span className="stat-fig">{fmtNaira(repaid)}</span><span className="stat-lab">Repaid to date</span></div><div className="stat"><span className="stat-fig" style={arrears ? { color: 'var(--err)' } : undefined}>{fmtNaira(arrears)}</span><span className="stat-lab">In arrears</span></div><div className="stat"><span className="stat-fig">{sched.length}</span><span className="stat-lab">On repayment</span></div></div> : null}
-    <div className="chart-grid"><section className="chart-card wide"><h4>Pipeline by stage</h4><Bars data={stages} /></section><section className="chart-card"><h4>By sector</h4><Bars data={sectors} /></section></div>
-  </div>)
-}
-function SocietyOverview({ mine }) {
-  const [loans, setLoans] = useState([]), [members, setMembers] = useState([]), [series, setSeries] = useState(null)
-  useEffect(() => { listLoans().then((ls) => setLoans(ls.filter((l) => l.coop === mine.name))); listMembers().then((ms) => setMembers(ms.filter((m) => m.coop === mine.name))) }, [mine.name])
-  useEffect(() => { (async () => { await recordCoopSnapshot(mine); setSeries(await coopContributionSeries(mine.trackingId, 6)) })() }, [mine.trackingId])
-  const r = mine.returns
-  const active = loans.filter((l) => !['Declined', 'Completed', 'Default'].includes(l.status)).length
-  const nl = coopNominationLimit(mine, active)
-  const liab = coopGuaranteeLiability(mine.name, loans)
-  const adm = coopAdmission(mine)
-  const finance = r ? [{ label: 'Income', value: r.income || 0, color: CHART_C.green }, { label: 'Expenses', value: r.expenses || 0, color: CHART_C.gold }, { label: 'Surplus', value: Math.max(0, r.surplus || 0), color: CHART_C.teal }] : []
-  const statusColors = { Repaying: CHART_C.green, Disbursed: CHART_C.teal, Completed: CHART_C.slate, Default: CHART_C.red, 'Bank assessment': CHART_C.gold, 'Coop validated': CHART_C.amber, 'BOI approved': CHART_C.plum, Applied: CHART_C.gold, 'In training': CHART_C.gold, Shortlisted: CHART_C.teal }
-  const loanStatus = Object.entries(loans.reduce((a, l) => { a[l.status] = (a[l.status] || 0) + 1; return a }, {})).map(([k, v]) => ({ label: k, value: v, color: statusColors[k] || CHART_C.slate }))
-  const capUse = [{ label: 'Used', value: nl.used, color: CHART_C.green }, { label: 'Remaining', value: nl.remaining, color: CHART_C.slate }]
-  const base = mine.contributions || 0
-  const hasReal = series && series.length >= 2
-  const trend = hasReal ? series.map((s) => s.contributions) : [0.68, 0.76, 0.83, 0.89, 0.95, 1].map((x) => Math.round(base * x))
-  const genders = members.reduce((a, m) => { const g = (m.gender || 'Unstated'); a[g] = (a[g] || 0) + 1; return a }, {})
-  const genderData = [['Female', CHART_C.plum], ['Male', CHART_C.teal], ['Unstated', CHART_C.slate]].map(([g, c]) => ({ label: g, value: genders[g] || 0, color: c })).filter((d) => d.value)
-  return (<div className="analytics">
-    <div className="coop-hero">
-      <svg viewBox="0 0 120 80" className="coop-hero-art" aria-hidden="true">
-        <rect x="0" y="0" width="120" height="80" rx="10" fill="var(--green-panel)" />
-        {[16, 40, 64, 88].map((x, i) => <rect key={i} x={x} y={54 - (i % 2) * 8} width="16" height={26 + (i % 2) * 8} rx="3" fill={i % 2 ? CHART_C.teal : CHART_C.green} opacity=".85" />)}
-        <path d="M8 60 Q40 40 72 50 T112 34" fill="none" stroke={CHART_C.gold} strokeWidth="2.5" />
-        {[[8, 60], [40, 45], [72, 50], [112, 34]].map(([cx, cy], i) => <circle key={i} cx={cx} cy={cy} r="3" fill={CHART_C.gold} />)}
-      </svg>
-      <div className="coop-hero-text"><h3>{mine.name}</h3><p>{mine.areaOffice} area office &middot; {mine.sector} &middot; {adm.admitted ? 'Admitted to LASMECO' : 'Admission pending'}</p></div>
-    </div>
-    <div className="kpi-row">
-      <div className="kpi"><span className="kpi-fig">{Number(mine.members || 0).toLocaleString('en-NG')}</span><span className="kpi-lab">Members</span></div>
-      <div className="kpi"><span className="kpi-fig">{fmtNaira(mine.contributions)}</span><span className="kpi-lab">Contributions</span></div>
-      <div className="kpi"><span className="kpi-fig">{nl.tier}</span><span className="kpi-lab">LASMECO tier</span></div>
-      <div className="kpi"><span className="kpi-fig">{nl.remaining}</span><span className="kpi-lab">Nominations left</span></div>
-    </div>
-    <div className="chart-grid">
-      <section className="chart-card"><h4>Nomination capacity</h4><Donut data={capUse} centerTop={String(nl.limit)} centerBottom="limit" /></section>
-      <section className="chart-card"><h4>Loan portfolio</h4>{loanStatus.length ? <Donut data={loanStatus} centerTop={String(loans.length)} centerBottom={loans.length === 1 ? 'loan' : 'loans'} /> : <p className="muted-line">No member loans yet.</p>}</section>
-      <section className="chart-card wide"><h4>Contributions trend</h4><MiniArea points={trend} /><p className="chart-note">{hasReal ? 'Recorded monthly, ' + monthLabel(series[0].month) + ' \u2013 ' + monthLabel(series[series.length - 1].month) + ' (current ' + fmtNaira(base) + ').' : 'Illustrative until monthly figures accumulate; current ' + fmtNaira(base) + ' on record.'}</p></section>
-      {genderData.length ? <section className="chart-card"><h4>Membership mix</h4><Donut data={genderData} centerTop={String(members.length)} centerBottom="profiled" /></section> : null}
-      <section className="chart-card"><h4>Guarantee exposure</h4><Bars data={[{ label: 'Contingent (25%)', value: liab.contingent, color: CHART_C.gold }, { label: 'Crystallised', value: liab.crystallised, color: CHART_C.red }]} unit="naira" /></section>
-      {finance.length ? <section className="chart-card wide"><h4>Latest annual returns</h4><Bars data={finance} unit="naira" /></section> : <section className="chart-card wide"><h4>Annual returns</h4><p className="muted-line">File your annual returns to see income, expenses and surplus here.</p></section>}
-    </div>
-  </div>)
-}
-function MemberOverview({ mine, loans }) {
-  const s = scoreMember(mine)
-  return (<div className="analytics">
-    <div className="kpi-row">
-      <div className="kpi"><span className="kpi-fig">{s.score}</span><span className="kpi-lab">Credit score</span></div>
-      <div className="kpi"><span className="kpi-fig">{s.band}</span><span className="kpi-lab">Risk band</span></div>
-      <div className="kpi"><span className="kpi-fig">{fmtNaira(s.threshold)}</span><span className="kpi-lab">LASMECO indication</span></div>
-      <div className="kpi"><span className="kpi-fig">{loans.length}</span><span className="kpi-lab">Applications</span></div>
-    </div>
-    <div className="chart-grid"><section className="chart-card wide"><h4>Credit score</h4><CreditScoreCard m={mine} /></section></div>
-  </div>)
-}
-function AnalyticsDashboard() {
-  const [coops, setCoops] = useState(null), [members, setMembers] = useState([]), [loans, setLoans] = useState([]), [wallets, setWallets] = useState([]), [tickets, setTickets] = useState([])
-  useEffect(() => { listCoops().then(setCoops); listMembers().then(setMembers); listLoans().then(setLoans); kvList('wallet:').then(setWallets); listTickets().then(setTickets) }, [])
-  if (!coops) return <p className="muted-line">Loading analytics…</p>
-  const scored = members.map((m) => scoreMember(m))
-  const disbursed = loans.filter((l) => ['Disbursed', 'Repaying', 'Completed'].includes(l.status))
-  const disbursedValue = disbursed.reduce((a, l) => a + (l.amountApproved || 0), 0)
-  const funding = wallets.reduce((a, w) => a + (w.txns || []).filter((t) => t.type === 'topup').reduce((s, t) => s + (t.amount || 0), 0), 0)
-  const regFees = coops.filter((c) => c.feeStatus === 'Paid').length * COOP_FEES.registration
-  const returnsFees = coops.filter((c) => c.returns).length * COOP_FEES.annualReturns
-  const portalFees = Math.round(disbursedValue * 0.025)
-  const accrued = regFees + returnsFees + portalFees + Math.round(funding * 0.01)
-  const avgScore = scored.length ? Math.round(scored.reduce((a, s) => a + s.score, 0) / scored.length) : 0
-  const openTickets = tickets.filter((t) => t.status !== 'Resolved').length
-  const withSched = loans.filter((l) => (l.schedule || []).length)
-  const portfolioOutstanding = withSched.reduce((a, l) => a + loanRepayState(l).outstanding, 0)
-  const portfolioArrears = withSched.reduce((a, l) => a + loanRepayState(l).arrears, 0)
-
-  const statusData = [['Approved', CHART_C.green], ['Under review', CHART_C.gold], ['Filed', CHART_C.slate], ['Returned', CHART_C.red]].map(([s, c]) => ({ label: s, value: coops.filter((x) => x.status === s).length, color: c })).filter((d) => d.value)
-  const cap15 = [['Compliant', CHART_C.green], ['Under audit', CHART_C.slate], ['Returns due', CHART_C.gold]].map(([s, c]) => ({ label: s, value: coops.filter((x) => x.cap15 === s).length, color: c })).filter((d) => d.value)
-  const sourceData = [{ label: 'SEKAT', value: coops.filter((c) => c.source === 'SEKAT').length, color: CHART_C.teal }, { label: 'MCCTI', value: coops.filter((c) => c.source !== 'SEKAT').length, color: CHART_C.gold }].filter((d) => d.value)
-  const offices = AREA_OFFICES.map((o) => ({ label: o, value: coops.filter((c) => c.areaOffice === o).length, color: CHART_C.green })).filter((d) => d.value).sort((a, b) => b.value - a.value).slice(0, 6)
-  const bands = [['Prime', CHART_C.green], ['Strong', '#5FB07E'], ['Fair', CHART_C.gold], ['Building', CHART_C.amber], ['Thin file', CHART_C.slate]].map(([b, c]) => ({ label: b, value: scored.filter((s) => s.band === b).length, color: c })).filter((d) => d.value)
-  const kyc = [['Verified', CHART_C.green], ['Partial', CHART_C.gold], ['Unverified', CHART_C.slate]].map(([s, c]) => ({ label: s, value: members.filter((m) => (m.kyc?.status || 'Unverified') === s).length, color: c })).filter((d) => d.value)
-  const pipeline = ['Applied', 'In training', 'Shortlisted', 'Coop validated', 'Bank assessment', 'BOI approved', 'Disbursed'].map((s) => ({ label: s, value: loans.filter((l) => l.status === s).length, color: CHART_C.gold }))
-  const sectors = Array.from(new Set(loans.map((l) => l.sector))).map((s) => ({ label: s, value: loans.filter((l) => l.sector === s).length, color: CHART_C.teal }))
-  const split = SPV_SPLIT.map(([n, p], i) => ({ label: n, value: Math.round(accrued * p / 100), color: [CHART_C.green, CHART_C.gold, CHART_C.teal, CHART_C.plum, CHART_C.amber][i] }))
-  const ticketData = [['Open', CHART_C.gold], ['In progress', CHART_C.slate], ['Escalated', CHART_C.red], ['Resolved', CHART_C.green]].map(([s, c]) => ({ label: s, value: tickets.filter((t) => t.status === s).length, color: c })).filter((d) => d.value)
-
-  const now = new Date(), months = []
-  for (let i = 5; i >= 0; i--) { const d = new Date(now.getFullYear(), now.getMonth() - i, 1); months.push({ key: d.getFullYear() + '-' + d.getMonth(), label: d.toLocaleString('en-GB', { month: 'short' }) }) }
-  const regTrend = months.map((m) => coops.filter((c) => { const d = new Date(c.createdAt); return d.getFullYear() + '-' + d.getMonth() === m.key }).length)
-  const trendTotal = regTrend.reduce((a, b) => a + b, 0)
-
-  return (
-    <div className="analytics">
-      <div className="kpi-row">
-        <div className="kpi"><span className="kpi-fig">{coops.length}</span><span className="kpi-lab">Cooperative societies</span></div>
-        <div className="kpi"><span className="kpi-fig">{members.length}</span><span className="kpi-lab">Members profiled</span></div>
-        <div className="kpi"><span className="kpi-fig">{fmtNaira(disbursedValue)}</span><span className="kpi-lab">LASMECO disbursed</span></div>
-        <div className="kpi"><span className="kpi-fig">{fmtNaira(accrued)}</span><span className="kpi-lab">Escrow accrued</span></div>
-        <div className="kpi"><span className="kpi-fig">{fmtNaira(funding)}</span><span className="kpi-lab">Payments processed</span></div>
-        <div className="kpi"><span className="kpi-fig">{fmtNaira(portfolioOutstanding)}</span><span className="kpi-lab">Loan portfolio outstanding</span></div>
-        <div className="kpi"><span className="kpi-fig" style={portfolioArrears ? { color: 'var(--err)' } : undefined}>{fmtNaira(portfolioArrears)}</span><span className="kpi-lab">In arrears</span></div>
-        <div className="kpi"><span className="kpi-fig">{openTickets}</span><span className="kpi-lab">Open support tickets</span></div>
-      </div>
-      <div className="chart-grid">
-        <section className="chart-card"><h4>Registration status</h4><Donut data={statusData} centerTop={String(coops.length)} centerBottom="societies" /></section>
-        <section className="chart-card"><h4>CAP15 compliance</h4><Donut data={cap15} centerTop={String(coops.filter((c) => c.cap15 === 'Compliant').length)} centerBottom="compliant" /></section>
-        <section className="chart-card"><h4>Registry source</h4><Donut data={sourceData} centerTop={String(coops.length)} centerBottom="total" /></section>
-        <section className="chart-card"><h4>Societies by area office</h4><Bars data={offices} /></section>
-        <section className="chart-card"><h4>Member credit bands</h4><Bars data={bands} /></section>
-        <section className="chart-card"><h4>KYC status &middot; avg score {avgScore}</h4><Donut data={kyc} centerTop={String(avgScore)} centerBottom="avg score" /></section>
-        <section className="chart-card wide"><h4>LASMECO pipeline</h4><Bars data={pipeline} /></section>
-        <section className="chart-card"><h4>Applications by sector</h4><Bars data={sectors} /></section>
-        <section className="chart-card"><h4>Escrow distribution ({fmtNaira(accrued)})</h4><Bars data={split} unit="naira" /></section>
-        <section className="chart-card"><h4>Support tickets</h4>{ticketData.length ? <Donut data={ticketData} centerTop={String(tickets.length)} centerBottom="tickets" /> : <p className="muted-line">No tickets yet.</p>}</section>
-        <section className="chart-card wide"><h4>Registrations, last 6 months ({trendTotal})</h4><MiniArea points={regTrend} /><div className="trend-x">{months.map((m) => <span key={m.key}>{m.label}</span>)}</div></section>
-      </div>
-      <p className="dash-foot">Live analytics across the cooperative economy. Figures update as societies register, members are profiled, and LASMECO loans move through the pipeline.</p>
-    </div>
-  )
-}
-function ViewAsBar({ onViewAs }) {
-  const [coops, setCoops] = useState([]), [members, setMembers] = useState([])
-  useEffect(() => { listCoops().then(setCoops); listMembers().then(setMembers) }, [])
-  const titles = { officer: 'Cooperative Officer', auditor: 'Auditor', accelerator: 'Accelerator Programme', sterling: 'Sterling Bank', boi: 'Bank of Industry', assetmatrix: 'Asset Matrix MFB' }
-  const pick = (e) => {
-    const v = e.target.value; e.target.value = ''
-    if (!v) return
-    const [kind, id] = v.split('::')
-    if (kind === 'role') onViewAs({ role: id, name: titles[id], office: 'Workspace preview', title: titles[id] })
-    else if (kind === 'coop') { const c = coops.find((x) => x.trackingId === id); if (c) onViewAs({ role: 'society', name: c.name, email: c.createdBy, focusId: c.trackingId, office: c.areaOffice + ' area office', title: 'Cooperative Society' }) }
-    else if (kind === 'member') { const m = members.find((x) => x.memberId === id); if (m) onViewAs({ role: 'member', name: m.name, focusId: m.memberId, office: m.coop, title: 'Member' }) }
-  }
-  return (
-    <div className="switcher">
-      <span className="switcher-lab">Open a workspace as</span>
-      <select className="switcher-sel" onChange={pick} defaultValue="">
-        <option value="" disabled>Select a role, society or member…</option>
-        <optgroup label="Roles">{Object.entries(titles).map(([id, l]) => <option key={id} value={'role::' + id}>{l}</option>)}</optgroup>
-        <optgroup label="Cooperative societies">{coops.map((c) => <option key={c.trackingId} value={'coop::' + c.trackingId}>{c.name}</option>)}</optgroup>
-        <optgroup label="Members">{members.map((m) => <option key={m.memberId} value={'member::' + m.memberId}>{m.name}</option>)}</optgroup>
-      </select>
-    </div>
-  )
-}
-function PortfolioTrend() {
-  const [series, setSeries] = useState(null)
-  useEffect(() => { portfolioContributionSeries(6).then(setSeries) }, [])
-  if (!series || series.length < 2) return null
-  const latest = series[series.length - 1].contributions
-  return (
-    <div className="chart-card wide" style={{ marginBottom: '18px' }}>
-      <h4>Cooperative contributions across the registry</h4>
-      <MiniArea points={series.map((s) => s.contributions)} />
-      <p className="chart-note">Total member contributions, {monthLabel(series[0].month)}{' \u2013 '}{monthLabel(series[series.length - 1].month)}. Current registry total {fmtNaira(latest)}.</p>
-    </div>
-  )
-}
-function ActionQueue() {
-  const [q, setQ] = useState(null)
-  useEffect(() => { (async () => {
-    try {
-      const [loans, coops, accels] = await Promise.all([listLoans(), listCoops(), listAccelerators()])
-      const npl = nplMetrics(loans)
-      setQ({
-        apps: loans.filter((l) => ['Applied', 'In training', 'Shortlisted', 'Coop validated', 'Bank assessment', 'BOI approved'].includes(l.status)).length,
-        coopsPending: coops.filter((c) => !coopAdmission(c).admitted).length,
-        accelsPending: accels.filter((a) => (a.status || 'Pending') !== 'Appointed').length,
-        npl: npl.nplLoans.length,
-      })
-    } catch (e) { setQ({}) }
-  })() }, [])
-  if (!q) return null
-  const items = [[q.apps, 'applications in progress'], [q.coopsPending, 'cooperatives awaiting admission'], [q.accelsPending, 'accelerators awaiting appointment'], [q.npl, 'loans non-performing']].filter(([n]) => n > 0)
-  if (!items.length) return null
-  return (
-    <div className="action-queue">
-      <h4>Needs your attention</h4>
-      <div className="aq-row">{items.map(([n, label], i) => (<div className="aq-item" key={i}><span className="aq-n">{n}</span><span className="aq-lab">{label}</span></div>))}</div>
-    </div>
-  )
-}
-const OPP_TYPES = ['Request for quote', 'Offtake offer', 'Bulk purchase pool']
-async function listOpps(chainId) { return (await kvList('opp:' + chainId + ':')).filter(Boolean).sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1)) }
-async function saveOpp(rec, ctx) {
-  const id = rec.oppId || 'OP-' + Math.random().toString(36).slice(2, 7).toUpperCase()
-  const next = { ...rec, oppId: id, updatedAt: new Date().toISOString(), createdAt: rec.createdAt || new Date().toISOString() }
-  await kvSet('opp:' + rec.chainId + ':' + id, next)
-  return next
-}
-async function listOppReplies(chainId, oppId) { return (await kvList('oppr:' + chainId + ':' + oppId + ':')).filter(Boolean) }
-async function saveOppReply(chainId, oppId, rec) {
-  const id = 'R-' + Math.random().toString(36).slice(2, 7).toUpperCase()
-  await kvSet('oppr:' + chainId + ':' + oppId + ':' + id, { ...rec, id, chainId, oppId, at: new Date().toISOString() })
-}
-function OpportunityBoard({ chain, ctx }) {
-  const [opps, setOpps] = useState(null), [posting, setPosting] = useState(false), [busy, setBusy] = useState(false)
-  const [f, setF] = useState({ type: OPP_TYPES[0], title: '', detail: '', quantity: '', unit: '', priceNaira: '', deadline: '' })
-  const [open, setOpen] = useState(null), [replies, setReplies] = useState([]), [reply, setReply] = useState({ note: '', priceNaira: '' })
-  const ro = isReviewer(ctx)
-  const canPost = !ro && ['society', 'member', 'accelerator', 'leadership', 'officer'].indexOf(ctx.role) > -1
-  const reload = useCallback(() => listOpps(chain.chainId).then(setOpps), [chain.chainId])
-  useEffect(() => { reload() }, [reload])
-  useEffect(() => { if (open) listOppReplies(chain.chainId, open.oppId).then(setReplies); else setReplies([]) }, [open, chain.chainId])
-  const post = async () => {
-    if (!f.title.trim()) { toast('Give the opportunity a title.', 'error'); return }
-    setBusy(true)
-    await saveOpp({ ...f, chainId: chain.chainId, status: 'Open', postedBy: ctx.email, postedByName: ctx.name, postedByRole: ctx.role }, ctx)
-    setBusy(false); setPosting(false); setF({ type: OPP_TYPES[0], title: '', detail: '', quantity: '', unit: '', priceNaira: '', deadline: '' }); reload()
-    toast('Posted to the chain.', 'success')
-  }
-  const sendReply = async () => {
-    if (!reply.note.trim()) { toast('Add a note to your response.', 'error'); return }
-    setBusy(true)
-    await saveOppReply(chain.chainId, open.oppId, { by: ctx.email, byName: ctx.name, note: reply.note.trim(), priceNaira: Number(reply.priceNaira) || 0 })
-    try { await notify({ to: open.postedBy, title: 'Response to your ' + open.type.toLowerCase(), body: ctx.name + ' responded to "' + open.title + '" in ' + chain.name + '.', event: 'chain' }) } catch (e) { /* best-effort */ }
-    setBusy(false); setReply({ note: '', priceNaira: '' }); listOppReplies(chain.chainId, open.oppId).then(setReplies)
-    toast('Response sent.', 'success')
-  }
-  const close = async (o) => { await saveOpp({ ...o, status: 'Closed' }, ctx); reload(); setOpen(null); toast('Opportunity closed.') }
-  if (!opps) return <p className="muted-line">Loading opportunities…</p>
-  if (open) {
-    const mine = open.postedBy === ctx.email
-    return (
-      <div className="returns-box"><button className="back-link" onClick={() => setOpen(null)}>&larr; Back to opportunities</button>
-        <h4>{open.title}</h4>
-        <p className="muted-line">{open.type} · posted by {open.postedByName} · {fmtDate(open.createdAt)} · {open.status}</p>
-        {open.detail && <p className="opp-detail">{open.detail}</p>}
-        <div className="opp-meta">{open.quantity && <span>Quantity: <strong>{open.quantity} {open.unit}</strong></span>}{open.priceNaira && <span>Indicative: <strong>{fmtNaira(Number(open.priceNaira))}</strong></span>}{open.deadline && <span>Closes: <strong>{fmtDate(open.deadline)}</strong></span>}</div>
-        <h4 style={{ marginTop: '18px' }}>Responses ({replies.length})</h4>
-        {replies.length ? replies.map((r) => (<div className="opp-reply" key={r.id}><div><strong>{r.byName}</strong><span>{fmtDate(r.at)}{r.priceNaira ? ' · ' + fmtNaira(r.priceNaira) : ''}</span></div><p>{r.note}</p></div>)) : <p className="muted-line sm">No responses yet.</p>}
-        {!ro && open.status === 'Open' && !mine && <div className="returns-box" style={{ marginTop: '14px' }}><h4>Respond</h4><div className="form-grid"><label className="field span2"><span>Your response</span><textarea rows={2} value={reply.note} onChange={(e) => setReply({ ...reply, note: e.target.value })} placeholder="What you can supply, or what you need" /></label><label className="field"><span>Your price (₦, optional)</span><input type="number" value={reply.priceNaira} onChange={(e) => setReply({ ...reply, priceNaira: e.target.value })} /></label></div><div className="panel-actions"><button className="btn btn-gold btn-sm" disabled={busy} onClick={sendReply}>Send response</button></div></div>}
-        {!ro && mine && open.status === 'Open' && <div className="panel-actions"><button className="btn btn-outline btn-sm" onClick={() => close(open)}>Close this opportunity</button></div>}
-      </div>
-    )
-  }
-  return (
-    <div className="returns-box"><h4>Opportunities in this chain</h4>
-      <p className="muted-line">Post what you need or what you can supply. Everyone in the chain can see and respond, so cooperatives can buy inputs together, find offtakers and trade across stages.</p>
-      {canPost && !posting && <div className="panel-actions"><button className="btn btn-gold btn-sm" onClick={() => setPosting(true)}>Post an opportunity</button></div>}
-      {posting && <div className="returns-box"><div className="form-grid">
-        <label className="field"><span>Type</span><select value={f.type} onChange={(e) => setF({ ...f, type: e.target.value })}>{OPP_TYPES.map((t) => <option key={t}>{t}</option>)}</select></label>
-        <label className="field"><span>Title</span><input value={f.title} onChange={(e) => setF({ ...f, title: e.target.value })} placeholder="e.g. 200 bags of layer feed needed" /></label>
-        <label className="field span2"><span>Detail</span><textarea rows={2} value={f.detail} onChange={(e) => setF({ ...f, detail: e.target.value })} placeholder="Specification, quality, delivery location" /></label>
-        <label className="field"><span>Quantity</span><input value={f.quantity} onChange={(e) => setF({ ...f, quantity: e.target.value })} placeholder="200" /></label>
-        <label className="field"><span>Unit</span><input value={f.unit} onChange={(e) => setF({ ...f, unit: e.target.value })} placeholder="bags" /></label>
-        <label className="field"><span>Indicative value (₦)</span><input type="number" value={f.priceNaira} onChange={(e) => setF({ ...f, priceNaira: e.target.value })} /></label>
-        <label className="field"><span>Closes on</span><input type="date" value={f.deadline} onChange={(e) => setF({ ...f, deadline: e.target.value })} /></label>
-      </div><div className="panel-actions"><button className="btn btn-gold btn-sm" disabled={busy} onClick={post}>Post</button><button className="btn btn-ghost btn-sm" onClick={() => setPosting(false)}>Cancel</button></div></div>}
-      {opps.length ? <div className="opp-list">{opps.map((o) => (
-        <button className="opp-row" key={o.oppId} onClick={() => setOpen(o)}>
-          <span className={cx('opp-tag', o.type === 'Offtake offer' && 'offtake', o.type === 'Bulk purchase pool' && 'pool')}>{o.type}</span>
-          <div className="opp-body"><strong>{o.title}</strong><span>{o.postedByName} · {fmtDate(o.createdAt)}{o.quantity ? ' · ' + o.quantity + ' ' + o.unit : ''}{o.priceNaira ? ' · ' + fmtNaira(Number(o.priceNaira)) : ''}</span></div>
-          <StatusChip status={o.status} />
-        </button>))}</div> : <div className="empty"><span className="empty-mark">&#9670;</span><h3>No opportunities yet</h3><p>{canPost ? 'Post the first one to get the chain trading.' : 'Nothing posted in this chain yet.'}</p></div>}
-    </div>
-  )
-}
-function ChainDetail({ chain, ctx, coops, members, loans, onClose, onChanged }) {
-  const [c, setC] = useState(chain), [busy, setBusy] = useState(false), [addId, setAddId] = useState('')
-  const ro = isReviewer(ctx)
-  const canManage = !ro && (ctx.role === 'leadership' || ctx.role === 'officer')
-  const m = chainMetrics(c, coops, members, loans)
-  const inChain = m.coops.map((x) => x.trackingId)
-  const candidates = coops.filter((x) => inChain.indexOf(x.trackingId) === -1)
-  const save = async (patch, action) => { setBusy(true); const next = await saveChain({ ...c, ...patch }, ctx, action); setC(next); setBusy(false); onChanged && onChanged() }
-  const removeCoop = (id) => save({ removed: [...(c.removed || []), id], added: (c.added || []).filter((x) => x !== id) }, 'Cooperative removed from chain')
-  const addCoop = () => { if (!addId) return; save({ added: [...(c.added || []), addId], removed: (c.removed || []).filter((x) => x !== addId) }, 'Cooperative added to chain'); setAddId('') }
-  const byStage = {}; (c.stages || []).forEach((s) => { byStage[s] = [] })
-  m.coops.forEach((x) => { const s = (c.stageMap && c.stageMap[x.trackingId]) || inferChainStage(x, c); (byStage[s] = byStage[s] || []).push(x) })
-  return (
-    <div className="detail">
-      <button className="back-link" onClick={onClose}>&larr; Back to value chains</button>
-      <div className="detail-head"><div><h2>{c.name}</h2><p className="detail-sub">{c.sector} value chain · {c.chainId} · {m.coops.length} cooperative{m.coops.length === 1 ? '' : 's'} · {m.members.length} member{m.members.length === 1 ? '' : 's'}</p></div><StatusChip status={c.status} /></div>
-      <div className="statgrid">
-        <div className="stat"><span className="stat-fig">{m.jobs.toLocaleString('en-NG')}</span><span className="stat-lab">Jobs supported</span></div>
-        <div className="stat"><span className="stat-fig">{fmtNaira(m.turnover)}</span><span className="stat-lab">Combined annual turnover</span></div>
-        <div className="stat"><span className="stat-fig" style={m.npl.nplRatio >= 0.05 ? { color: 'var(--err)' } : undefined}>{(m.npl.nplRatio * 100).toFixed(1)}%</span><span className="stat-lab">NPL across chain</span></div>
-        <div className="stat"><span className="stat-fig">{fmtNaira(m.nav)}</span><span className="stat-lab">Combined NAV (indicative)</span></div>
-      </div>
-      <div className="chain-stages">{(c.stages || []).map((s) => (
-        <section className="chain-stage" key={s}>
-          <h4>{s}<span className="chain-count">{(byStage[s] || []).length}</span></h4>
-          {(byStage[s] || []).length ? (byStage[s] || []).map((x) => { const src = chainCoopSource(c, x, loans, members); return (<div className="chain-node" key={x.trackingId}><div><strong>{x.name}</strong><span>{x.areaOffice} · {Number(x.members || 0).toLocaleString('en-NG')} members</span><span className={cx('node-src', src.indexOf('Via') === 0 && 'accel')}>{src}</span></div>{canManage && <div className="node-acts"><select value={(c.stageMap && c.stageMap[x.trackingId]) || s} onChange={(e) => save({ stageMap: { ...(c.stageMap || {}), [x.trackingId]: e.target.value } }, 'Stage updated')} aria-label={'Stage for ' + x.name}>{(c.stages || []).map((st) => <option key={st}>{st}</option>)}</select><button className="link-inline danger" disabled={busy} onClick={() => removeCoop(x.trackingId)}>Remove</button></div>}</div>) }) : <p className="muted-line sm">No cooperative at this stage yet.</p>}
-          {(c.firms || []).filter((fm) => fm.stage === s).map((fm, i) => (<div className="chain-node firm" key={i}><div><strong>{fm.name}</strong><span>{fm.role || 'Partner firm'} · not a cooperative</span></div></div>))}
-        </section>))}
-      </div>
-      {c.anchor ? <p className="panel-note">Anchor / offtaker: <strong>{c.anchor}</strong>. Coordinated by {c.coordinator || 'the sector accelerator'}.</p> : <p className="panel-note">No anchor buyer recorded yet. Coordinated by {c.coordinator || 'the sector accelerator'}.</p>}
-      <OpportunityBoard chain={c} ctx={ctx} />
-      {canManage && <div className="returns-box"><h4>Manage chain</h4>
-        <div className="wallet-actions"><select value={addId} onChange={(e) => setAddId(e.target.value)}><option value="">Add a cooperative…</option>{candidates.map((x) => <option key={x.trackingId} value={x.trackingId}>{x.name} ({x.sector})</option>)}</select><button className="btn btn-outline btn-sm" disabled={busy || !addId} onClick={addCoop}>Add</button></div>
-        <div className="form-grid" style={{ marginTop: '12px' }}>
-          <label className="field"><span>Anchor / offtaker</span><input value={c.anchor || ''} onChange={(e) => setC({ ...c, anchor: e.target.value })} onBlur={() => save({ anchor: c.anchor }, 'Anchor updated')} placeholder="e.g. Lekki Foods Ltd" /></label>
-          <label className="field"><span>Coordinator</span><input value={c.coordinator || ''} onChange={(e) => setC({ ...c, coordinator: e.target.value })} onBlur={() => save({ coordinator: c.coordinator }, 'Coordinator updated')} placeholder="Accelerator name" /></label>
-        </div>
-        <div className="panel-actions">
-          {c.status !== 'Active' && <button className="btn btn-gold btn-sm" disabled={busy} onClick={() => save({ status: 'Active' }, 'Value chain approved')}>Approve chain</button>}
-          {c.status === 'Active' && <button className="btn btn-outline btn-sm" disabled={busy} onClick={() => save({ status: 'Suspended' }, 'Value chain suspended')}>Suspend</button>}
-        </div>
-        <p className="panel-note">Cooperatives are assigned automatically from their sector ({c.sector}). Additions and removals here override that. Registration fee {fmtNaira(CHAIN_FEES.registration)}, annual {fmtNaira(CHAIN_FEES.annual)} — confirm both with MCCTI before go-live.</p>
-      </div>}
-      <AuditTrail trackingId={c.chainId} />
-    </div>
-  )
-}
-function ChainsPanel({ ctx }) {
-  const [chains, setChains] = useState(null), [coops, setCoops] = useState([]), [members, setMembers] = useState([]), [loans, setLoans] = useState([])
-  const [sel, setSel] = useState(null), [creating, setCreating] = useState(false), [f, setF] = useState({ name: '', sector: LASMECO_SECTORS[0] }), [busy, setBusy] = useState(false)
-  const [accelSectors, setAccelSectors] = useState([])
-  const reload = useCallback(async () => {
-    const [a, b, c, d] = await Promise.all([listChains(), listCoops(), listMembers(), listLoans()])
-    setChains(a); setCoops(b); setMembers(c); setLoans(d)
-    if (['leadership', 'officer', 'accelerator'].indexOf(ctx.role) > -1) { try { await refreshChainStats(a, b, c, d) } catch (e) { /* not fatal */ } }
-  }, [ctx.role])
-  useEffect(() => { reload() }, [reload])
-  useEffect(() => { if (ctx.role === 'accelerator') { kvGet('accelerator:' + ctx.email).then((a) => setAccelSectors((a && a.sectors) || [])).catch(() => { }) } }, [ctx.role, ctx.email])
-  const ro = isReviewer(ctx)
-  const canCreate = !ro && (ctx.role === 'leadership' || ctx.role === 'accelerator')
-  if (!chains) return <p className="muted-line">Loading value chains…</p>
-  let mine = chains
-  if (ctx.role === 'accelerator') mine = chains.filter((c) => accelSectors.indexOf(c.sector) > -1 || c.createdBy === ctx.email)
-  else if (ctx.coopName) mine = chains.filter((c) => chainCoops(c, coops, loans, members).some((x) => x.name === ctx.coopName))
-  if (sel) { const fresh = chains.find((c) => c.chainId === sel.chainId) || sel; return <ChainDetail chain={fresh} ctx={ctx} coops={coops} members={members} loans={loans} onClose={() => { setSel(null); reload() }} onChanged={reload} /> }
-  const create = async () => {
-    if (!f.name.trim()) { toast('Give the value chain a name.', 'error'); return }
-    setBusy(true)
-    const proposing = ctx.role === 'accelerator'
-    await saveChain({ name: f.name.trim(), sector: f.sector, stages: CHAIN_STAGE_TEMPLATES[f.sector] || [], status: proposing ? 'Proposed' : 'Active', coordinator: proposing ? ctx.name : '', added: [], removed: [], firms: [], stageMap: {} }, ctx, proposing ? 'Value chain proposed' : 'Value chain created')
-    setBusy(false); setCreating(false); setF({ name: '', sector: LASMECO_SECTORS[0] }); reload()
-    toast(proposing ? 'Proposed to MCCTI for approval.' : 'Value chain created.', 'success')
-  }
-  return (
-    <div className="ws">
-      <p className="muted-line">Value Chain Cooperatives bundle primary cooperatives, their members and partner firms into one coordinated unit, stage by stage. Cooperatives join automatically based on their sector.</p>
-      {canCreate && !creating && <div className="panel-actions"><button className="btn btn-gold btn-sm" onClick={() => setCreating(true)}>{ctx.role === 'accelerator' ? 'Propose a value chain' : 'Create a value chain'}</button></div>}
-      {creating && <div className="returns-box"><h4>{ctx.role === 'accelerator' ? 'Propose a value chain' : 'New value chain'}</h4>
-        <div className="form-grid">
-          <label className="field"><span>Name</span><input value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} placeholder="e.g. Lagos Poultry Value Chain" /></label>
-          <label className="field"><span>Sector</span><select value={f.sector} onChange={(e) => setF({ ...f, sector: e.target.value })}>{LASMECO_SECTORS.map((s) => <option key={s}>{s}</option>)}</select></label>
-        </div>
-        <p className="panel-note">Stages start from the {f.sector} template: {(CHAIN_STAGE_TEMPLATES[f.sector] || []).join(' → ')}. All {f.sector}-sector cooperatives join automatically.</p>
-        <div className="panel-actions"><button className="btn btn-gold btn-sm" disabled={busy} onClick={create}>{ctx.role === 'accelerator' ? 'Propose' : 'Create'}</button><button className="btn btn-ghost btn-sm" onClick={() => setCreating(false)}>Cancel</button></div>
-      </div>}
-      {mine.length ? <div className="chain-grid">{mine.map((c) => { const m = chainMetrics(c, coops, members, loans); return (
-        <button className="chain-card" key={c.chainId} onClick={() => setSel(c)}>
-          <div className="chain-card-top"><h4>{c.name}</h4><StatusChip status={c.status} /></div>
-          <p className="chain-card-sec">{c.sector}</p>
-          <div className="chain-card-figs"><span><strong>{m.coops.length}</strong> coops</span><span><strong>{m.members.length}</strong> members</span><span><strong>{m.jobs.toLocaleString('en-NG')}</strong> jobs</span></div>
-          <p className="chain-card-turn">{fmtNaira(m.turnover)} combined turnover</p>
-        </button>) })}</div> : (<>
-          <div className="empty"><span className="empty-mark">&#9670;</span><h3>No value chains yet</h3><p>{ctx.coopName ? 'Your cooperative has not been mapped to a value chain yet. It joins automatically once it registers in a chain sector, or applies for LASMECO through an accelerator.' : (canCreate ? 'Chains are normally created automatically, one per LASMECO sector.' : 'MCCTI has not set up any value chains yet.')}</p></div>
-          {hasSupabase && !ctx.coopName && <div className="kyc-status pending" style={{ marginTop: '4px' }}>Chains should appear here automatically. If this list stays empty, the database is likely refusing to save them: open Supabase → SQL Editor and re-run <strong>supabase_setup.sql</strong> (it adds permission for the chain:, opp: and snap: keys), then reload.{kvBlocked() ? ' Last error: ' + kvBlocked().message : ''}</div>}
-        </>)}
-    </div>
-  )
-}
-function LeadershipOverview({ ctx, section, onViewAs }) {
-  const [coops, reload] = useRegistry()
-  const [sel, setSel] = useState(null)
-  if (!coops) return <p className="muted-line">Loading overview…</p>
-  if (sel) return <CoopDetail coop={sel} ctx={ctx} onClose={() => { setSel(null); reload() }} onChanged={reload} />
-  const pending = coops.filter((c) => c.source !== 'SEKAT' && ['Filed', 'Under review', 'Returned'].includes(c.status))
-  const banner = isReviewer(ctx) ? <div className="review-banner"><strong>Review access &middot; read-only</strong><span>{DEMO_DATA ? 'This is sample data, not the live registry \u2014 explore freely, including documents. You can view and export everything, but cannot change records. ' : "You can view the full Leadership workspace and export data, but cannot change records or open members' KYC documents. "}Access expires in {reviewDaysLeft()} day{reviewDaysLeft() === 1 ? '' : 's'} ({new Date(REVIEW_ACCESS_UNTIL).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}).</span></div> : null
-  return (
-    <div className="ws">
-      {banner}
-      {section === 'overview' && <ActionQueue />}
-      {section === 'overview' && <PortfolioTrend />}
-      {section === 'overview' && <AnalyticsDashboard />}
-      {section === 'applications' && (<><p className="muted-line">Review each application's documents, then approve or reject. Use search to find any society, including approved ones, to manage guarantee requests and lending readiness. Societies mirrored from SEKAT are managed in SEKAT.</p><CoopTable coops={coops} onOpen={setSel} /></>)}
-      {section === 'members' && <MembersAnalytics />}
-      {section === 'lasmeco' && <LasmecoOverview ctx={ctx} />}
-      {section === 'reports' && <ReportsPanel role="leadership" />}
-      {section === 'risk' && <RiskPanel />}
-      {section === 'sla' && <GovernanceSLA />}
-      {section === 'monitoring' && <PortfolioMonitoring />}
-      {section === 'accelerators' && <AcceleratorAppointments ctx={ctx} />}
-      {section === 'chains' && <ChainsPanel ctx={ctx} />}
-      {section === 'revenue' && <RevenuePanel ctx={ctx} />}
-      {section === 'retention' && <RetentionPanel />}
-      {section === 'viewas' && <ViewAsSwitcher onViewAs={onViewAs} />}
-      {section === 'integrations' && <IntegrationsPanel ctx={ctx} onSynced={reload} />}
-    </div>
-  )
-}
-function SocietyWorkspace({ ctx, section }) {
-  const [coops, reload] = useRegistry()
-  const [mode, setMode] = useState('view') // view | register | returns
-  if (!coops) return <p className="muted-line">Loading…</p>
-  const mine = ctx.focusId ? coops.find((c) => c.trackingId === ctx.focusId) : coops.find((c) => c.createdBy === ctx.email)
-  if (mode === 'register') return <RegistrationForm ctx={ctx} onCancel={() => setMode('view')} onDone={() => { setMode('view'); reload() }} />
-  if (mode === 'returns' && mine) return <ReturnsForm coop={mine} ctx={ctx} onCancel={() => setMode('view')} onDone={() => { setMode('view'); reload() }} />
-  if (!mine) return (
-    <div className="empty">
-      <span className="empty-mark">&#9670;</span>
-      <h3>Register your cooperative society</h3>
-      <p>File your society once. You receive a tracking ID, MCCTI leadership reviews and approves it, and every step is recorded on the audit trail.</p>
-      <button className="btn btn-gold" onClick={() => setMode('register')}>Register a society</button>
-    </div>
-  )
-  return (
-    <div className="ws">
-      {section === 'overview' && <SocietyOverview mine={mine} />}
-      {section === 'cooperative' && (<>
-        {mine.source !== 'SEKAT' && mine.feeStatus !== 'Paid' && (
-          <div className="fee-banner"><span>Registration fee <strong>{fmtNaira(mine.registrationFee || COOP_FEES.registration)}</strong> to join the platform is outstanding.</span><button className="btn btn-gold btn-sm" onClick={async () => { const r = await collectPayment({ email: ctx.email, amountNaira: mine.registrationFee || COOP_FEES.registration, purpose: 'Cooperative registration fee', metadata: { coopId: mine.trackingId } }); if (r.ok) { await payCoopFee(mine.trackingId, ctx); reload() } else if (!r.cancelled) { toast('Payment could not be completed. Please try again.') } }}>{PAYSTACK_PUBLIC ? 'Pay registration fee' : 'Pay now (demo)'}</button></div>
-        )}
-        <div className="society-card">
-          <div className="society-top"><div><h3>{mine.name}</h3><p className="detail-sub">{mine.trackingId} &middot; {mine.areaOffice} area office &middot; {mine.sector}</p></div><div className="detail-chips"><StatusChip status={mine.status} /><StatusChip status={mine.cap15} kind="cap15" /></div></div>
-          <div className="society-figs"><div><span className="lf-lab">Members</span><span className="society-fig">{Number(mine.members || 0).toLocaleString('en-NG')}</span></div><div><span className="lf-lab">Contributions</span><span className="society-fig">{fmtNaira(mine.contributions)}</span></div><div><span className="lf-lab">Custodian</span><span className="society-fig sm">{mine.custodian || '\u2014'}</span></div></div>
-          <div className="society-actions">
-            {mine.source === 'SEKAT' ? <span className="returned-flag" style={{ color: '#2E5C88' }}>Mirrored from SEKAT (read-only). Returns are filed in SEKAT.</span> : <button className="btn btn-gold btn-sm" onClick={() => setMode('returns')}>{mine.returns ? 'Re-file annual returns' : 'File annual returns'}</button>}
-            {mine.status === 'Returned' && <span className="returned-flag">Returned for correction. Review the trail and re-file.</span>}
-          </div>
-        </div>
-        <div className="returns-box"><h4>Documents</h4><DocumentsPanel coopId={mine.trackingId} ctx={ctx} canVerify={false} canUpload={mine.source !== 'SEKAT'} /></div>
-        <div className="trail-box"><h4>Audit trail</h4><AuditTrail trackingId={mine.trackingId} refreshKey={coops.length} /></div>
-      </>)}
-      {section === 'lending' && <CoopLendingReadiness coop={mine} ctx={ctx} onChanged={reload} />}
-      {section === 'guarantees' && <CoopGuaranteeApprovals coop={mine} ctx={ctx} />}
-      {section === 'chains' && <ChainsPanel ctx={{ ...ctx, coopName: mine.name }} />}
-      {section === 'savings' && (mine.source !== 'SEKAT' ? <div className="returns-box"><h4>Savings &amp; esusu</h4><CoopEsusu coop={mine} ctx={ctx} /></div> : <p className="muted-line">Savings are managed in SEKAT for mirrored societies.</p>)}
-    </div>
-  )
-}
-function CapabilityPreview({ role }) {
-  const caps = ROLE_CAPS[role] || ROLE_CAPS.member
-  return (
-    <div className="ws"><section className="dash-card dash-caps"><h3>Your workspace</h3><p className="dash-card-sub">Tailored to your role. These open as the modules go live from the next stage.</p><ul className="caps">{caps.map((c) => (<li key={c}><span className="cap-tick">&#9670;</span>{c}<span className="cap-soon">Soon</span></li>))}</ul></section></div>
-  )
-}
-
-/* =============================== STAGE 4 ===============================
-   Member & MSME Analytics (QooP layer). QooP is treated exactly like SEKAT:
-   a one-way source (QooP -> MCCTI). Members and their MSME profiles flow in,
-   are mirrored read-only with a QOOP badge, and an explainable credit score is
-   computed. Plus GDPR controls (consent, access, portability, erasure) and a
-   leadership "view as" switcher across all users.
-   ====================================================================== */
-
-const GENDERS = ['Female', 'Male', 'Prefer not to say']
-/* --------------- QooP -> MCCTI integration (one-way analytics) ------------
-   QooP (qoop.ng) is a smart cooperative platform: members save and invest, use
-   the QooP Wallet (a BNPL / credit wallet), buy on credit via QooP Mall, borrow
-   without collateral, pay utilities and transfer funds. QooP therefore holds rich
-   financial-behaviour data. It flows one way into MCCTI to power member analytics
-   and explainable credit scoring. The sample feed stands in for the live QooP API
-   until QOOP_API_URL and QOOP_API_KEY are configured. */
-const QOOP_FEED = [
-  { ref: 'QP-10231', name: 'Adaeze Okonkwo', coop: 'Ikeja Grand Traders Cooperative', sector: 'Trade', phone: '0803xxxx210', gender: 'Female', kyc: { bvnVerified: true, ninVerified: true }, msme: { monthlyTurnover: 620000, employees: 4, cashFlow: 240000, customerBase: 180, yearsInOperation: 6 }, qoop: { walletActive: true, savingsBalance: 480000, bnplLimit: 300000, creditPurchases: 14, creditOutstanding: 45000, loansTaken: 3, onTimeRepaymentRate: 96, utilityPaymentsMonthly: 8, monthsActive: 34 } },
-  { ref: 'QP-10232', name: 'Emeka Balogun', coop: 'Idumota Textile Merchants Coop', sector: 'Trade', phone: '0806xxxx554', gender: 'Male', kyc: { bvnVerified: true, ninVerified: true }, msme: { monthlyTurnover: 1450000, employees: 9, cashFlow: 520000, customerBase: 420, yearsInOperation: 11 }, qoop: { walletActive: true, savingsBalance: 1200000, bnplLimit: 500000, creditPurchases: 40, creditOutstanding: 120000, loansTaken: 5, onTimeRepaymentRate: 99, utilityPaymentsMonthly: 12, monthsActive: 48 } },
-  { ref: 'QP-10233', name: 'Ngozi Underwood', coop: 'Surulere United Artisans Coop', sector: 'Artisan', phone: '0705xxxx018', gender: 'Female', kyc: { bvnVerified: true, ninVerified: false }, msme: { monthlyTurnover: 210000, employees: 2, cashFlow: 60000, customerBase: 55, yearsInOperation: 3 }, qoop: { walletActive: true, savingsBalance: 90000, bnplLimit: 80000, creditPurchases: 6, creditOutstanding: 15000, loansTaken: 1, onTimeRepaymentRate: 88, utilityPaymentsMonthly: 4, monthsActive: 18 } },
-  { ref: 'QP-10234', name: 'Tunde Salami', coop: 'Ibeju-Lekki Farmers Multipurpose Coop', sector: 'Agriculture', phone: '0813xxxx777', gender: 'Male', kyc: { bvnVerified: false, ninVerified: false }, msme: { monthlyTurnover: 95000, employees: 1, cashFlow: 20000, customerBase: 30, yearsInOperation: 2 }, qoop: { walletActive: false, savingsBalance: 20000, bnplLimit: 0, creditPurchases: 1, creditOutstanding: 0, loansTaken: 0, onTimeRepaymentRate: 0, utilityPaymentsMonthly: 1, monthsActive: 6 } },
-  { ref: 'QP-10235', name: 'Blessing Achebe', coop: 'Ikeja Grand Traders Cooperative', sector: 'Trade', phone: '0809xxxx341', gender: 'Female', kyc: { bvnVerified: true, ninVerified: true }, msme: { monthlyTurnover: 880000, employees: 6, cashFlow: 330000, customerBase: 260, yearsInOperation: 8 }, qoop: { walletActive: true, savingsBalance: 620000, bnplLimit: 400000, creditPurchases: 22, creditOutstanding: 60000, loansTaken: 4, onTimeRepaymentRate: 94, utilityPaymentsMonthly: 10, monthsActive: 30 } },
-]
-const qoopIdFor = (ref) => 'QOOP-' + String(ref).replace(/[^A-Za-z0-9]+/g, '-')
-function qoopToMember(r) {
-  const now = new Date().toISOString()
-  return { memberId: qoopIdFor(r.ref), source: 'QOOP', ref: r.ref, name: r.name, coop: r.coop, sector: r.sector, phone: r.phone, gender: r.gender, kyc: { ...r.kyc, status: (r.kyc.bvnVerified && r.kyc.ninVerified) ? 'Verified' : (r.kyc.bvnVerified || r.kyc.ninVerified) ? 'Partial' : 'Unverified' }, msme: r.msme, qoop: r.qoop || null, createdBy: 'qoop@system', createdAt: now, syncedAt: now }
-}
-async function listMembers() { return (await kvList('member:')).sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1)) }
-async function getMember(id) { return await kvGet('member:' + id) }
-async function createMember(rec, ctx) {
-  const memberId = 'M-' + String(Math.floor(Math.random() * 1000000)).padStart(6, '0'); const now = new Date().toISOString()
-  const bvnVerified = rec.bvnVerified != null ? Boolean(rec.bvnVerified) : Boolean(rec.bvn && rec.bvn.length >= 10)
-  const ninVerified = rec.ninVerified != null ? Boolean(rec.ninVerified) : Boolean(rec.nin && rec.nin.length >= 10)
-  const record = { memberId, source: 'MCCTI', name: rec.name, coop: rec.coop, sector: rec.sector, phone: rec.phone, gender: rec.gender, dob: rec.dob || '', address: rec.address || '', memberSince: rec.memberSince || '', businessStart: rec.businessStart || '', memberSinceConfirmed: false, kyc: { bvn: rec.bvn ? 'on file' : '', nin: rec.nin ? 'on file' : '', bvnVerified, ninVerified, status: (bvnVerified && ninVerified) ? 'Verified' : (bvnVerified || ninVerified) ? 'Partial' : 'Unverified' }, msme: { monthlyTurnover: Number(rec.monthlyTurnover) || 0, employees: Number(rec.employees) || 0, cashFlow: Number(rec.cashFlow) || 0, customerBase: Number(rec.customerBase) || 0, yearsInOperation: Number(rec.yearsInOperation) || 0, businessStart: rec.businessStart || '' }, businessMonths: rec.businessStart ? monthsBetween(rec.businessStart, Date.now()) : 0, coopMonths: rec.memberSince ? monthsBetween(rec.memberSince, Date.now()) : 0, createdBy: ctx.email, createdAt: now }
-  await kvSet('member:' + memberId, record, ctx.uid)
-  await notify({ to: ctx.email, title: 'Welcome to MCCTI CoopEco', body: 'Your member profile is set up. You can now apply for LASMECO finance.', event: 'member', phone: rec.phone })
-  return record
-}
-async function syncFromQoop(ctx, silent) {
-  const live = await fetchLiveRecords('/api/qoop-sync')
-  if (!live && !DEMO_DATA) return 0 // live database: never ingest the sample feed
-  const feed = live || QOOP_FEED
-  let n = 0
-  for (const r of feed) { const rec = qoopToMember(r); await kvSet('member:' + rec.memberId, rec); n++ }
-  await kvSet('integration:qoop', { lastSync: new Date().toISOString(), count: n, source: live ? 'QooP live API' : 'QooP sample feed', live: Boolean(live) })
-  return n
-}
-
-/* explainable, human-reviewable credit score (advisory; not a solely automated
-   decision - a cooperative officer approves before it affects LASMECO) */
-const BAND_CLASS = { Prime: 'st-approved', Strong: 'st-approved', Fair: 'st-review', Building: 'st-review', 'Thin file': 'st-filed' }
-function scoreMember(m) {
-  const t = Number(m?.msme?.monthlyTurnover) || 0, emp = Number(m?.msme?.employees) || 0, yrs = Number(m?.msme?.yearsInOperation) || 0, cf = Number(m?.msme?.cashFlow) || 0
-  const kyc = (m?.kyc?.bvnVerified ? 1 : 0) + (m?.kyc?.ninVerified ? 1 : 0)
-  const q = m?.qoop || null
-  const repayRate = q ? Number(q.onTimeRepaymentRate) || 0 : 0, qSav = q ? Number(q.savingsBalance) || 0 : 0
-  const cT = Math.min(180, (t / 500000) * 180), cC = Math.min(70, (cf / 300000) * 70), cY = Math.min(70, yrs * 14), cE = Math.min(50, emp * 8), cK = kyc * 50
-  const cR = q ? Math.min(60, repayRate / 100 * 60) : 0, cS = q ? Math.min(40, qSav / 500000 * 40) : 0
-  let s = Math.max(300, Math.min(850, Math.round(300 + cT + cC + cY + cE + cK + cR + cS)))
-  const band = s >= 740 ? 'Prime' : s >= 670 ? 'Strong' : s >= 580 ? 'Fair' : s >= 500 ? 'Building' : 'Thin file'
-  const threshold = band === 'Prime' ? 10000000 : band === 'Strong' ? 6000000 : band === 'Fair' ? 3000000 : band === 'Building' ? 1000000 : 300000
-  const factors = [
-    { label: 'Monthly turnover', display: fmtNaira(t), pct: Math.round(cT / 180 * 100) },
-    { label: 'Cash flow buffer', display: fmtNaira(cf), pct: Math.round(cC / 70 * 100) },
-    { label: 'Years in operation', display: yrs + ' yr' + (yrs === 1 ? '' : 's'), pct: Math.round(cY / 70 * 100) },
-    { label: 'Employees', display: String(emp), pct: Math.round(cE / 50 * 100) },
-    { label: 'KYC verified', display: kyc + '/2', pct: Math.round(cK / 100 * 100) },
-  ]
-  if (q) {
-    factors.push({ label: 'QooP repayment history', display: repayRate + '% on time', pct: Math.round(cR / 60 * 100) })
-    factors.push({ label: 'QooP savings', display: fmtNaira(qSav), pct: Math.round(cS / 40 * 100) })
-  }
-  return { score: s, band, threshold, factors }
-}
-
-/* -------------------------------- GDPR -------------------------------- */
-function downloadJson(filename, obj) { const blob = new Blob([JSON.stringify(obj, null, 2)], { type: 'application/json' }); const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = filename; a.click(); URL.revokeObjectURL(url) }
-/* ---- Reporting & exports ------------------------------------------------- */
-function toCSV(rows) {
-  if (!rows || !rows.length) return ''
-  const headers = Object.keys(rows[0])
-  const esc = (v) => { const s = v == null ? '' : String(v); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s }
-  return [headers.join(','), ...rows.map((r) => headers.map((h) => esc(r[h])).join(','))].join('\n')
-}
-function downloadCSV(filename, rows) {
-  if (!rows.length) { toast('Nothing to export yet.'); return }
-  const blob = new Blob([toCSV(rows)], { type: 'text/csv;charset=utf-8' })
-  const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = filename; a.click(); URL.revokeObjectURL(url)
-}
-async function reportCoops() { return (await listCoops()).map((x) => ({ trackingId: x.trackingId, name: x.name, source: x.source, areaOffice: x.areaOffice, sector: x.sector, status: x.status, cap15: x.cap15, members: x.members || 0, contributions: x.contributions || 0, feeStatus: x.feeStatus || '', registered: x.createdAt ? fmtDate(x.createdAt) : '' })) }
-async function reportMembers() { return (await listMembers()).map((x) => { const s = scoreMember(x); return { memberId: x.memberId, name: x.name, source: x.source, coop: x.coop, sector: x.sector, kyc: (x.kyc && x.kyc.status) || '', score: s.score, band: s.band, monthlyTurnover: (x.msme && x.msme.monthlyTurnover) || 0, qoopRepaymentPct: x.qoop ? x.qoop.onTimeRepaymentRate : '', qoopSavings: x.qoop ? x.qoop.savingsBalance : '' } }) }
-async function reportLoans() { return (await listLoans()).map((x) => { const rp = (x.schedule || []).length ? loanRepayState(x) : null; return { loanId: x.loanId, member: x.memberName, coop: x.coop, sector: x.sector, status: x.status, requested: x.amountRequested || 0, approved: x.amountApproved || 0, tenorMonths: x.tenorMonths || '', outstanding: rp ? rp.outstanding : '', arrears: rp ? rp.arrears : '' } }) }
-async function escrowFigures() {
-  const coops = await listCoops(), loans = await listLoans(), wallets = await kvList('wallet:')
-  const regFees = coops.filter((c) => c.feeStatus === 'Paid').length * COOP_FEES.registration
-  const returnsFees = coops.filter((c) => c.returns).length * COOP_FEES.annualReturns
-  const disbursedValue = loans.filter((l) => ['Disbursed', 'Repaying', 'Completed'].includes(l.status)).reduce((a, l) => a + (l.amountApproved || 0), 0)
-  const portalFees = Math.round(disbursedValue * 0.025)
-  const funding = wallets.reduce((a, w) => a + (w.txns || []).filter((t) => t.type === 'topup').reduce((s, t) => s + (t.amount || 0), 0), 0)
-  const walletFees = Math.round(funding * 0.01)
-  const boiMgmtFeeAnnual = Math.round(disbursedValue * 0.025)
-  const boiMgmtFeeQuarter = Math.round(boiMgmtFeeAnnual / 4)
-  const accrued = regFees + returnsFees + portalFees + walletFees
-  const sched = loans.filter((l) => (l.schedule || []).length)
-  const outstanding = sched.reduce((a, l) => a + loanRepayState(l).outstanding, 0)
-  const arrears = sched.reduce((a, l) => a + loanRepayState(l).arrears, 0)
-  return { coops, loans, regFees, returnsFees, disbursedValue, portalFees, funding, walletFees, boiMgmtFeeAnnual, boiMgmtFeeQuarter, accrued, outstanding, arrears }
-}
-async function reportEscrow() {
-  const f = await escrowFigures()
-  const lines = [['Registration fees', f.regFees], ['Annual returns fees', f.returnsFees], ['Disbursement portal (2.5%)', f.portalFees], ['Wallet fees (1%)', f.walletFees], ['Total accrued', f.accrued]]
-  const split = SPV_SPLIT.map(([n, p]) => [n + ' (' + p + '%)', Math.round(f.accrued * p / 100)])
-  return [...lines, ...split].map(([item, amount]) => ({ item, amount }))
-}
-async function generateBoardPack() {
-  const f = await escrowFigures()
-  const members = await listMembers(), tickets = await listTickets()
-  const coops = f.coops, loans = f.loans
-  const by = (arr, k, v) => arr.filter((x) => x[k] === v).length
-  const money = (n) => '\u20A6' + Number(n || 0).toLocaleString('en-NG')
-  const origin = window.location.origin
-  const statusRows = ['Approved', 'Under review', 'Filed', 'Returned'].map((s) => `<tr><td>${s}</td><td style="text-align:right">${by(coops, 'status', s)}</td></tr>`).join('')
-  const pipeRows = ['Applied', 'In training', 'Shortlisted', 'Coop validated', 'Bank assessment', 'BOI approved', 'Disbursed', 'Repaying', 'Completed'].map((s) => `<tr><td>${s}</td><td style="text-align:right">${by(loans, 'status', s)}</td></tr>`).join('')
-  const escrowRows = [['Registration fees', f.regFees], ['Annual returns fees', f.returnsFees], ['Disbursement portal (2.5%)', f.portalFees], ['Wallet fees (1%)', f.walletFees]].map(([k, v]) => `<tr><td>${k}</td><td style="text-align:right">${money(v)}</td></tr>`).join('')
-  const splitRows = SPV_SPLIT.map(([n, p]) => `<tr><td>${n} (${p}%)</td><td style="text-align:right">${money(Math.round(f.accrued * p / 100))}</td></tr>`).join('')
-  const kpi = (label, val) => `<div style="border:1px solid #dfe6e1;border-radius:8px;padding:12px 14px"><div style="font-size:20px;font-weight:700;color:#17241c">${val}</div><div style="font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:#6b7671;margin-top:3px">${label}</div></div>`
-  const html = `<!doctype html><html><head><meta charset="utf-8"><title>MCCTI CoopEco Board Pack</title>
-  <style>@page{margin:18mm}body{font-family:Georgia,'Times New Roman',serif;color:#17241c;margin:0;padding:0}
-  .wrap{max-width:800px;margin:0 auto}h1{font-size:22px;margin:6px 0}h2{font-size:14px;text-transform:uppercase;letter-spacing:.06em;color:#1C8A4F;border-bottom:2px solid #1C8A4F;padding-bottom:4px;margin-top:26px}
-  .head{display:flex;align-items:center;gap:14px;border-bottom:1px solid #dfe6e1;padding-bottom:14px}
-  .head img{width:52px;height:52px}.sub{color:#6b7671;font-size:12px}
-  table{width:100%;border-collapse:collapse;font-family:Arial,sans-serif;font-size:12px;margin-top:8px}
-  td,th{border-bottom:1px solid #eef2ef;padding:7px 8px;text-align:left}
-  .kpis{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:12px;font-family:Arial,sans-serif}
-  .foot{margin-top:30px;color:#6b7671;font-size:10px;font-family:Arial,sans-serif}</style></head>
-  <body><div class="wrap">
-  <div class="head"><img src="${origin}/lagos-seal.png" alt=""><div><h1>MCCTI CoopEco — Board Pack</h1><div class="sub">Ministry of Commerce, Cooperatives, Trade &amp; Investment, Lagos State &middot; ${fmtDate(new Date().toISOString())}</div></div></div>
-  <h2>Executive summary</h2>
-  <div class="kpis">${kpi('Cooperative societies', coops.length)}${kpi('Members profiled', members.length)}${kpi('LASMECO disbursed', money(f.disbursedValue))}${kpi('Portfolio outstanding', money(f.outstanding))}${kpi('In arrears', money(f.arrears))}${kpi('Escrow accrued', money(f.accrued))}${kpi('Payments processed', money(f.funding))}${kpi('Open tickets', tickets.filter((t) => t.status !== 'Resolved').length)}${kpi('Approved societies', by(coops, 'status', 'Approved'))}</div>
-  <h2>Registration status</h2><table><tr><th>Status</th><th style="text-align:right">Societies</th></tr>${statusRows}</table>
-  <h2>LASMECO pipeline</h2><table><tr><th>Stage</th><th style="text-align:right">Loans</th></tr>${pipeRows}</table>
-  <h2>Escrow &amp; revenue</h2><table><tr><th>Source</th><th style="text-align:right">Amount</th></tr>${escrowRows}<tr><td><strong>Total accrued</strong></td><td style="text-align:right"><strong>${money(f.accrued)}</strong></td></tr></table>
-  <h2>SPV distribution</h2><table><tr><th>Party</th><th style="text-align:right">Amount</th></tr>${splitRows}</table>
-  <div class="foot">Generated by MCCTI CoopEco. Figures are drawn from live platform data at the time of generation. For internal Ministry use.</div>
-  </div></body></html>`
-  const w = window.open('', '_blank')
-  if (!w) { toast('Please allow pop-ups to generate the board pack.'); return }
-  w.document.write(html); w.document.close(); w.focus(); setTimeout(() => { try { w.print() } catch (e) {} }, 500)
-}
-function ReportsPanel({ role }) {
-  const isLeader = role === 'leadership'
-  const [busy, setBusy] = useState('')
-  const run = (key, fn) => async () => { setBusy(key); try { await fn() } finally { setBusy('') } }
-  const stamp = new Date().toISOString().slice(0, 10)
-  return (
-    <div className="ws">
-      <div className="reports-grid">
-        <div className="report-card"><h4>Cooperative registry</h4><p>All societies with status, CAP15, members, contributions and fee status.</p><button className="btn btn-outline btn-sm" disabled={busy === 'coops'} onClick={run('coops', async () => downloadCSV('coop-registry-' + stamp + '.csv', await reportCoops()))}>Download CSV</button></div>
-        <div className="report-card"><h4>Members &amp; analytics</h4><p>Profiled members with KYC status, credit score, band and QooP signals.</p><button className="btn btn-outline btn-sm" disabled={busy === 'members'} onClick={run('members', async () => downloadCSV('members-' + stamp + '.csv', await reportMembers()))}>Download CSV</button></div>
-        {isLeader && <div className="report-card"><h4>LASMECO portfolio</h4><p>All loans with status, approved amount, outstanding balance and arrears.</p><button className="btn btn-outline btn-sm" disabled={busy === 'loans'} onClick={run('loans', async () => downloadCSV('lasmeco-portfolio-' + stamp + '.csv', await reportLoans()))}>Download CSV</button></div>}
-        {isLeader && <div className="report-card"><h4>Escrow &amp; distribution</h4><p>Revenue accrued by stream and the SPV sharing-formula distribution.</p><button className="btn btn-outline btn-sm" disabled={busy === 'escrow'} onClick={run('escrow', async () => downloadCSV('escrow-' + stamp + '.csv', await reportEscrow()))}>Download CSV</button></div>}
-      </div>
-      {isLeader && <div className="report-boardpack"><div><h4>Board pack (PDF)</h4><p className="muted-line">A printable executive summary: KPIs, registration status, LASMECO pipeline and escrow, drawn from live data. Opens a print view — choose “Save as PDF”.</p></div><button className="btn btn-gold btn-sm" disabled={busy === 'pack'} onClick={run('pack', generateBoardPack)}>Generate board pack</button></div>}
-      <p className="panel-note">CSV files open in Excel or Google Sheets. Exports reflect live platform data at the moment of download.</p>
-    </div>
-  )
-}
-function maskPhone(p) { const s = String(p || ''); return s.length > 5 ? s.slice(0, 4) + '\u2026' + s.slice(-3) : s }
-function computeRiskFlags(members, loans) {
-  const flags = []
-  const byPhone = {}
-  members.forEach((m) => { const p = (m.phone || '').replace(/\s/g, ''); if (p) (byPhone[p] = byPhone[p] || []).push(m) })
-  Object.entries(byPhone).forEach(([p, ms]) => { if (ms.length > 1) flags.push({ severity: 'high', type: 'Duplicate phone', title: ms.length + ' members share phone ' + maskPhone(p), detail: ms.map((m) => m.name).join(', ') }) })
-  const byName = {}
-  members.forEach((m) => { const n = (m.name || '').trim().toLowerCase(); if (n) (byName[n] = byName[n] || []).push(m) })
-  Object.values(byName).forEach((ms) => { const coops = Array.from(new Set(ms.map((m) => m.coop))); if (ms.length > 1 && coops.length > 1) flags.push({ severity: 'medium', type: 'Name across cooperatives', title: ms[0].name + ' appears in ' + coops.length + ' cooperatives', detail: coops.join(', ') }) })
-  const byMember = {}
-  loans.forEach((l) => { const k = l.memberId || l.memberName; if (k) (byMember[k] = byMember[k] || []).push(l) })
-  Object.values(byMember).forEach((ls) => { const active = ls.filter((l) => !['Declined', 'Completed', 'Default'].includes(l.status)); if (active.length > 1) flags.push({ severity: 'medium', type: 'Multiple applications', title: ls[0].memberName + ' has ' + active.length + ' active LASMECO applications', detail: active.map((l) => l.loanId + ' (' + l.status + ')').join(', ') }) })
-  loans.forEach((l) => { if ((l.schedule || []).length) { const rp = loanRepayState(l); if (l.status === 'Default') flags.push({ severity: 'high', type: 'Default', title: l.memberName + ' \u2014 loan ' + l.loanId + ' in default', detail: 'Outstanding ' + fmtNaira(rp.outstanding) }); else if (rp.arrears > 0) flags.push({ severity: 'medium', type: 'Arrears', title: l.memberName + ' \u2014 ' + l.loanId + ' in arrears', detail: fmtNaira(rp.arrears) + ' overdue' }) } })
-  loans.forEach((l) => { const m = members.find((x) => x.memberId === l.memberId || x.name === l.memberName); const turnover = m && m.msme ? m.msme.monthlyTurnover : 0; const req = l.amountRequested || 0; if (turnover > 0 && req > turnover * 18 && ['Applied', 'In training', 'Shortlisted'].includes(l.status)) flags.push({ severity: 'low', type: 'Exposure', title: l.memberName + ' requests ' + fmtNaira(req), detail: 'About ' + Math.round(req / turnover) + '\u00d7 monthly turnover (' + fmtNaira(turnover) + ')' }) })
-  const order = { high: 0, medium: 1, low: 2 }
-  return flags.sort((a, b) => order[a.severity] - order[b.severity])
-}
-function RiskPanel() {
-  const [data, setData] = useState(null)
-  useEffect(() => { Promise.all([listMembers(), listLoans()]).then(([m, l]) => setData(computeRiskFlags(m, l))) }, [])
-  if (!data) return <p className="muted-line">Assessing risk…</p>
-  const bySev = (s) => data.filter((f) => f.severity === s).length
-  return (
-    <div className="ws">
-      <div className="statgrid">
-        <div className="stat"><span className="stat-fig">{data.length}</span><span className="stat-lab">Total flags</span></div>
-        <div className="stat"><span className="stat-fig" style={bySev('high') ? { color: 'var(--err)' } : undefined}>{bySev('high')}</span><span className="stat-lab">High</span></div>
-        <div className="stat"><span className="stat-fig">{bySev('medium')}</span><span className="stat-lab">Medium</span></div>
-        <div className="stat"><span className="stat-fig">{bySev('low')}</span><span className="stat-lab">Low</span></div>
-      </div>
-      {data.length ? <div className="risk-list">{data.map((f, i) => (<div className="risk-item" key={i}><span className={cx('chip', f.severity === 'high' ? 'st-returned' : f.severity === 'medium' ? 'st-review' : 'st-filed')}>{f.severity}</span><div className="risk-body"><strong>{f.title}</strong><p>{f.type} &middot; {f.detail}</p></div></div>))}</div> : <div className="empty"><span className="empty-mark">&#9670;</span><h3>No risk flags</h3><p>No duplicate identifiers, arrears or anomalies detected in the current data.</p></div>}
-      <p className="panel-note">Heuristic monitoring on duplicate phones, repeated names, multiple applications, arrears and exposure. Production-grade duplicate BVN/NIN detection should run server-side through the KYC provider (numbers are not stored in the browser). Flags are advisory and warrant human review — not an accusation.</p>
-    </div>
-  )
-}
-const SLA_TARGETS = { approval: 14, grievance: 3, lasmeco: 30 }
-function daysBetween(a, b) { const d = (new Date(b).getTime() - new Date(a).getTime()) / 86400000; return isFinite(d) ? d : 0 }
-function slaMetrics(coops, tickets, loans) {
-  const nowISO = new Date().toISOString()
-  const avg = (arr) => arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : 0
-  const pct = (n, d) => d ? Math.round(n / d * 100) : 100
-  const decided = coops.filter((c) => ['Approved', 'Returned'].includes(c.status) && c.source !== 'SEKAT')
-  const appDays = decided.map((c) => daysBetween(c.createdAt, c.updatedAt)).filter((d) => d >= 0)
-  const pending = coops.filter((c) => ['Filed', 'Under review'].includes(c.status) && c.source !== 'SEKAT')
-  const pendingBreach = pending.filter((c) => daysBetween(c.createdAt, nowISO) > SLA_TARGETS.approval)
-  const resolved = tickets.filter((t) => t.status === 'Resolved')
-  const resDays = resolved.map((t) => daysBetween(t.createdAt, t.updatedAt)).filter((d) => d >= 0)
-  const openT = tickets.filter((t) => t.status !== 'Resolved')
-  const openBreach = openT.filter((t) => daysBetween(t.createdAt, nowISO) > SLA_TARGETS.grievance)
-  const disbursed = loans.filter((l) => ['Disbursed', 'Repaying', 'Completed'].includes(l.status))
-  const disbDays = disbursed.map((l) => daysBetween(l.createdAt, l.disbursedAt || l.updatedAt)).filter((d) => d >= 0)
-  const inPipe = loans.filter((l) => !['Disbursed', 'Repaying', 'Completed', 'Declined', 'Default'].includes(l.status))
-  const pipeBreach = inPipe.filter((l) => daysBetween(l.createdAt, nowISO) > SLA_TARGETS.lasmeco)
-  const breaching = [
-    ...pendingBreach.map((c) => ({ kind: 'Approval', label: c.name + ' (' + c.trackingId + ')', age: Math.round(daysBetween(c.createdAt, nowISO)), target: SLA_TARGETS.approval })),
-    ...openBreach.map((t) => ({ kind: 'Grievance', label: t.subject + ' (' + t.ticketId + ')', age: Math.round(daysBetween(t.createdAt, nowISO)), target: SLA_TARGETS.grievance })),
-    ...pipeBreach.map((l) => ({ kind: 'LASMECO', label: l.memberName + ' (' + l.loanId + ', ' + l.status + ')', age: Math.round(daysBetween(l.createdAt, nowISO)), target: SLA_TARGETS.lasmeco })),
-  ].sort((a, b) => (b.age - b.target) - (a.age - a.target))
-  return {
-    approval: { avg: avg(appDays), within: pct(appDays.filter((d) => d <= SLA_TARGETS.approval).length, appDays.length), decided: decided.length, pending: pending.length, breach: pendingBreach.length },
-    grievance: { avg: avg(resDays), within: pct(resDays.filter((d) => d <= SLA_TARGETS.grievance).length, resDays.length), resolved: resolved.length, open: openT.length, breach: openBreach.length },
-    lasmeco: { avg: avg(disbDays), within: pct(disbDays.filter((d) => d <= SLA_TARGETS.lasmeco).length, disbDays.length), disbursed: disbursed.length, inPipe: inPipe.length, breach: pipeBreach.length },
-    breaching,
-  }
-}
-function SLABlock({ title, target, unit, m }) {
-  return (
-    <section className="dash-card"><h3>{title}</h3>
-      <div className="sla-figs">
-        <div><span className="sla-fig">{m.avg ? m.avg.toFixed(1) : '\u2014'}</span><span className="sla-lab">Avg {unit}</span></div>
-        <div><span className="sla-fig" style={m.within < 80 ? { color: 'var(--gold-soft)' } : undefined}>{m.within}%</span><span className="sla-lab">Within {target}{unit === 'days' ? 'd' : ''}</span></div>
-        <div><span className="sla-fig" style={m.breach ? { color: 'var(--err)' } : undefined}>{m.breach}</span><span className="sla-lab">Breaching</span></div>
-      </div>
-    </section>
-  )
-}
-function GovernanceSLA() {
-  const [d, setD] = useState(null)
-  useEffect(() => { Promise.all([listCoops(), listTickets(), listLoans()]).then(([c, t, l]) => setD(slaMetrics(c, t, l))) }, [])
-  if (!d) return <p className="muted-line">Computing service levels…</p>
-  return (
-    <div className="ws">
-      <div className="dash-grid">
-        <SLABlock title="Cooperative approvals" target={SLA_TARGETS.approval} unit="days" m={d.approval} />
-        <SLABlock title="Grievance resolution" target={SLA_TARGETS.grievance} unit="days" m={d.grievance} />
-        <SLABlock title="LASMECO to disbursement" target={SLA_TARGETS.lasmeco} unit="days" m={d.lasmeco} />
-      </div>
-      <h3 className="ws-h" style={{ marginTop: '24px' }}>Breaching service levels now</h3>
-      {d.breaching.length ? <div className="risk-list">{d.breaching.map((x, i) => (<div className="risk-item" key={i}><span className="chip st-returned">{x.age}d</span><div className="risk-body"><strong>{x.label}</strong><p>{x.kind} &middot; target {x.target} days &middot; {x.age - x.target} days over</p></div></div>))}</div> : <div className="empty"><span className="empty-mark">&#9670;</span><h3>All within service levels</h3><p>No approvals, grievances or LASMECO cases are past target.</p></div>}
-      <p className="panel-note">Targets: approvals {SLA_TARGETS.approval} days, grievances {SLA_TARGETS.grievance} days, LASMECO {SLA_TARGETS.lasmeco} days. Measured from first record to decision or resolution. Adjust targets in SLA_TARGETS.</p>
-    </div>
-  )
-}
-async function exportMyData(ctx) {
-  const coops = (await listCoops()).filter((c) => c.createdBy === ctx.email)
-  const members = (await listMembers()).filter((m) => m.createdBy === ctx.email)
-  const activity = (await listAudit()).filter((a) => a.by === ctx.name)
-  return { exportedAt: new Date().toISOString(), controller: 'Ministry of Commerce, Cooperatives, Trade & Investment, Lagos State', account: { email: ctx.email, name: ctx.name, role: ctx.role }, cooperatives: coops, members, activity }
-}
-async function deleteMyData(ctx) {
-  const members = (await listMembers()).filter((m) => m.createdBy === ctx.email)
-  for (const m of members) await kvDelete('member:' + m.memberId)
-  if (supa) { await kvDelete('profile:' + ctx.uid) } else { const users = LS.get('coopeco.users', {}); delete users[ctx.email]; LS.set('coopeco.users', users) }
-}
-const consentGiven = () => LS.get('coopeco.consent', false)
-const setConsent = () => LS.set('coopeco.consent', true)
-
-/* ---------------------------- GDPR components -------------------------- */
-function ConsentBanner({ onOpenPrivacy }) {
-  const [show, setShow] = useState(!consentGiven())
-  if (!show) return null
-  return (
-    <div className="consent" role="dialog" aria-label="Data protection">
-      <p>We process personal data to administer cooperatives and, where you ask for finance, to assess eligibility. We keep it to what is needed and you can access or erase your data at any time.</p>
-      <div className="consent-actions">
-        <button className="link-inline" onClick={onOpenPrivacy}>Privacy notice</button>
-        <button className="btn btn-gold btn-sm" onClick={() => { setConsent(); setShow(false) }}>Accept</button>
-      </div>
-    </div>
-  )
-}
-function LoanCalculator() {
-  const [amt, setAmt] = useState('1000000'), [type, setType] = useState(LOAN_TYPES[0])
-  const v = loanVariant(type)
-  const a = Number(amt) || 0, t = v.tenor
-  const sched = a > 0 ? buildSchedule(a, t, 9, new Date().toISOString(), v.moratorium) : []
-  const firstPrincipalRow = sched.find((r) => !r.moratorium)
-  const monthly = firstPrincipalRow ? firstPrincipalRow.amount : 0
-  const morPay = sched.length ? sched[0].amount : 0
-  const total = sched.reduce((s, r) => s + r.amount, 0)
-  const b = loanBreakdown(a)
-  return (
-    <div className="returns-box"><h4>LASMECO repayment calculator</h4>
-      <div className="calc-row"><label className="field"><span>Amount (₦)</span><input type="number" value={amt} onChange={(e) => setAmt(e.target.value)} /></label><label className="field"><span>Product</span><select value={type} onChange={(e) => setType(e.target.value)}>{LOAN_TYPES.map((x) => <option key={x}>{x}</option>)}</select></label></div>
-      <div className="statgrid"><div className="stat"><span className="stat-fig">{fmtNaira(morPay)}</span><span className="stat-lab">Moratorium months ({v.moratorium}) — interest only</span></div><div className="stat"><span className="stat-fig">{fmtNaira(monthly)}</span><span className="stat-lab">Then monthly (principal + interest)</span></div><div className="stat"><span className="stat-fig">{fmtNaira(total)}</span><span className="stat-lab">Total repayable over {t} months</span></div><div className="stat"><span className="stat-fig">{fmtNaira(b.netToBorrower)}</span><span className="stat-lab">Net to you after fees</span></div></div>
-      <p className="panel-note">Indicative only, at 9% reducing balance with a {v.moratorium}-month principal moratorium (interest-only), then equal principal over the remaining term. One-off fees: ₦200,000 Accelerator and 1% BOI appraisal. Not a loan offer.</p>
-    </div>
-  )
-}
-function verifyStanding(s) { return s === 'Approved' ? 'Registered \u2014 approved' : ['Filed', 'Under review'].includes(s) ? 'Registration under review' : s === 'Returned' ? 'Returned for correction' : (s || '\u2014') }
-/* Public directory. Reads ONLY chain: records, which hold no personal or financial detail.
-   Aggregate counts are denormalised onto the chain by refreshChainStats() when staff view
-   the chains, so the public page never touches the cooperative or member tables. */
-async function refreshChainStats(chains, coops, members, loans) {
-  for (const c of chains) {
-    const m = chainMetrics(c, coops, members, loans)
-    const next = { coops: m.coops.length, members: m.members.length, jobs: m.jobs, turnover: m.turnover }
-    const prev = c.publicStats || {}
-    if (prev.coops !== next.coops || prev.members !== next.members || prev.jobs !== next.jobs || prev.turnover !== next.turnover) {
-      try { await kvSet('chain:' + c.chainId, { ...c, publicStats: next }) } catch (e) { /* not fatal */ }
-    }
-  }
-}
-function PublicChains() {
-  const [chains, setChains] = useState(null)
-  useEffect(() => { listChains().then((cs) => setChains(cs.filter((c) => c.status === 'Active'))).catch(() => setChains([])) }, [])
-  if (!chains || !chains.length) return null
-  return (
-    <section className="pub-chains">
-      <h2 className="pub-chains-h">Value chain cooperatives</h2>
-      <p className="pub-chains-sub">Registered cooperatives are organised into value chains so members can trade, buy inputs together and supply anchor buyers. If you are a buyer, supplier or investor looking to work with a chain, contact the Ministry.</p>
-      <div className="chain-grid">{chains.map((c) => (
-        <div className="chain-card static" key={c.chainId}>
-          <div className="chain-card-top"><h4>{c.name}</h4></div>
-          <p className="chain-card-sec">{c.sector}</p>
-          <p className="pub-stages">{(c.stages || []).join(' → ')}</p>
-          {c.publicStats && c.publicStats.coops ? <div className="chain-card-figs"><span><strong>{c.publicStats.coops}</strong> cooperatives</span><span><strong>{Number(c.publicStats.members || 0).toLocaleString('en-NG')}</strong> members</span><span><strong>{Number(c.publicStats.jobs || 0).toLocaleString('en-NG')}</strong> jobs</span></div> : <p className="muted-line sm">Open to cooperatives in this sector.</p>}
-          {c.anchor ? <p className="chain-card-turn">Anchor buyer: {c.anchor}</p> : null}
-        </div>))}</div>
-      <p className="panel-note">Chain listings show scale only. Member names, cooperative finances and contact details are not published.</p>
-    </section>
-  )
-}
-function PublicVerify({ onBack }) {
-  const [q, setQ] = useState(''), [results, setResults] = useState(null), [busy, setBusy] = useState(false)
-  const search = async () => {
-    const term = q.trim(); if (!term) return
-    setBusy(true)
-    const all = await listCoops()
-    const t = term.toLowerCase()
-    const found = all.filter((c) => (c.trackingId && c.trackingId.toLowerCase() === t) || (c.regNo && c.regNo.toLowerCase() === t) || (c.name && c.name.toLowerCase().includes(t)))
-    setResults(found); setBusy(false)
-  }
-  return (
-    <main className="verify-page"><div className="verify-inner">
-      <p className="eyebrow"><span className="eb-dot" />Public register</p>
-      <h1 className="verify-h">Verify a cooperative society</h1>
-      <p className="verify-sub">Check whether a cooperative is registered with the Lagos State Ministry of Commerce, Cooperatives, Trade &amp; Investment. Search by registration or tracking number, or by name.</p>
-      <div className="verify-search"><input value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && search()} placeholder="e.g. LAG-CS-24-000123 or society name" /><button className="btn btn-gold" onClick={search} disabled={busy}>{busy ? 'Searching\u2026' : 'Verify'}</button></div>
-      {results && (results.length ? (
-        <div className="verify-results">{results.slice(0, 8).map((c) => (
-          <div className="verify-card" key={c.trackingId}>
-            <div className="verify-card-top"><div><h3>{c.name}</h3><p className="detail-sub">{c.trackingId}{c.regNo ? ' \u00b7 ' + c.regNo : ''} · {c.areaOffice} area office · {c.sector}</p></div><StatusChip status={c.status} /></div>
-            <div className="verify-facts"><div><span>Standing</span><strong>{verifyStanding(c.status)}</strong></div><div><span>CAP15 compliance</span><strong>{c.cap15 || '\u2014'}</strong></div><div><span>Register source</span><strong>{c.source === 'SEKAT' ? 'SEKAT legacy register' : 'MCCTI register'}</strong></div></div>
-          </div>))}</div>
-      ) : <div className="verify-empty">No cooperative found for “{q}”. Check the number or name, or contact the Ministry to confirm.</div>)}
-      <p className="panel-note">This public check shows registration standing only. It does not disclose members, bank or financial details. It is not a substitute for official written confirmation from the Ministry.</p>
-      <PublicChains />
-      <button className="link-back" onClick={onBack}>&larr; Back to home</button>
-    </div></main>
-  )
-}
-function PrivacyNotice({ onBack }) {
-  const rows = [
-    ['Who we are', 'The Ministry of Commerce, Cooperatives, Trade and Investment, Lagos State Government, is the data controller. SEKAT and QooP act as processors under agreement.'],
-    ['What we collect', 'Account details, cooperative registration and governance records, and, for members, KYC identifiers and MSME profile data (turnover, employees, cash flow, sector) used for credit assessment.'],
-    ['Why, and our lawful basis', 'Public task (cooperative regulation under the Lagos CAP15 Cooperative Law) and your consent for credit assessment. We use only what is needed for each purpose.'],
-    ['Automated decisions', 'Credit scoring is explainable and advisory only. A cooperative officer reviews before any decision that affects access to LASMECO finance. You may request that review.'],
-    ['Your rights', 'Access, rectification, erasure, portability, restriction and objection. Use Download my data and Delete my data in your dashboard, or contact the Ministry.'],
-    ['Sharing and transfers', 'Data flows one way from SEKAT and QooP into MCCTI. It is not sold. Any transfer is governed by the relevant data-sharing agreement and NDPR.'],
-    ['Retention', 'Institutional cooperative records are retained under the Ministry’s public task. Personal member data is kept only as long as needed and then erased.'],
-  ]
-  return (
-    <main className="flow"><div className="flow-inner">
-      <button className="flow-back" onClick={onBack}>&larr; Back</button>
-      <p className="eyebrow"><span className="eb-dot" />Data protection</p>
-      <h1 className="flow-title">Privacy notice</h1>
-      <p className="flow-sub">How MCCTI CoopEco handles personal data, aligned with the NDPR and GDPR principles. This is a plain-language summary, not legal advice.</p>
-      <div className="privacy">{rows.map(([h, b]) => (<div className="privacy-row" key={h}><h4>{h}</h4><p>{b}</p></div>))}</div>
-    </div></main>
-  )
-}
-function DataControls({ ctx, onDeleted }) {
-  const [busy, setBusy] = useState(false), [confirm, setConfirm] = useState(false)
-  const doExport = async () => { const data = await exportMyData(ctx); downloadJson('my-coopeco-data.json', data) }
-  const doDelete = async () => { setBusy(true); await deleteMyData(ctx); setBusy(false); onDeleted() }
-  return (
-    <section className="dash-card data-controls">
-      <h3>Privacy &amp; your data</h3>
-      <p className="dash-card-sub">You can take a copy of your data or erase your personal data at any time (GDPR access, portability and erasure).</p>
-      <div className="dc-actions">
-        <button className="btn btn-outline btn-sm" onClick={doExport}>Download my data</button>
-        {!confirm ? <button className="btn btn-outline btn-sm" onClick={() => setConfirm(true)}>Delete my data</button> : (
-          <span className="dc-confirm">Erase personal data and account?<button className="btn btn-outline btn-sm" onClick={doDelete} disabled={busy}>{busy ? 'Erasing…' : 'Confirm'}</button><button className="link-inline" onClick={() => setConfirm(false)}>Cancel</button></span>
-        )}
-      </div>
-      <p className="panel-note">Institutional cooperative records are retained under the Ministry’s public task. Personal member data is erased. This is not legal advice.</p>
-    </section>
-  )
-}
-
-/* ---------------------------- QooP + members -------------------------- */
-function QoopPanel({ ctx, onSynced }) {
-  const [info, setInfo] = useState(null), [busy, setBusy] = useState(false)
-  const load = () => getIntegration('qoop').then(setInfo)
-  useEffect(() => { load() }, [])
-  const run = async () => { setBusy(true); await syncFromQoop(ctx, false); await load(); setBusy(false); onSynced && onSynced() }
-  return (
-    <div className="sekat">
-      <div className="sekat-flow"><div className="node src qoop">QooP<span>Member &amp; MSME analytics source</span></div><div className="flow-arrow">&rarr;<span>one-way</span></div><div className="node dst">MCCTI CoopEco<span>Unified analytics</span></div></div>
-      <div className="sekat-status"><div className="status-row"><span>Connection</span><span className={cx('pill', info?.live ? 'ok' : 'muted')}>{info?.live ? 'Live API' : 'Sample feed' + (hasSupabase ? '' : ' (demo)')}</span></div><div className="status-row"><span>Last sync</span><span className="mono">{info?.lastSync ? fmtDate(info.lastSync) : 'Never'}</span></div><div className="status-row"><span>Members ingested</span><span className="mono">{info?.count ?? 0}</span></div></div>
-      <button className="btn btn-gold btn-sm" onClick={run} disabled={busy}>{busy ? 'Syncing…' : 'Run QooP sync'}</button>
-      <p className="panel-note">Data flows one way, from QooP into MCCTI. Synced members are read-only here. When QOOP_API_URL and QOOP_API_KEY are set, the platform pulls live QooP analytics automatically; until then it ingests a representative sample mirroring the QooP dataset: KYC, turnover and cash flow, plus QooP-held financial behaviour — wallet and BNPL usage, savings, credit purchases, borrowing and on-time repayment history. Compliance: KYC and NDPR/GDPR handling governed by the QooP data-sharing agreement. This is not legal advice.</p>
-    </div>
-  )
-}
-function parseCSV(text) {
-  const rows = []; let row = [], field = '', inQ = false
-  for (let i = 0; i < text.length; i++) {
-    const c = text[i]
-    if (inQ) { if (c === '"') { if (text[i + 1] === '"') { field += '"'; i++ } else inQ = false } else field += c }
-    else if (c === '"') inQ = true
-    else if (c === ',') { row.push(field); field = '' }
-    else if (c === '\n' || c === '\r') { if (c === '\r' && text[i + 1] === '\n') i++; row.push(field); field = ''; if (row.some((x) => x !== '')) rows.push(row); row = [] }
-    else field += c
-  }
-  if (field !== '' || row.length) { row.push(field); if (row.some((x) => x !== '')) rows.push(row) }
-  return rows
-}
-function csvToObjects(text) { const rows = parseCSV(text); if (rows.length < 2) return []; const headers = rows[0].map((h) => h.trim()); return rows.slice(1).map((r) => { const o = {}; headers.forEach((h, i) => { o[h] = (r[i] || '').trim() }); return o }) }
-async function bulkImportCoops(objs, ctx) {
-  let n = 0
-  for (const o of objs) {
-    if (!o.name) continue
-    const id = genTrackingId(), now = new Date().toISOString()
-    await kvSet('coop:' + id, { trackingId: id, source: 'Bulk import', regNo: o.regNo || null, name: o.name, areaOffice: AREA_OFFICES.includes(o.areaOffice) ? o.areaOffice : AREA_OFFICES[1], sector: o.sector || 'Trade', custodian: o.custodian || '', members: Number(o.members) || 0, contributions: Number(o.contributions) || 0, status: o.status || 'Filed', cap15: 'Under audit', returns: null, feeStatus: '', createdBy: ctx.email, createdAt: now, updatedAt: now })
-    await addAudit({ trackingId: id, action: 'Imported via bulk upload', by: ctx.name, role: ctx.role, note: '' })
-    n++
-  }
-  return n
-}
-async function bulkImportMembers(objs, ctx) {
-  let n = 0
-  for (const o of objs) {
-    if (!o.name) continue
-    const id = 'M-' + String(Math.floor(Math.random() * 1000000)).padStart(6, '0'), now = new Date().toISOString()
-    await kvSet('member:' + id, { memberId: id, source: 'Bulk import', name: o.name, coop: o.coop || '', sector: o.sector || 'Trade', phone: o.phone || '', gender: o.gender || '', kyc: { bvnVerified: false, ninVerified: false, status: 'Unverified' }, msme: { monthlyTurnover: Number(o.monthlyTurnover) || 0, employees: Number(o.employees) || 0, cashFlow: Number(o.cashFlow) || 0, customerBase: Number(o.customerBase) || 0, yearsInOperation: Number(o.yearsInOperation) || 0 }, createdBy: ctx.email, createdAt: now })
-    n++
-  }
-  return n
-}
-function BulkImport({ ctx, onDone }) {
-  const [type, setType] = useState('coops'), [text, setText] = useState(''), [objs, setObjs] = useState(null), [busy, setBusy] = useState(false), [done, setDone] = useState(null)
-  const templates = { coops: 'name,areaOffice,sector,custodian,members,contributions\nIkeja Traders Coop,Ikeja,Trade,F. Ade,120,4500000', members: 'name,coop,sector,phone,monthlyTurnover,employees,cashFlow,customerBase,yearsInOperation\nJane Doe,Ikeja Traders Coop,Trade,08030000000,350000,3,120000,80,4' }
-  const onFile = (e) => { const f = e.target.files[0]; if (!f) return; const r = new FileReader(); r.onload = () => setText(String(r.result)); r.readAsText(f) }
-  const valid = objs ? objs.filter((o) => o.name) : []
-  const doImport = async () => { if (!valid.length) return; setBusy(true); const n = type === 'coops' ? await bulkImportCoops(valid, ctx) : await bulkImportMembers(valid, ctx); setDone(n); setObjs(null); setText(''); setBusy(false); onDone && onDone() }
-  return (
-    <div className="sekat">
-      <div className="bulk-type"><button className={cx('seg', type === 'coops' && 'on')} onClick={() => { setType('coops'); setObjs(null); setDone(null) }}>Cooperatives</button><button className={cx('seg', type === 'members' && 'on')} onClick={() => { setType('members'); setObjs(null); setDone(null) }}>Members</button></div>
-      <div className="bulk-actions"><input type="file" accept=".csv" onChange={onFile} /><button className="link-inline" onClick={() => { setText(templates[type]); setDone(null) }}>Load template</button></div>
-      <textarea className="bulk-text" rows={6} value={text} onChange={(e) => setText(e.target.value)} placeholder={'Paste CSV with headers: ' + templates[type].split('\n')[0]} />
-      <div className="panel-actions"><button className="btn btn-outline btn-sm" onClick={() => { setObjs(csvToObjects(text)); setDone(null) }} disabled={!text.trim()}>Preview</button>{valid.length ? <button className="btn btn-gold btn-sm" onClick={doImport} disabled={busy}>{busy ? 'Importing\u2026' : 'Import ' + valid.length + ' ' + type}</button> : null}</div>
-      {objs ? <p className="muted-line">{valid.length} valid row{valid.length === 1 ? '' : 's'}{objs.length - valid.length ? ', ' + (objs.length - valid.length) + ' skipped (missing name)' : ''}.</p> : null}
-      {valid.length ? <div className="rtable-wrap"><table className="rtable"><thead><tr>{Object.keys(valid[0]).slice(0, 6).map((h) => <th key={h}>{h}</th>)}</tr></thead><tbody>{valid.slice(0, 5).map((o, i) => <tr key={i}>{Object.keys(valid[0]).slice(0, 6).map((h) => <td key={h}>{o[h]}</td>)}</tr>)}</tbody></table></div> : null}
-      {done != null ? <p className="panel-note" style={{ color: 'var(--green)' }}>Imported {done} record{done === 1 ? '' : 's'}. They now appear in the registry{type === 'members' ? ' and member analytics' : ''}.</p> : null}
-      <p className="panel-note">Bulk import creates new records tagged “Bulk import”. Imported members are Unverified until KYC is run; imported cooperatives pass through the normal approval flow. De-duplicate and check the Risk &amp; fraud view before large batches.</p>
-    </div>
-  )
-}
-const SEED_MARKERS = ['integration:seed-v12', 'integration:accel-v8', 'integration:loandocs-v4', 'integration:snapshots-v1']
-/* Wipes the seed markers and re-runs seeding, so corrected sample data lands on a database
-   that was seeded by an older build. Only offered while DEMO_DATA is on. */
-async function rebuildDemoData() {
-  for (const k of SEED_MARKERS) { try { await kvDelete(k) } catch (e) { /* continue */ } }
-  return ensureSeedData()
-}
-async function removeDemoData() {
-  try { await clearPriorSeed() } catch (e) { /* best-effort */ }
-  for (const k of SEED_MARKERS) { try { await kvDelete(k) } catch (e) { /* continue */ } }
-}
-function DemoDataPanel({ ctx }) {
-  const [busy, setBusy] = useState(false), [dbSeed, setDbSeed] = useState('checking…')
-  const CURRENT_SEED = (SEED_MARKERS.find((m) => m.indexOf('seed-v') > -1) || 'integration:seed-v12').replace('integration:', '')
-  useEffect(() => { (async () => { const marks = []; for (let v = 20; v >= 1; v--) { if (await kvGet('integration:seed-v' + v)) { marks.push('seed-v' + v) } } setDbSeed(marks[0] || 'none') })() }, [])
-  if (isReviewer(ctx)) return null
-  const stale = dbSeed !== 'none' && dbSeed !== CURRENT_SEED && dbSeed !== 'checking…'
-  const rebuild = async () => {
-    if (!(await confirmDialog('Rebuild the sample data? Existing demo records are replaced with a fresh, corrected set. Records created by real users are not touched.', { confirmLabel: 'Rebuild' }))) return
-    setBusy(true)
-    try { await rebuildDemoData(); toast('Sample data rebuilt. Reloading…', 'success'); setTimeout(() => window.location.reload(), 900) } catch (e) { toast('Rebuild failed: ' + (e.message || 'unknown error'), 'error'); setBusy(false) }
-  }
-  const remove = async () => {
-    if (!(await confirmDialog('Delete every sample record from this database? Cooperatives, members and loans created by real users are kept. This cannot be undone.', { danger: true, confirmLabel: 'Delete sample data' }))) return
-    setBusy(true)
-    try { await removeDemoData(); toast('Sample data removed. Reloading…', 'success'); setTimeout(() => window.location.reload(), 900) } catch (e) { toast('Removal failed: ' + (e.message || 'unknown error'), 'error'); setBusy(false) }
-  }
-  return (
-    <div><h3 className="ws-h">Sample data</h3>
-      <div className="returns-box">
-        <div className={cx('kyc-status', DEMO_DATA ? 'pending' : 'ok')}>Sample data is {DEMO_DATA ? 'ON' : 'OFF'} · {hasSupabase ? 'connected to your database' : 'demo mode, no database connected'}{hasSupabase ? (DEMO_DATA ? ' · VITE_DEMO_DATA=true' : ' · VITE_DEMO_DATA is not set') : ''} · sample set: {dbSeed}</div>
-        {stale && DEMO_DATA ? <div className="kyc-status pending" style={{ marginTop: '8px' }}>Your saved sample data ({dbSeed}) is older than this build ({CURRENT_SEED}). Click <strong>Rebuild sample data</strong> below to refresh it — that is what brings the newest demo records (e.g. accelerator ratings and earnings) to life.</div> : null}
-        {stale && !DEMO_DATA ? <div className="kyc-status pending" style={{ marginTop: '8px' }}>Your saved sample data ({dbSeed}) is older than this build ({CURRENT_SEED}), but sample data is OFF so it will not refresh. Set VITE_DEMO_DATA=true in Vercel and redeploy, then use Rebuild sample data.</div> : null}
-        {DEMO_DATA ? (<>
-          <p className="muted-line">Demo records are seeded once and then left alone. If this database was seeded by an older build, some sample records may be incomplete — for example members with no LASMECO sector, which leaves the Health, Tourism and Digital Economy value chains empty. Rebuilding replaces the demo set with a corrected one.</p>
-          <div className="panel-actions"><button className="btn btn-outline btn-sm" disabled={busy} onClick={rebuild}>{busy ? 'Working…' : 'Rebuild sample data'}</button></div>
-        </>) : (<>
-          <p className="muted-line">The platform will not create any demo records. Note that demo records already saved in this database are <strong>not</strong> removed by switching sample data off — they stay until deleted.</p>
-          <p className="muted-line">To refresh or correct the sample set (for example to populate the Health value chain), add <strong>VITE_DEMO_DATA</strong> = <strong>true</strong> in Vercel → Settings → Environment Variables, redeploy, then return here and use “Rebuild sample data”.</p>
-          <div className="panel-actions"><button className="btn btn-outline btn-sm" disabled={busy} onClick={remove}>{busy ? 'Working…' : 'Remove sample data from this database'}</button></div>
-        </>)}
-        <p className="panel-note">Neither action touches cooperatives, members or loans created by real users on the platform.</p>
-      </div>
-    </div>
-  )
-}
-function IntegrationsPanel({ ctx, onSynced }) {
-  return (<div className="ws"><p className="muted-line">SEKAT and QooP sync automatically each time the platform loads (one-way, read-only). You can also trigger a manual re-sync below.</p><div><h3 className="ws-h">SEKAT integration &middot; registry</h3><SekatPanel ctx={ctx} onSynced={onSynced} /></div><div><h3 className="ws-h">QooP integration &middot; member analytics</h3><QoopPanel ctx={ctx} onSynced={onSynced} /></div><div><h3 className="ws-h">Bulk import &middot; migrate from CSV</h3><BulkImport ctx={ctx} onDone={onSynced} /></div><DemoDataPanel ctx={ctx} /></div>)
-}
-function CreditScoreCard({ m }) {
-  const r = scoreMember(m)
-  return (
-    <div className="score-card">
-      <div className="score-head">
-        <div className="score-num"><span className="score-val">{r.score}</span><span className="score-scale">/ 850</span></div>
-        <div className="score-meta"><StatusChip status={r.band} /><span className="score-cap">LASMECO indication up to <strong>{fmtNaira(r.threshold)}</strong></span></div>
-      </div>
-      <div className="score-factors">{r.factors.map((f) => (<div className="sf" key={f.label}><div className="sf-top"><span>{f.label}</span><span className="sf-val">{f.display}</span></div><div className="sf-bar"><span style={{ width: Math.max(4, f.pct) + '%' }} /></div></div>))}</div>
-      {m.qoop && (
-        <div className="qoop-profile"><span className="qoop-profile-lab">QooP financial profile</span><div className="qoop-grid">
-          <div><span>Savings</span><strong>{fmtNaira(m.qoop.savingsBalance)}</strong></div>
-          <div><span>Wallet / BNPL limit</span><strong>{m.qoop.walletActive ? fmtNaira(m.qoop.bnplLimit) : 'Inactive'}</strong></div>
-          <div><span>Credit purchases</span><strong>{m.qoop.creditPurchases}</strong></div>
-          <div><span>Outstanding credit</span><strong>{fmtNaira(m.qoop.creditOutstanding)}</strong></div>
-          <div><span>Loans taken</span><strong>{m.qoop.loansTaken}</strong></div>
-          <div><span>On-time repayment</span><strong>{m.qoop.onTimeRepaymentRate}%</strong></div>
-        </div></div>
-      )}
-      <p className="panel-note">Explainable and advisory. A cooperative officer reviews before this affects LASMECO eligibility (no solely automated decision). Summarised by MCCTI CoopEco.</p>
-    </div>
-  )
-}
-function MemberDetail({ m, onClose }) {
-  return (
-    <div className="detail">
-      <div className="detail-head"><div><h3>{m.name}</h3><p className="detail-sub">{m.coop} &middot; {m.sector}{m.ref ? ' · ' + m.ref : ''}</p></div><button className="link-back" onClick={onClose}>&larr; Back to list</button></div>
-      <div className="detail-chips"><StatusChip status={m.kyc?.status || 'Unverified'} kind="cap15" /><SourceBadge source={m.source} /></div>
-      {m.source === 'QOOP' && <div className="ro-note" style={{ marginTop: '16px' }}>Mirrored from QooP (read-only). KYC and MSME data are maintained in QooP and flow into MCCTI one way.</div>}
-      <div className="detail-grid" style={{ marginTop: '20px' }}>
-        <div className="field-ro"><span>Phone</span><strong>{m.phone || '—'}</strong></div>
-        <div className="field-ro"><span>Gender</span><strong>{m.gender || '—'}</strong></div>
-        <div className="field-ro"><span>Employees</span><strong>{m.msme?.employees ?? 0}</strong></div>
-        <div className="field-ro"><span>Years in operation</span><strong>{m.msme?.yearsInOperation ?? 0}</strong></div>
-        <div className="field-ro"><span>Monthly turnover</span><strong>{fmtNaira(m.msme?.monthlyTurnover)}</strong></div>
-        <div className="field-ro"><span>Cash flow</span><strong>{fmtNaira(m.msme?.cashFlow)}</strong></div>
-        <div className="field-ro"><span>Customer base</span><strong>{m.msme?.customerBase ?? 0}</strong></div>
-        <div className="field-ro"><span>KYC</span><strong>{m.kyc?.status || 'Unverified'}</strong></div>
-      </div>
-      <div className="returns-box" style={{ marginTop: '22px' }}><h4>Credit score</h4><CreditScoreCard m={m} /></div>
-    </div>
-  )
-}
-async function verifyKyc(type, value) {
-  if (!value) return { verified: false }
-  try { const r = await fetch('/api/kyc-verify', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ type, value }) }); return await r.json() } catch (e) { return { verified: /^\d{10,11}$/.test(String(value)), demo: true } }
-}
-function MemberOnboardingForm({ ctx, coops, onDone, onCancel }) {
-  const coopNames = Array.from(new Set(coops.map((c) => c.name)))
-  const [f, setF] = useState({ name: ctx.name || '', coop: coopNames[0] || '', sector: SECTORS[0], phone: '', gender: GENDERS[0], dob: '', address: '', memberSince: '', businessStart: '', bvn: '', nin: '', monthlyTurnover: '', employees: '', cashFlow: '', customerBase: '', yearsInOperation: '', consent: false })
-  const [busy, setBusy] = useState(false), [err, setErr] = useState(''), [done, setDone] = useState(null)
-  const set = (k) => (e) => setF({ ...f, [k]: e.target.type === 'checkbox' ? e.target.checked : e.target.value })
-  const submit = async () => {
-    setErr('')
-    if (!f.name.trim()) { setErr('Your name is required.'); return }
-    if (!f.consent) { setErr('Please consent to processing for credit assessment to continue.'); return }
-    setBusy(true)
-    try {
-      let bvnVerified, ninVerified
-      if (f.bvn) { const v = await verifyKyc('bvn', f.bvn); bvnVerified = v.verified }
-      if (f.nin) { const v = await verifyKyc('nin', f.nin); ninVerified = v.verified }
-      const rec = await createMember({ ...f, bvnVerified, ninVerified }, ctx); setDone(rec)
-    } catch (e) { setErr(e.message || 'Could not save your profile.') } setBusy(false)
-  }
-  if (done) return (<div className="panel"><div className="panel-head"><h3>Profile complete</h3><button className="link-back" onClick={() => onDone(done)}>Done</button></div><p className="panel-sub">{done.name} &middot; {done.coop}</p><CreditScoreCard m={done} /></div>)
-  return (
-    <div className="panel">
-      <div className="panel-head"><h3>Member onboarding &amp; MSME profile</h3><button className="link-back" onClick={onCancel}>Cancel</button></div>
-      <div className="form-grid">
-        <label className="field span2"><span>Full name</span><input value={f.name} onChange={set('name')} placeholder="Your name" /></label>
-        <label className="field"><span>Cooperative</span><select value={f.coop} onChange={set('coop')}>{coopNames.length ? coopNames.map((n) => <option key={n}>{n}</option>) : <option>Not yet a member</option>}</select></label>
-        <label className="field"><span>Enterprise sector</span><select value={f.sector} onChange={set('sector')}>{SECTORS.map((s) => <option key={s}>{s}</option>)}</select></label>
-        <label className="field"><span>Phone</span><input value={f.phone} onChange={set('phone')} placeholder="0803..." /></label>
-        <label className="field"><span>Gender</span><select value={f.gender} onChange={set('gender')}>{GENDERS.map((g) => <option key={g}>{g}</option>)}</select></label>
-        <label className="field"><span>Date of birth</span><input type="date" value={f.dob} onChange={set('dob')} /></label>
-        <label className="field span2"><span>Residential address</span><input value={f.address} onChange={set('address')} placeholder="House, street, area, LGA" /></label>
-        <label className="field"><span>Member of cooperative since</span><input type="date" value={f.memberSince} onChange={set('memberSince')} /></label>
-        <label className="field"><span>Business started (date)</span><input type="date" value={f.businessStart} onChange={set('businessStart')} /></label>
-        <label className="field"><span>BVN (KYC)</span><input value={f.bvn} onChange={set('bvn')} placeholder="11 digits" /></label>
-        <label className="field"><span>NIN (KYC)</span><input value={f.nin} onChange={set('nin')} placeholder="11 digits" /></label>
-        <label className="field"><span>Monthly turnover (₦)</span><input type="number" value={f.monthlyTurnover} onChange={set('monthlyTurnover')} placeholder="0" /></label>
-        <label className="field"><span>Employees</span><input type="number" value={f.employees} onChange={set('employees')} placeholder="0" /></label>
-        <label className="field"><span>Monthly cash flow (₦)</span><input type="number" value={f.cashFlow} onChange={set('cashFlow')} placeholder="0" /></label>
-        <label className="field"><span>Customer base</span><input type="number" value={f.customerBase} onChange={set('customerBase')} placeholder="0" /></label>
-        <label className="field"><span>Years in operation</span><input type="number" value={f.yearsInOperation} onChange={set('yearsInOperation')} placeholder="0" /></label>
-      </div>
-      <label className="consent-check"><input type="checkbox" checked={f.consent} onChange={set('consent')} /><span>I consent to the processing of my KYC and MSME data for cooperative administration and credit assessment. I understand a score is advisory and reviewed by an officer.</span></label>
-      {err && <p className="auth-err">{err}</p>}
-      <div className="panel-actions"><button className="btn btn-gold" onClick={submit} disabled={busy}>{busy ? 'Saving…' : 'Save profile & get score'}</button></div>
-      <p className="panel-note">KYC verification will run through a provider such as Smile ID or Dojah. This is not legal advice.</p>
-    </div>
-  )
-}
-function CoopLendingReadiness({ coop, ctx, onChanged }) {
-  const [docs, setDocs] = useState([]), [loans, setLoans] = useState([]), [busy, setBusy] = useState(false)
-  const reloadDocs = useCallback(() => { listDocs('coopaudit:' + coop.trackingId).then(setDocs); listLoans().then(setLoans) }, [coop.trackingId])
-  useEffect(() => { reloadDocs() }, [reloadDocs])
-  const audited = coopAuditApproved(coop, docs)
-  const admitted = coopAdmission(coop).admitted
-  const aged = coopCanIssueGuarantee(coop)
-  const room = coopGuaranteeRoom(coop, loans)
-  const ro = isReviewer(ctx)
-  const setEstablished = async () => {
-    const yes = await confirmDialog('Confirm this cooperative has been in existence for at least 1 year? MCCTI will verify this before it takes effect.', { confirmLabel: 'Confirm' })
-    if (!yes) return
-    setBusy(true); await updateCoop(coop.trackingId, { established12: true, establishedClaim: true }, ctx, 'Established-1yr claimed'); setBusy(false); onChanged && onChanged(); toast('Recorded. Awaiting MCCTI confirmation.')
-  }
-  return (
-    <div className="ws">
-      <p className="muted-line">Before your members can apply for LASMECO finance, your cooperative must be admitted by MCCTI, have an MCCTI-approved independent audit on file, and have existed for at least one year to issue the 25% guarantee.</p>
-      <div className="returns-box"><h4>Lending readiness</h4>
-        <div className="kyc-check">
-          <div className={cx('kyc-item', admitted && 'ok')}><span className="kyc-mark">{admitted ? '\u2713' : '\u25cb'}</span><span className="kyc-label">Admitted to the LASMECO scheme by MCCTI</span></div>
-          <div className={cx('kyc-item', audited && 'ok')}><span className="kyc-mark">{audited ? '\u2713' : '\u25cb'}</span><span className="kyc-label">Independent audit approved by MCCTI{docs.some((d) => d.category === COOP_AUDIT_DOC && !d.verified) ? ' \u2014 uploaded, awaiting MCCTI approval' : ''}</span></div>
-          <div className={cx('kyc-item', aged && 'ok')}><span className="kyc-mark">{aged ? '\u2713' : '\u25cb'}</span><span className="kyc-label">In existence for at least 1 year</span></div>
-        </div>
-        <div className={cx('kyc-status', (admitted && audited && aged) ? 'ok' : 'pending')}>{(admitted && audited && aged) ? 'Ready \u2014 your members can apply for LASMECO finance.' : 'Not yet ready \u2014 complete the items above.'}</div>
-      </div>
-      <div className="returns-box"><h4>Guarantee capacity</h4>
-        <div className="statgrid">
-          <div className="stat"><span className="stat-fig">{fmtNaira(room.pool)}</span><span className="stat-lab">Members’ contributions (pool)</span></div>
-          <div className="stat"><span className="stat-fig">{fmtNaira(room.used)}</span><span className="stat-lab">Guarantees committed</span></div>
-          <div className="stat"><span className="stat-fig" style={{ color: 'var(--green)' }}>{fmtNaira(room.available)}</span><span className="stat-lab">Available to guarantee</span></div>
-        </div>
-        <p className="panel-note">Your cooperative can guarantee 25% of members\u2019 loans up to the size of its contributions. For example, a {fmtNaira(1000000)} pool can back four {fmtNaira(1000000)} facilities (each needs a {fmtNaira(250000)} guarantee). Completed loans free up capacity.</p>
-      </div>
-      {!aged && !ro && <div className="returns-box"><h4>Confirm year of establishment</h4><p className="muted-line">If your cooperative has existed for at least a year, record it here. MCCTI confirms before it takes effect.</p><div className="panel-actions"><button className="btn btn-outline btn-sm" disabled={busy} onClick={setEstablished}>Confirm 1+ year in existence</button></div></div>}
-      <div className="returns-box"><h4>Independent audit</h4>
-        <p className="muted-line">Upload your latest independent audit (annual). MCCTI reviews and approves it; approval unlocks LASMECO applications for your members.</p>
-        <DocumentsPanel coopId={'coopaudit:' + coop.trackingId} ctx={ctx} canVerify={false} canUpload={!ro && coop.source !== 'SEKAT'} categories={[COOP_AUDIT_DOC]} onChange={reloadDocs} />
-      </div>
-    </div>
-  )
-}
-function GuaranteeAssessment({ gr, coop, loans, onUse }) {
-  const [member, setMember] = useState(null), [result, setResult] = useState(null), [busy, setBusy] = useState(false)
-  useEffect(() => { listMembers().then((ms) => setMember(ms.find((m) => m.memberId === gr.memberId) || null)) }, [gr.memberId])
-  const assess = async () => {
-    if (!member) { toast('Member record not found.', 'error'); return }
-    setBusy(true); setResult(null)
-    const f = guaranteeAssessmentFacts(member, coop, loans)
-    const prompt = 'You are advising the leadership of a Nigerian cooperative society deciding whether to grant a 25% loan guarantee to one of its members under the Lagos State LASMECO scheme. Give a brief, balanced assessment (about 90-130 words) of whether this member appears to merit the guarantee, then a final line "Suggestion: <lean approve / lean decline / borderline>". Be fair and factual; the human makes the final decision. Consider: time in the cooperative (rule: 6+ months), time in business (rule: 12+ months), contributions to the cooperative, business turnover and scale, and whether the cooperative has capacity. Facts (Naira amounts in NGN):\n' + JSON.stringify(f, null, 2) + '\nRequested facility: ' + gr.amount + ' (25% guarantee = ' + gr.guarantee + '). Do not invent facts beyond those given. If contributions data is zero or missing, note that it should be confirmed manually.'
-    try { const text = await callClaude(prompt, 600); setResult(text || 'No assessment returned.') }
-    catch (e) { setResult(null); toast('Could not generate the assessment. You can still approve manually.', 'error') }
-    finally { setBusy(false) }
-  }
-  return (
-    <div className="ai-assess">
-      <div className="ai-assess-head"><span className="ai-tag">AI assessment</span><button className="btn btn-outline btn-sm" disabled={busy} onClick={assess}>{busy ? 'Assessing…' : result ? 'Re-assess' : 'Assess this member'}</button></div>
-      {result ? <div className="ai-assess-body"><p>{result}</p><div className="panel-actions"><button className="link-inline" onClick={() => onUse(result.replace(/\nSuggestion:.*/i, '').trim())}>Use as basis of approval</button></div><p className="ai-note">Advisory only. The decision and its recorded justification remain yours.</p></div> : <p className="ai-note">Generates a balanced view from the member’s tenure, contributions and business, to support your decision. It does not approve anything.</p>}
-    </div>
-  )
-}
-function CoopGuaranteeApprovals({ coop, ctx }) {
-  const [reqs, setReqs] = useState(null), [loans, setLoans] = useState([]), [busy, setBusy] = useState(''), [evidence, setEvidence] = useState({})
-  const reload = useCallback(() => { listGuaranteeRequests(coop.name).then(setReqs); listLoans().then(setLoans) }, [coop.name])
-  useEffect(() => { reload() }, [reload])
-  const ro = isReviewer(ctx)
-  const canApprove = !ro && (ctx.role === 'society' || ctx.role === 'leadership')
-  if (!reqs) return <p className="muted-line">Loading guarantee requests…</p>
-  const decide = (gr, ok) => async () => {
-    if (ok) {
-      const chk = canCoopGuarantee(coop, gr.amount, loans)
-      if (!chk.fits) { toast('Approving this would exceed your guarantee ceiling (' + fmtNaira(chk.available) + ' available). It cannot be approved until capacity frees up.', 'error'); return }
-      if (!(evidence[gr.grId] || '').trim()) { toast('Add the basis for approval (e.g. member contributions, standing) before approving.', 'error'); return }
-    }
-    setBusy(gr.grId)
-    await saveGuaranteeRequest({ ...gr, status: ok ? 'Approved' : 'Declined', approvedAt: ok ? new Date().toISOString() : undefined, approvedByName: ctx.name, evidence: ok ? evidence[gr.grId] : gr.evidence }, ctx, ok ? 'Guarantee approved' : 'Guarantee declined')
-    try { await notify({ to: gr.requestedBy, title: ok ? 'Guarantee approved' : 'Guarantee request declined', body: ok ? 'Your cooperative approved a 25% guarantee of ' + fmtNaira(gr.guarantee) + '. Download your guarantee letter and upload it with your LASMECO documents.' : 'Your guarantee request was not approved at this time. Please discuss with your cooperative leadership.', event: 'guarantee', link: { section: 'finance', label: 'Go to LASMECO finance' } }) } catch (e) { /* best-effort */ }
-    setBusy(''); reload()
-    toast(ok ? 'Approved. A guarantee letter is now available to the member.' : 'Request declined.', ok ? 'success' : 'info')
-  }
-  const pending = reqs.filter((g) => g.status === 'Pending')
-  const decided = reqs.filter((g) => g.status !== 'Pending')
-  const room = coopGuaranteeRoom(coop, loans)
-  return (
-    <div className="ws">
-      <p className="muted-line">Members request a 25% guarantee before they can apply for LASMECO finance. Approvals here generate the guarantee letter the member uploads with their application. You have {fmtNaira(room.available)} of guarantee capacity available.</p>
-      <div className="returns-box"><h4>Awaiting approval ({pending.length})</h4>
-        {pending.length ? pending.map((gr) => { const chk = canCoopGuarantee(coop, gr.amount, loans); return (
-          <div className="gr-item" key={gr.grId}>
-            <div className="gr-head"><strong>{gr.memberName}</strong><span>{fmtNaira(gr.amount)} facility · 25% guarantee {fmtNaira(gr.guarantee)}</span></div>
-            {!chk.fits && <div className="kyc-status pending">This exceeds available capacity ({fmtNaira(chk.available)}). Cannot approve until capacity frees up.</div>}
-            {canApprove && chk.fits && <><GuaranteeAssessment gr={gr} coop={coop} loans={loans} onUse={(text) => setEvidence({ ...evidence, [gr.grId]: ((evidence[gr.grId] || '') + (evidence[gr.grId] ? ' ' : '') + text).trim() })} /><label className="field"><span>Basis of approval (evidence)</span><textarea rows={2} value={evidence[gr.grId] || ''} onChange={(e) => setEvidence({ ...evidence, [gr.grId]: e.target.value })} placeholder="e.g. Member contributions of N320,000 over 18 months; consistent savings; good standing." /></label>
-            <div className="panel-actions"><button className="btn btn-gold btn-sm" disabled={busy === gr.grId} onClick={decide(gr, true)}>Approve &amp; generate letter</button><button className="btn btn-ghost btn-sm" disabled={busy === gr.grId} onClick={decide(gr, false)}>Decline</button></div></>}
-          </div>) }) : <p className="muted-line">No requests awaiting approval.</p>}
-      </div>
-      {decided.length ? <div className="returns-box"><h4>Decided</h4>{decided.map((gr) => (
-        <div className="gr-item" key={gr.grId}><div className="gr-head"><strong>{gr.memberName}</strong><span className={cx('chip', gr.status === 'Approved' ? 'st-approved' : 'st-review')}>{gr.status}</span></div><span className="gr-sub">{fmtNaira(gr.amount)} · guarantee {fmtNaira(gr.guarantee)}{gr.evidence ? ' · ' + gr.evidence : ''}</span>{gr.status === 'Approved' && <div className="panel-actions"><button className="link-inline" onClick={() => downloadGuaranteeLetter(gr, coop)}>Download letter</button></div>}</div>))}</div> : null}
-    </div>
-  )
-}
-function MemberGuaranteeStatus({ member, coop, loans, ctx }) {
-  const [reqs, setReqs] = useState(null), [amt, setAmt] = useState(''), [busy, setBusy] = useState(false)
-  const reload = useCallback(() => listGuaranteeRequests(member.coop).then((all) => setReqs(all.filter((g) => g.memberId === member.memberId))), [member.coop, member.memberId])
-  useEffect(() => { reload() }, [reload])
-  const request = async () => {
-    const n = Number(amt)
-    if (!n || n <= 0) { toast('Enter the amount you want to apply for.', 'error'); return }
-    if (n > LOAN_MAX) { toast('The maximum LASMECO facility is ' + fmtNaira(LOAN_MAX) + '.', 'error'); return }
-    const chk = canCoopGuarantee(coop, n, loans)
-    if (!chk.fits) {
-      toast('The cooperative you belong to cannot grant you a 25% guarantee at this point due to reaching a maximum ceiling. Discuss with Leadership or try again later.', 'error')
-      return
-    }
-    setBusy(true)
-    await saveGuaranteeRequest({ memberId: member.memberId, memberName: member.name, coop: member.coop, amount: n, guarantee: chk.need, status: 'Pending', requestedBy: ctx.email }, ctx, 'Guarantee requested')
-    try { await notify({ to: 'society@' + (coop.trackingId || 'coop'), title: 'Guarantee request', body: member.name + ' has requested a 25% guarantee for ' + fmtNaira(n) + '.', event: 'guarantee', link: { section: 'guarantees', label: 'Review guarantee requests' } }) } catch (e) { /* best-effort */ }
-    setBusy(false); setAmt(''); reload()
-    toast('Guarantee request sent to your cooperative leadership for approval.', 'success')
-  }
-  if (!reqs) return null
-  const approved = reqs.find((g) => g.status === 'Approved')
-  const pending = reqs.find((g) => g.status === 'Pending')
-  const room = coopGuaranteeRoom(coop, loans)
-  return (
-    <div className="guarantee-status">
-      <div className="gs-line"><span>Cooperative guarantee capacity</span><strong>{fmtNaira(room.available)} available</strong></div>
-      {(member.savingsTotal || member.monthlyContribution) ? <p className="chart-note">Your contributions: {fmtNaira(member.savingsTotal || 0)} total{member.monthlyContribution ? ' (' + fmtNaira(member.monthlyContribution) + '/month' : ''}{member.contributionConsistency ? ', ' + member.contributionConsistency + '% consistency)' : (member.monthlyContribution ? ')' : '')}. In your cooperative {memberCoopMonths(member)} months; in business {memberBusinessMonths(member)} months.</p> : null}
-      <p className="chart-note">Your cooperative can guarantee 25% of members\u2019 loans up to its contributions of {fmtNaira(room.pool)}. {fmtNaira(room.used)} is already committed.</p>
-      {approved ? (
-        <div className="gs-approved"><span className="req-tag ok">Guarantee approved</span><p>Your 25% guarantee of {fmtNaira(approved.guarantee)} for a {fmtNaira(approved.amount)} facility has been approved by your cooperative. Download the letter and upload it with your LASMECO documents.</p><button className="btn btn-outline btn-sm" onClick={() => downloadGuaranteeLetter(approved, coop)}>Download guarantee letter</button></div>
-      ) : pending ? (
-        <div className="gs-pending"><span className="req-tag">Awaiting approval</span><p>Your guarantee request for {fmtNaira(pending.amount)} is with your cooperative leadership. You can apply once it is approved and you have the letter.</p></div>
-      ) : (
-        <div className="gs-request"><h5>Request your 25% cooperative guarantee</h5><p className="chart-note">Enter the facility amount you intend to apply for. Your cooperative guarantees 25% of it.</p>
-          <div className="wallet-actions"><input type="number" value={amt} onChange={(e) => setAmt(e.target.value)} placeholder={'Amount up to ' + LOAN_MAX} /><button className="btn btn-gold btn-sm" disabled={busy} onClick={request}>Request guarantee</button></div>
-        </div>
-      )}
-    </div>
-  )
-}
-function MemberWorkspace({ ctx, section }) {
-  const [members, setMembers] = useState(null), [coops, setCoops] = useState([]), [loans, setLoans] = useState([]), [auditDocs, setAuditDocs] = useState({})
-  const [mode, setMode] = useState('view'), [sel, setSel] = useState(null)
-  const reload = useCallback(() => { listMembers().then(setMembers); listCoops().then(setCoops); listLoans().then(setLoans) }, [])
-  useEffect(() => { reload() }, [reload])
-  useEffect(() => { (async () => { const me = members && (ctx.focusId ? members.find((m) => m.memberId === ctx.focusId) : members.find((m) => m.createdBy === ctx.email)); if (!me) return; const c = coops.find((x) => x.name === me.coop); if (c) { try { const ds = await listDocs('coopaudit:' + c.trackingId); setAuditDocs((a) => ({ ...a, [c.trackingId]: ds })) } catch (e) { /* ignore */ } } })() }, [members, coops, ctx.focusId, ctx.email])
-  if (!members) return <p className="muted-line">Loading…</p>
-  const mine = ctx.focusId ? members.find((m) => m.memberId === ctx.focusId) : members.find((m) => m.createdBy === ctx.email)
-  const myLoans = mine ? loans.filter((l) => l.memberId === mine.memberId || (l.memberName === mine.name)) : []
-  if (mode === 'onboard') return <MemberOnboardingForm ctx={ctx} coops={coops} onCancel={() => setMode('view')} onDone={() => { setMode('view'); reload() }} />
-  if (mode === 'apply' && mine) return <LoanApplyForm ctx={ctx} member={mine} onCancel={() => setMode('view')} onDone={() => { setMode('view'); reload() }} />
-  if (sel) return <LoanDetail loan={sel} ctx={ctx} onClose={() => { setSel(null); reload() }} onChanged={reload} />
-  if (!mine) return (
-    <div className="empty"><span className="empty-mark">&#9670;</span><h3>Complete your member profile</h3><p>Onboard once with your KYC and MSME details. You get an explainable credit score and a route to LASMECO finance. Your data is processed with your consent and you can erase it anytime.</p><button className="btn btn-gold" onClick={() => setMode('onboard')}>Start onboarding</button></div>
-  )
-  return (
-    <div className="ws">
-      {section === 'overview' && <MemberOverview mine={mine} loans={myLoans} />}
-      {section === 'wallet' && <div className="returns-box"><h4>Wallet &amp; savings</h4><MemberWallet member={mine} /></div>}
-      {section === 'chains' && <ChainsPanel ctx={{ ...ctx, coopName: mine.coop }} />}
-      {section === 'finance' && (() => {
-        const myCoop = coops.find((c) => c.name === mine.coop)
-        const tenure = memberTenureEligible(mine)
-        const ready = coopLendingReady(myCoop, myCoop && auditDocs[myCoop.trackingId])
-        const applyGate = () => {
-          if (!tenure.eligible) { toast('You are not yet eligible to access LASMECO Financing. You need to be ' + tenure.reasons.join(', and ') + '.', 'error'); return }
-          if (!ready.ready) { toast('Your cooperative must first ' + ready.reasons.join(', ') + ' before its members can apply.', 'error'); return }
-          setMode('apply')
-        }
-        return (<>
-        <div className="society-card">
-          <div className="society-top"><div><h3>{mine.name}</h3><p className="detail-sub">{mine.coop} &middot; {mine.sector}{mine.ref ? ' \u00b7 ' + mine.ref : ''}</p></div><div className="detail-chips"><StatusChip status={mine.kyc?.status || 'Unverified'} kind="cap15" /><SourceBadge source={mine.source} /></div></div>
-          <div className="society-actions"><button className={cx('btn', 'btn-sm', (tenure.eligible && ready.ready) ? 'btn-gold' : 'btn-disabled')} disabled={!tenure.eligible || !ready.ready} onClick={applyGate}>Apply for LASMECO finance</button></div>
-          {!tenure.eligible && <p className="gate-note">You are not yet eligible. You need to be {tenure.reasons.join(', and ')}.</p>}
-          {tenure.eligible && !ready.ready && <p className="gate-note">Your cooperative must first {ready.reasons.join(', ')} before you can apply.</p>}
-          {tenure.eligible && ready.ready && <MemberGuaranteeStatus member={mine} coop={myCoop} loans={loans} ctx={ctx} />}
-        </div>
-        <div className="returns-box"><h4>Your credit score</h4><CreditScoreCard m={mine} /></div>
-        <LoanCalculator />
-        <div className="trail-box"><h4>Your LASMECO applications</h4>{myLoans.length ? <LoanTable loans={myLoans} onOpen={setSel} /> : <p className="muted-line">No applications yet. Apply above; there are no upfront fees.</p>}</div>
-      </>) })()}
-    </div>
-  )
-}
-function MembersAnalytics() {
-  const [members, setMembers] = useState(null), [sel, setSel] = useState(null)
-  useEffect(() => { listMembers().then(setMembers) }, [])
-  if (!members) return <p className="muted-line">Loading members…</p>
-  if (sel) return <MemberDetail m={sel} onClose={() => setSel(null)} />
-  if (!members.length) return <p className="muted-line">No members yet. Run a QooP sync from Integrations.</p>
-  const scored = members.map((m) => ({ m, s: scoreMember(m) }))
-  const verified = members.filter((m) => m.kyc?.status === 'Verified').length
-  const avg = Math.round(scored.reduce((a, x) => a + x.s.score, 0) / scored.length)
-  const eligible = scored.filter((x) => x.s.band === 'Prime' || x.s.band === 'Strong').length
-  const bands = ['Prime', 'Strong', 'Fair', 'Building', 'Thin file'].map((b) => [b, scored.filter((x) => x.s.band === b).length]).filter(([, n]) => n)
-  return (
-    <div className="ws">
-      <div className="statgrid"><div className="stat"><span className="stat-fig">{members.length}</span><span className="stat-lab">Members</span></div><div className="stat"><span className="stat-fig">{verified}</span><span className="stat-lab">KYC verified</span></div><div className="stat"><span className="stat-fig">{avg}</span><span className="stat-lab">Average score</span></div><div className="stat"><span className="stat-fig">{eligible}</span><span className="stat-lab">LASMECO-ready</span></div></div>
-      <div className="band-dist">{bands.map(([b, n]) => (<div className="bd" key={b}><StatusChip status={b} /><span className="bd-n">{n}</span></div>))}</div>
-      <div className="rtable-wrap"><table className="rtable"><thead><tr><th>Member</th><th>Cooperative</th><th>Sector</th><th>KYC</th><th>Score</th><th>Band</th><th></th></tr></thead>
-        <tbody>{scored.map(({ m, s }) => (<tr key={m.memberId}><td className="td-name">{m.name}<SourceBadge source={m.source} /></td><td>{m.coop}</td><td>{m.sector}</td><td>{m.kyc?.status || 'Unverified'}</td><td className="mono">{s.score}</td><td><StatusChip status={s.band} /></td><td><button className="btn-open" onClick={() => setSel(m)}>Open</button></td></tr>))}</tbody>
-      </table></div>
-    </div>
-  )
-}
-function ViewAsSwitcher({ onViewAs }) {
-  const [coops, setCoops] = useState([]), [members, setMembers] = useState([]), [q, setQ] = useState('')
-  useEffect(() => { listCoops().then(setCoops); listMembers().then(setMembers) }, [])
-  const ql = q.trim().toLowerCase()
-  const fc = coops.filter((c) => !ql || c.name.toLowerCase().includes(ql))
-  const fm = members.filter((m) => !ql || m.name.toLowerCase().includes(ql))
-  return (
-    <div className="viewas">
-      <input className="viewas-search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search societies and members…" />
-      <div className="viewas-cols">
-        <div><h4 className="ws-h">Cooperative societies</h4><div className="viewas-list">{fc.slice(0, 12).map((c) => (<button key={c.trackingId} className="viewas-item" onClick={() => onViewAs({ role: 'society', name: c.name, email: c.createdBy, focusId: c.trackingId, office: c.areaOffice + ' area office', title: 'Cooperative Society' })}><span>{c.name}<SourceBadge source={c.source} /></span><span className="va-go">View as &rarr;</span></button>))}</div></div>
-        <div><h4 className="ws-h">Members</h4><div className="viewas-list">{fm.slice(0, 12).map((m) => (<button key={m.memberId} className="viewas-item" onClick={() => onViewAs({ role: 'member', name: m.name, email: m.createdBy, focusId: m.memberId, office: m.coop, title: 'Cooperative Member' })}><span>{m.name}<SourceBadge source={m.source} /></span><span className="va-go">View as &rarr;</span></button>))}</div></div>
-      </div>
-    </div>
-  )
-}
-
-
-/* =============================== STAGE 5 ===============================
-   LASMECO Financing. The application-to-disbursement pipeline across the
-   Accelerator, the Directorate (officer), the bank/BOI (financial partner) and
-   leadership, with the guarantee stack, the success-based fees, and human
-   approval at final approval and disbursement. Plus cooperative join fees.
-   ====================================================================== */
-
-const COOP_FEES = { registration: 50000, annualReturns: 15000 } // NGN, from the platform revenue model
-const LOAN_TYPES = ['Working Capital (24 months, 3-month moratorium)', 'Asset Finance / Term Loan (36 months, 6-month moratorium)']
-const LOAN_VARIANTS = {
-  'Working Capital (24 months, 3-month moratorium)': { tenor: 24, moratorium: 3, capHigh: 0.30, capLow: 0.15, label: 'Working Capital' },
-  'Asset Finance / Term Loan (36 months, 6-month moratorium)': { tenor: 36, moratorium: 6, capHigh: 0.50, capLow: 0.25, label: 'Asset Finance' },
-}
-function loanVariant(type) { return LOAN_VARIANTS[type] || LOAN_VARIANTS[LOAN_TYPES[0]] }
-// RAC facility limit: % of average monthly credit turnover over 12 months (full cap if >=70% consistency in 8/12 months, else reduced cap). We annualise the average monthly turnover figure on file. NOTE: confirm monthly-vs-annualised basis with Sterling.
-function facilityLimit(member, type, consistent) {
-  const v = loanVariant(type)
-  const monthly = (member && member.msme && member.msme.monthlyTurnover) || 0
-  const cap = consistent === false ? v.capLow : v.capHigh
-  return Math.min(10000000, Math.round(monthly * 12 * cap))
-}
-const AP_STATUSES = ['Applied', 'In training', 'Shortlisted']
-const PARTNER_STATUSES = ['Coop validated', 'Bank assessment', 'BOI approved']
-const LOAN_MAX = 10000000
-function loanBreakdown(amount) {
-  const a = Number(amount) || 0
-  return { amount: a, collateral: Math.round(a * 0.10), coopGuarantee: Math.round(a * 0.25), sterlingGuarantee: Math.round(a * 0.50), lien: Math.round(a * 0.15), apFee: 200000, boiFee: Math.round(a * 0.01), netToBorrower: Math.max(0, a - 200000 - Math.round(a * 0.01)), rate: 9 }
-}
-function buildSchedule(principal, tenor, annualRatePct, startISO, moratorium) {
-  const P = Number(principal) || 0, n = Math.max(1, Number(tenor) || 12), r = (Number(annualRatePct) || 9) / 100 / 12
-  const mor = Math.min(n - 1, Math.max(0, Number(moratorium) || 0))
-  const payMonths = Math.max(1, n - mor)
-  const pay = r > 0 ? P * r / (1 - Math.pow(1 + r, -payMonths)) : P / payMonths
-  const start = new Date(startISO || Date.now()), rows = []
-  let bal = P
-  for (let i = 1; i <= n; i++) {
-    const interest = r > 0 ? bal * r : 0
-    let principalPart = (i <= mor) ? 0 : (i === n ? bal : pay - interest)
-    bal = Math.max(0, bal - principalPart)
-    const due = new Date(start); due.setMonth(due.getMonth() + i)
-    rows.push({ n: i, dueDate: due.toISOString(), amount: Math.round(principalPart + interest), interest: Math.round(interest), principal: Math.round(principalPart), balance: Math.round(bal), moratorium: i <= mor })
-  }
-  return rows
-}
-function loanRepayState(l) {
-  const schedule = l.schedule || []
-  const totalDue = schedule.reduce((a, s) => a + s.amount, 0)
-  const paid = (l.repayments || []).reduce((a, p) => a + (Number(p.amount) || 0), 0)
-  const outstanding = Math.max(0, totalDue - paid)
-  const now = Date.now()
-  const dueToDate = schedule.filter((s) => new Date(s.dueDate).getTime() <= now).reduce((a, s) => a + s.amount, 0)
-  const arrears = Math.max(0, Math.min(outstanding, dueToDate - paid))
-  let cum = 0, nextDue = null
-  for (const s of schedule) { cum += s.amount; if (cum > paid) { nextDue = s; break } }
-  const instStatus = (s) => { let c = 0; for (const x of schedule) { c += x.amount; if (x.n === s.n) break } return c <= paid ? 'Paid' : (new Date(s.dueDate).getTime() < now ? 'Overdue' : 'Due') }
-  return { schedule, totalDue, paid, outstanding, arrears, nextDue, instStatus, tenor: schedule.length }
-}
-function recoveryPlan(outstanding, b) {
-  let rem = Number(outstanding) || 0
-  const collateral = Math.min(rem, b.collateral); rem -= collateral
-  const coop = Math.min(rem, b.coopGuarantee); rem -= coop
-  const sterling = Math.min(rem, b.sterlingGuarantee); rem -= sterling
-  return { collateral, coop, sterling, shortfall: Math.max(0, rem) }
-}
-/* ---- RAC governance: tiers, NPL, security, BOI fee ----------------------- */
-const COOP_TIERS = { A: { cap: 20, label: 'Tier A \u2013 Strong Liquidity Partner' }, B: { cap: 10, label: 'Tier B \u2013 Stable but Capped' }, C: { cap: 5, label: 'Tier C \u2013 Low Liquidity / At-Risk' } }
-const NAV_REF_LOAN = 5000000
-function coopNominationLimit(coop, activeCount) {
-  const tier = (coop && coop.tier) || 'C'
-  const cap = (COOP_TIERS[tier] || COOP_TIERS.C).cap
-  let limit = cap
-  if (coop && coop.nav) limit = Math.min(cap, Math.floor(Number(coop.nav) / (0.25 * NAV_REF_LOAN)))
-  return { tier, cap, limit: Math.max(0, limit), used: activeCount || 0, remaining: Math.max(0, limit - (activeCount || 0)) }
-}
-const NPL_ARREARS_MONTHS = 3
-function nplMetrics(loans) {
-  const sched = loans.filter((l) => (l.schedule || []).length && ['Disbursed', 'Repaying', 'Completed', 'Default'].includes(l.status))
-  const disbursed = sched.reduce((a, l) => a + (l.amountApproved || 0), 0)
-  let nplValue = 0, crystallised = 0
-  const nplLoans = []
-  for (const l of sched) {
-    const rp = loanRepayState(l)
-    const overdue = (l.schedule || []).filter((s) => rp.instStatus(s) === 'Overdue').length
-    if (l.status === 'Default' || overdue >= NPL_ARREARS_MONTHS) { nplValue += rp.outstanding; nplLoans.push({ loan: l, outstanding: rp.outstanding, overdue }) }
-    if (l.status === 'Default' && l.recovery) crystallised += (l.recovery.sterling || 0) + (l.recovery.shortfall || 0)
-  }
-  const guaranteed = Math.round(disbursed * 0.5)
-  const nplRatio = disbursed ? nplValue / disbursed : 0
-  const lossNorm = guaranteed ? crystallised / guaranteed : 0
-  const status = nplRatio >= 0.10 ? 'Suspended' : nplRatio >= 0.05 ? 'Review' : 'Healthy'
-  return { disbursed, nplValue, nplRatio, guaranteed, crystallised, lossNorm, status, nplLoans }
-}
-const SECURITY_ITEMS = [
-  ['sterlingGuarantee', '50% Sterling Bank guarantee (letter of guarantee)'],
-  ['coopGuarantee', '25% cooperative guarantee (letter of guarantee)'],
-  ['cashDeposit', '10% cash security deposit lodged (refundable on liquidation)'],
-  ['lien', '15% lien on borrower present/future assets'],
-  ['insurance', 'Asset + credit-life insurance (BOI as first-loss payee)'],
-  ['gsi', 'GSI mandate on BVN-linked accounts'],
-  ['personalGuarantee', 'Irrevocable personal guarantee of the Chief Promoter'],
-]
-function securityState(loan) {
-  const s = loan.security || {}
-  const done = SECURITY_ITEMS.filter(([k]) => s[k]).length
-  return { done, total: SECURITY_ITEMS.length, complete: done === SECURITY_ITEMS.length, map: s }
-}
-const GLOBAL_GUARANTEE_LIMIT = 5000000000
-const SINGLE_OBLIGOR_GUARANTEE = 5000000
-const ACCEL_DOC_REQUIREMENTS = ['CAC registration & organisational profile', 'Valid regulatory operating permits', 'Audited financial statements (last 3 years)', 'CVs of key team members', 'Cover letter (preferred sectors & capacity)', 'Past interventions & methodology', 'Supporting bank statements']
-function coopAdmission(coop) {
-  const items = [
-    { label: 'Recognised & approved by MCCTI', ok: coop.status === 'Approved' },
-    { label: 'In existence 12+ months', ok: (coop.members || 0) > 0 || coop.established12 === true },
-    { label: 'Clean credit history', ok: coop.creditClean !== false },
-    { label: 'Designated focal person', ok: !!coop.custodian },
-    { label: 'Governance structure & tier classified', ok: !!coop.tier },
-    { label: 'NAV valuation (ICAN/FRCN)', ok: !!coop.nav },
-  ]
-  return { items, outstanding: items.filter((i) => !i.ok), admitted: items.every((i) => i.ok) }
-}
-function coopGuaranteeLiability(coopName, loans) {
-  let crystallised = 0, contingent = 0
-  for (const l of loans) {
-    if (l.coop !== coopName || !(l.schedule || []).length) continue
-    const g = loanBreakdown(l.amountApproved || l.amountRequested).coopGuarantee
-    if (l.status === 'Default') crystallised += (l.recovery ? l.recovery.coop : g)
-    else if (['Disbursed', 'Repaying'].includes(l.status)) contingent += g
-  }
-  return { crystallised, contingent }
-}
-/* Guarantee ceiling: a cooperative can only guarantee 25% of members' loans up to the size
-   of its own contributions pool. "Committed" = approved-and-onwards guarantees still live
-   (approved, bank assessment, BOI approved, disbursed, repaying). Completed/Declined/Default
-   release their hold. e.g. contributions of N1,000,000 can back 4 loans of N1,000,000
-   (each needs a N250,000 = 25% guarantee). */
-const GUARANTEE_COMMITTED_STATES = ['Coop approved', 'Bank assessment', 'BOI approved', 'Disbursed', 'Repaying']
-function coopGuaranteePool(coop) { return coop ? (coop.contributions || 0) : 0 }
-function coopGuaranteeCommitted(coopName, loans) {
-  return (loans || []).filter((l) => l.coop === coopName && GUARANTEE_COMMITTED_STATES.indexOf(l.status) > -1)
-    .reduce((a, l) => a + loanBreakdown(l.amountApproved || l.amountRequested || 0).coopGuarantee, 0)
-}
-function coopGuaranteeRoom(coop, loans) {
-  const pool = coopGuaranteePool(coop)
-  const used = coopGuaranteeCommitted(coop && coop.name, loans)
-  const override = (coop && coop.guaranteeOverride) || 0
-  return { pool, used, available: Math.max(0, pool + override - used), override }
-}
-function canCoopGuarantee(coop, amount, loans) {
-  const need = loanBreakdown(amount).coopGuarantee
-  const room = coopGuaranteeRoom(coop, loans)
-  return { need, ...room, fits: need <= room.available }
-}
-// Cooperative may issue guarantees only if it has existed 12+ months (MCCTI-confirmed).
-function coopAgeMonths(coop) {
-  if (!coop) return 0
-  if (coop.establishedConfirmed && coop.establishedDate) return monthsBetween(coop.establishedDate, Date.now())
-  return coop.established12 === true ? 12 : 0
-}
-function coopCanIssueGuarantee(coop) { return coopAgeMonths(coop) >= 12 }
-// Member eligibility: 12+ months in business AND 6+ months in the cooperative.
-function monthsBetween(from, to) { if (!from) return 0; const a = new Date(from), b = new Date(to); return Math.max(0, (b.getFullYear() - a.getFullYear()) * 12 + (b.getMonth() - a.getMonth())) }
-function memberBusinessMonths(m) { return (m && m.msme && m.msme.yearsInOperation ? Math.round(m.msme.yearsInOperation * 12) : (m && m.businessMonths) || 0) }
-function memberCoopMonths(m) { return (m && m.memberSinceConfirmed && m.memberSince) ? monthsBetween(m.memberSince, Date.now()) : ((m && m.coopMonths) || 0) }
-function memberTenureEligible(m) {
-  const biz = memberBusinessMonths(m), coop = memberCoopMonths(m)
-  const reasons = []
-  if (biz < 12) reasons.push('in business for at least 1 year (currently ' + (biz ? biz + ' month' + (biz === 1 ? '' : 's') : 'under 1 year') + ')')
-  if (coop < 6) reasons.push('a cooperative member for at least 6 months (currently ' + (coop ? coop + ' month' + (coop === 1 ? '' : 's') : 'under 6 months') + ')')
-  return { eligible: biz >= 12 && coop >= 6, biz, coop, reasons }
-}
-// Cooperative must be MCCTI-approved AND have an MCCTI-approved independent audit on file.
-const COOP_AUDIT_DOC = 'Independent audit (MCCTI-approved)'
-function coopAuditApproved(coop, auditDocs) { return (auditDocs || []).some((d) => d.category === COOP_AUDIT_DOC && d.verified) }
-function coopLendingReady(coop, auditDocs) {
-  const admitted = coopAdmission(coop).admitted
-  const audited = coopAuditApproved(coop, auditDocs)
-  const aged = coopCanIssueGuarantee(coop)
-  const reasons = []
-  if (!admitted) reasons.push('be admitted to the LASMECO scheme by MCCTI')
-  if (!audited) reasons.push('have an independent audit approved by MCCTI')
-  if (!aged) reasons.push('have existed for at least 1 year to issue a 25% guarantee')
-  return { ready: admitted && audited && aged, admitted, audited, aged, reasons }
-}
-// Guarantee request workflow: member -> cooperative leadership approval -> letter.
-async function callClaude(prompt, maxTokens) {
-  const res = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ model: 'claude-sonnet-4-6', max_tokens: maxTokens || 1000, messages: [{ role: 'user', content: prompt }] }),
-  })
-  const data = await res.json()
-  return (data.content || []).filter((b) => b.type === 'text').map((b) => b.text).join('\n').trim()
-}
-// Facts assembled for an AI guarantee assessment (all from the member's real record).
-function guaranteeAssessmentFacts(member, coop, loans) {
-  const coopMonths = memberCoopMonths(member), bizMonths = memberBusinessMonths(member)
-  const room = coopGuaranteeRoom(coop, loans)
-  const memberContrib = (member && member.savingsTotal) || (member && member.contributions) || 0
-  return {
-    name: member.name,
-    coop: member.coop,
-    monthsInCoop: coopMonths, meets6mo: coopMonths >= 6,
-    monthsInBusiness: bizMonths, meets1yr: bizMonths >= 12,
-    totalContributionsNGN: memberContrib,
-    monthlyContributionNGN: (member && member.monthlyContribution) || 0,
-    monthsContributed: (member && member.contributionMonthsPaid) || 0,
-    contributionConsistencyPct: (member && member.contributionConsistency) || 0,
-    coopPool: room.pool, coopAvailable: room.available,
-    monthlyTurnover: (member.msme && member.msme.monthlyTurnover) || 0,
-    employees: (member.msme && member.msme.employees) || 0,
-    yearsInOperation: (member.msme && member.msme.yearsInOperation) || 0,
-  }
-}
-async function listGuaranteeRequests(coopName) { return (await kvList('guarantee:')).filter((g) => !coopName || g.coop === coopName).sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1)) }
-async function getGuaranteeRequest(id) { return kvGet('guarantee:' + id) }
-async function saveGuaranteeRequest(rec, ctx, action) {
-  const id = rec.grId || 'GR-' + Math.random().toString(36).slice(2, 7).toUpperCase()
-  const next = { ...rec, grId: id, updatedAt: new Date().toISOString(), createdAt: rec.createdAt || new Date().toISOString() }
-  await kvSet('guarantee:' + id, next)
-  if (action && ctx) { try { await addAudit({ trackingId: id, action, by: ctx.name, role: ctx.role, note: rec.memberName || '' }) } catch (e) { /* best-effort */ } }
-  return next
-}
-async function generateLetterBody(gr, coop) {
-  const facts = { member: gr.memberName, cooperative: gr.coop, facility: gr.amount, guarantee: gr.guarantee, basis: gr.evidence || '', coopContributions: (coop && coop.contributions) || 0, ref: gr.grId }
-  const prompt = 'Write the body of a formal Letter of Cooperative Guarantee, in British English, from a Nigerian cooperative society to Sterling Bank and the Bank of Industry (via the appointed sector accelerator), for the Lagos State LASMECO financing scheme. It should: confirm the named person is a member in good standing; state that the cooperative unconditionally guarantees twenty-five per cent (25%) of the requested facility; reference the cooperative\u2019s members\u2019 contributions as backing; and be professional and concise (3 short paragraphs, no more than about 150 words). Do NOT include the letterhead, date, addresses, salutation or signature block \u2014 only the body paragraphs. Facts: ' + JSON.stringify(facts) + '. Amounts are in Nigerian Naira; format them like \u20A6' + gr.amount.toLocaleString('en-NG') + '.'
-  try { const t = await callClaude(prompt, 500); return t || null } catch (e) { return null }
-}
-function letterFallbackBody(gr, coop) {
-  return 'We confirm that ' + gr.memberName + ' is a registered member of ' + gr.coop + ' in good standing.\n\nIn support of their application under the LASMECO scheme, this cooperative unconditionally guarantees twenty-five per cent (25%) of the requested facility of \u20A6' + gr.amount.toLocaleString('en-NG') + ', being \u20A6' + gr.guarantee.toLocaleString('en-NG') + '. This guarantee is backed by our members\u2019 contributions of \u20A6' + (((coop && coop.contributions) || 0)).toLocaleString('en-NG') + '.\n\nWe accordingly recommend the applicant for the facility and undertake our obligations as a guarantor under the scheme.'
-}
-async function downloadGuaranteeLetter(gr, coop) {
-  toast('Preparing the guarantee letter…')
-  const body = (await generateLetterBody(gr, coop)) || letterFallbackBody(gr, coop)
-  const d = new Date(gr.approvedAt || Date.now()).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })
-  const esc = (t) => String(t || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-  const paras = body.split(/\n\n+/).map((p) => '<p>' + esc(p).replace(/\n/g, '<br>') + '</p>').join('')
-  const html = '<!doctype html><html><head><meta charset="utf-8"><title>Guarantee Letter ' + esc(gr.grId) + '</title><style>@page{size:A4;margin:22mm}body{font-family:Georgia,"Times New Roman",serif;color:#1a1a1a;line-height:1.6;font-size:12.5pt}.lh{border-bottom:3px double #1C8A4F;padding-bottom:12px;margin-bottom:6px}.lh .nm{font-size:19pt;font-weight:bold;color:#12673a;letter-spacing:.3px}.lh .meta{font-size:9.5pt;color:#555;margin-top:3px}.ref{display:flex;justify-content:space-between;font-size:10pt;color:#333;margin:18px 0 10px}.to{margin:6px 0 2px}.re{font-weight:bold;margin:14px 0}.sig{margin-top:40px}.sig .line{width:230px;border-top:1px solid #333;padding-top:5px;font-size:10.5pt}.foot{margin-top:28px;border-top:1px solid #ddd;padding-top:8px;font-size:8.5pt;color:#888;text-align:center}@media print{.noprint{display:none}}</style></head><body>' +
-    '<div class="lh"><div class="nm">' + esc(coop.name) + '</div><div class="meta">' + [coop.areaOffice ? 'Area Office: ' + esc(coop.areaOffice) : '', coop.regNo ? 'Reg. No: ' + esc(coop.regNo) : (coop.trackingId ? 'Ref: ' + esc(coop.trackingId) : ''), 'A registered cooperative society under the Lagos State MCCTI'].filter(Boolean).join(' &nbsp;&bull;&nbsp; ') + '</div></div>' +
-    '<div class="ref"><span>Ref: ' + esc(gr.grId) + '</span><span>' + d + '</span></div>' +
-    '<div class="to">The Credit Manager,<br>Sterling Bank Plc / Bank of Industry<br><em>Through: The Appointed Sector Accelerator, LASMECO</em></div>' +
-    '<p class="re">RE: LETTER OF COOPERATIVE GUARANTEE &mdash; ' + esc(gr.memberName) + '</p>' +
-    paras +
-    '<div class="sig"><div class="line">Authorised Signatory<br>For: ' + esc(coop.name) + '<br><span style="font-size:9pt;color:#666">' + esc(gr.approvedByName || 'Cooperative Leadership') + '</span></div></div>' +
-    '<div class="foot">Generated via MCCTI CoopEco on ' + d + ' &bull; Ref ' + esc(gr.grId) + ' &bull; This letter is issued under the Lagos State LASMECO scheme.</div>' +
-    '<div class="noprint" style="text-align:center;margin-top:22px"><button onclick="window.print()" style="padding:10px 22px;font-size:13px;background:#1C8A4F;color:#fff;border:none;border-radius:6px;cursor:pointer">Save as PDF / Print</button></div>' +
-    '<script>setTimeout(function(){window.print()},400)</script></body></html>'
-  const w = window.open('', '_blank')
-  if (!w) { toast('Allow pop-ups to download the letter, then try again.', 'error'); return }
-  w.document.write(html); w.document.close()
-}
-function globalGuaranteeUsed(loans) { return loans.filter((l) => ['Disbursed', 'Repaying'].includes(l.status)).reduce((a, l) => a + loanBreakdown(l.amountApproved || 0).sterlingGuarantee, 0) }
-function monthKey(d) { const x = new Date(d); return x.getFullYear() + '-' + String(x.getMonth() + 1).padStart(2, '0') }
-function monthLabel(mk) { const [y, m] = String(mk).split('-'); return ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][Number(m) - 1] + " '" + String(y).slice(2) }
-async function recordCoopSnapshot(coop) {
-  if (!coop || !coop.trackingId) return
-  const mk = monthKey(Date.now())
-  try { await kvSet('snap:' + coop.trackingId + ':' + mk, { coopId: coop.trackingId, month: mk, contributions: coop.contributions || 0, members: coop.members || 0, at: new Date().toISOString() }) } catch (e) { /* best-effort */ }
-}
-async function coopContributionSeries(trackingId, months = 6) {
-  const rows = await kvList('snap:' + trackingId + ':')
-  return rows.filter((r) => r && r.month).sort((a, b) => (a.month < b.month ? -1 : 1)).slice(-months)
-}
-async function portfolioContributionSeries(months = 6) {
-  const rows = await kvList('snap:')
-  const byMonth = {}
-  for (const r of rows) { if (!r || !r.month) continue; byMonth[r.month] = (byMonth[r.month] || 0) + (r.contributions || 0) }
-  return Object.keys(byMonth).sort().slice(-months).map((m) => ({ month: m, contributions: byMonth[m] }))
-}
-// Demo-only anchor firms, attached when sample data is enabled.
-const CHAIN_DEMO_ANCHORS = { 'Agriculture': 'Lekki Foods Processing Ltd', 'Manufacturing': 'Idumota Textile Merchants', 'Circular Economy': 'Greencycle Nigeria', 'Digital Economy': 'Yaba Tech Hub' }
-/* Value chains are structural, not sample data: the app provisions one per RAC sector and
-   keeps them provisioned. Runs on every load and is idempotent, so a chain reappears if a
-   sector is ever added. MCCTI can still create extra chains and accelerators can propose. */
-async function ensureValueChains() {
-  let made = 0
-  try {
-    const existing = await listChains()
-    const have = existing.map((c) => c.sector)
-    const accels = await listAccelerators()
-    for (const sector of LASMECO_SECTORS) {
-      if (have.indexOf(sector) > -1) continue
-      const accel = accels.find((a) => (a.sectors || []).indexOf(sector) > -1 && (a.status || 'Pending') === 'Appointed')
-      const id = 'VC-' + sector.replace(/[^A-Za-z]/g, '').slice(0, 3).toUpperCase() + '-' + Math.floor(100 + Math.random() * 900)
-      const anchor = DEMO_DATA ? (CHAIN_DEMO_ANCHORS[sector] || '') : ''
-      const stages = CHAIN_STAGE_TEMPLATES[sector] || []
-      await kvSet('chain:' + id, { chainId: id, name: 'Lagos ' + sector + ' Value Chain', sector, stages, status: 'Active', auto: true, coordinator: accel ? accel.name : '', anchor, added: [], removed: [], stageMap: {}, firms: anchor ? [{ name: anchor, role: 'Anchor / offtaker', stage: stages[3] || stages[0] || '' }] : [], createdBy: 'system', createdAt: new Date().toISOString() })
-      made++
-    }
-  } catch (e) { /* best-effort */ }
-  return made > 0
-}
-async function ensureCoopSnapshots() {
-  if (await kvGet('integration:snapshots-v1')) return false
-  try {
-    const coops = await listCoops()
-    const factors = [0.68, 0.76, 0.83, 0.89, 0.95, 1], now = new Date()
-    for (const c of coops) {
-      const cur = c.contributions || 0
-      for (let i = 0; i < 6; i++) { const d = new Date(now.getFullYear(), now.getMonth() - (5 - i), 1); const mk = monthKey(d); await kvSet('snap:' + c.trackingId + ':' + mk, { coopId: c.trackingId, month: mk, contributions: Math.round(cur * factors[i]), members: c.members || 0, at: d.toISOString() }) }
-    }
-  } catch (e) { /* best-effort */ }
-  await kvSet('integration:snapshots-v1', { done: true, at: new Date().toISOString() })
-  return true
-}
-async function ensureMonthlySnapshots() {
-  const mk = monthKey(Date.now()), marker = 'snapsweep:' + mk
-  if (await kvGet(marker)) return
-  try {
-    const coops = await listCoops()
-    for (const c of coops) await recordCoopSnapshot(c)
-    await kvSet(marker, { month: mk, done: true, at: new Date().toISOString(), count: coops.length })
-  } catch (e) { /* best-effort */ }
-}
-async function recordRepayment(l, amount, ctx, method) {
-  const amt = Number(amount) || 0; if (amt <= 0) return l
-  const repayments = [...(l.repayments || []), { at: new Date().toISOString(), amount: amt, by: ctx.name, method: method || 'manual' }]
-  const st = loanRepayState({ ...l, repayments })
-  const status = st.outstanding <= 0 ? 'Completed' : 'Repaying'
-  return updateLoan(l.loanId, { repayments, status }, ctx, 'Repayment recorded ' + fmtNaira(amt) + ' (' + (method || 'manual') + ')', '')
-}
-function genLoanId() { const yy = String(new Date().getFullYear()).slice(2); return 'LN-' + yy + '-' + String(Math.floor(Math.random() * 1000000)).padStart(6, '0') }
-async function listLoans() { return (await kvList('loan:')).sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1)) }
-async function createLoan(rec, ctx) {
-  const loanId = genLoanId(); const now = new Date().toISOString()
-  const record = { loanId, status: 'Applied', apName: '', amountRecommended: null, amountApproved: null, createdBy: ctx.email, createdAt: now, updatedAt: now, ...rec }
-  await kvSet('loan:' + loanId, record, ctx.uid)
-  await addAudit({ trackingId: loanId, action: 'Application submitted', by: ctx.name, role: ctx.role, note: rec.purpose || '' })
-  await notify({ to: ctx.email, title: 'LASMECO application received', body: 'Application ' + loanId + ' submitted to ' + (rec.apName || 'an Accelerator') + '.', event: 'loan', phone: rec.memberPhone })
-  await notify({ to: rec.apEmail || 'role:accelerator', title: 'New LASMECO application', body: rec.memberName + ' \u2014 ' + rec.sector, event: 'loan' })
-  return record
-}
-async function updateLoan(id, patch, ctx, action, note) {
-  const cur = await kvGet('loan:' + id); if (!cur) return null
-  const next = { ...cur, ...patch, updatedAt: new Date().toISOString() }
-  await kvSet('loan:' + id, next, cur.user_id)
-  if (action) await addAudit({ trackingId: id, action, by: ctx.name, role: ctx.role, note: note || '' })
-  if (patch.status && cur.createdBy && !cur.createdBy.includes('@system')) {
-    await notify({ to: cur.createdBy, title: 'LASMECO application update', body: 'Application ' + id + ' is now: ' + patch.status, event: 'loan', phone: cur.memberPhone })
-  }
-  return next
-}
-async function payCoopFee(coopId, ctx) { return updateCoop(coopId, { feeStatus: 'Paid' }, ctx, 'Registration fee paid', fmtNaira(COOP_FEES.registration)) }
-async function clearPriorSeed() {
-  const del = async (prefix, keyOf, pred) => { const rows = await kvList(prefix); for (const r of rows) { try { if (pred(r)) await kvDelete(keyOf(r)) } catch (e) { /* skip */ } } }
-  const seedLoanIds = new Set()
-  await del('coop:', (c) => 'coop:' + c.trackingId, (c) => c.createdBy === 'seed@mccti.lg.gov.ng')
-  await del('member:', (m) => 'member:' + m.memberId, (m) => (m.createdBy || '').indexOf('demo.') === 0)
-  await del('loan:', (l) => 'loan:' + l.loanId, (l) => { const s = (l.createdBy || '').endsWith('@coopeco.ng'); if (s) seedLoanIds.add(l.loanId); return s })
-  await del('ticket:', (t) => 'ticket:' + t.ticketId, (t) => (t.ticketId || '').indexOf('TK-25-9') === 0)
-  await del('notif:', (n) => 'notif:' + n.id, (n) => n.event === 'seed')
-  await del('doc:', (d) => 'doc:' + d.coopId + ':' + d.id, (d) => seedLoanIds.has(d.coopId) || String(d.id).indexOf('LD') === 0 || String(d.id).indexOf('Dseed') === 0)
-  await del('wallet:', (w) => 'wallet:' + w.id, (w) => /^M:M-100\d/.test(w.id || '') || !!w.esusu)
-  await del('snap:', (s) => 'snap:' + s.coopId + ':' + s.month, (s) => !!s.coopId)
-  await del('chain:', (x) => 'chain:' + x.chainId, (x) => x.createdBy === 'seed@mccti.lg.gov.ng' || x.createdBy === 'system')
-  await del('snapsweep:', (s) => 'snapsweep:' + s.month, (s) => !!s.month)
-  await kvDelete('integration:loandocs-v1'); await kvDelete('integration:loandocs-v4'); await kvDelete('integration:snapshots-v1')
-}
-async function seedDemoData() {
-  if (await kvGet('integration:seed-v12')) return false
-  await kvSet('integration:seed-v12', { claimed: true, at: new Date().toISOString() }) // claim first: prevents repeat clear/reseed storms if a later step fails
-  try { await clearPriorSeed() } catch (e) { /* best-effort cleanup */ }
-  const now = Date.now(), day = 86400000
-  const isoAgo = (ms) => new Date(now - ms).toISOString()
-  const monthsAgoISO = (k) => { const d = new Date(now); d.setMonth(d.getMonth() - k); return d.toISOString() }
-  // 1) MCCTI cooperatives (varied status / office / compliance)
-  const extraCoops = [
-    { name: 'Oshodi Market Women Coop', areaOffice: 'Oshodi', sector: 'Trade', custodian: 'R. Alaba', members: 240, contributions: 7200000, status: 'Approved', cap15: 'Compliant', feeStatus: 'Paid', tier: 'A', nav: 90000000, established12: true, establishedConfirmed: true, establishedDate: isoAgo(1500 * day) },
-    { name: 'Agege Transport Union Coop', areaOffice: 'Agege', sector: 'Transport', custodian: 'S. Okoro', members: 160, contributions: 5400000, status: 'Under review', cap15: 'Under audit', feeStatus: 'Paid', tier: 'B', nav: 30000000 },
-    { name: 'Alimosho Tailors Multipurpose', areaOffice: 'Alimosho', sector: 'Artisan', custodian: 'B. Yusuf', members: 95, contributions: 2100000, status: 'Returned', cap15: 'Returns due', tier: 'C', nav: 8000000 },
-    { name: 'Kosofe Poultry Farmers Coop', areaOffice: 'Kosofe', sector: 'Agriculture', custodian: 'N. Eze', members: 130, contributions: 3900000, status: 'Approved', cap15: 'Compliant', feeStatus: 'Paid', tier: 'C', nav: 6000000, established12: true, establishedConfirmed: true, establishedDate: isoAgo(700 * day), creditClean: true },
-    { name: 'Ikeja Hospital Staff Multipurpose Coop', areaOffice: 'Ikeja', sector: 'Services', custodian: 'Dr A. Balogun', members: 175, contributions: 6300000, status: 'Approved', cap15: 'Compliant', feeStatus: 'Paid', tier: 'B', nav: 42000000, established12: true, establishedConfirmed: true, establishedDate: isoAgo(1100 * day) },
-    { name: 'Eti-Osa Fashion Enterprise Coop', areaOffice: 'Eti-Osa', sector: 'Services', custodian: 'T. Coker', members: 210, contributions: 8800000, status: 'Approved', cap15: 'Compliant', feeStatus: 'Paid', tier: 'A', nav: 120000000, established12: true, establishedConfirmed: true, establishedDate: isoAgo(2000 * day) },
-  ]
-  const coopMap = {}
-  const allCoopSeeds = [...SEED_COOPS, ...extraCoops]
-  for (let i = 0; i < allCoopSeeds.length; i++) {
-    const s = allCoopSeeds[i], id = genTrackingId(), created = isoAgo((allCoopSeeds.length - i) * day)
-    await kvSet('coop:' + id, { trackingId: id, source: 'MCCTI', regNo: null, returns: null, feeStatus: s.feeStatus || '', createdBy: 'seed@mccti.lg.gov.ng', createdAt: created, updatedAt: created, ...s })
-    coopMap[s.name] = id
-    await addAudit({ trackingId: id, action: 'Registration filed', by: s.custodian, role: 'society', note: '', at: created })
-    if (s.status !== 'Filed') await addAudit({ trackingId: id, action: 'Begin examination', by: 'Area Registrar', role: 'officer', note: '', at: isoAgo((allCoopSeeds.length - i) * day - 3600000) })
-    if (s.status === 'Approved') await addAudit({ trackingId: id, action: 'Approved and signed off', by: 'Honourable Commissioner', role: 'leadership', note: 'Compliant with CAP15', at: isoAgo((allCoopSeeds.length - i) * day - 7200000) })
-  }
-  // 2) Members (varied sectors / KYC / bands)
-  const memberSeeds = [
-    { name: 'Folake Adisa', coop: 'Oshodi Market Women Coop', sector: 'Trade', lasmecoSector: 'Service Delivery', accel: 'Service Delivery Accelerator', phone: '08031000001', gender: 'Female', bvn: 1, nin: 1, msme: { monthlyTurnover: 520000, employees: 4, cashFlow: 200000, customerBase: 160, yearsInOperation: 6 } },
-    { name: 'Chidi Okafor', coop: 'Oshodi Market Women Coop', sector: 'Trade', lasmecoSector: 'Service Delivery', accel: 'Service Delivery Accelerator', phone: '08031000002', gender: 'Male', bvn: 1, nin: 1, msme: { monthlyTurnover: 780000, employees: 6, cashFlow: 300000, customerBase: 220, yearsInOperation: 8 } },
-    { name: 'Aisha Bello', coop: 'Agege Transport Union Coop', sector: 'Transport', lasmecoSector: 'Service Delivery', accel: 'Service Delivery Accelerator', phone: '08031000003', gender: 'Female', bvn: 1, nin: 0, msme: { monthlyTurnover: 260000, employees: 2, cashFlow: 80000, customerBase: 70, yearsInOperation: 3 } },
-    { name: 'Segun Ade', coop: 'Eti-Osa Fashion Enterprise Coop', sector: 'Services', lasmecoSector: 'Tourism', accel: 'Tourism Accelerator', phone: '08031000004', gender: 'Male', bvn: 1, nin: 1, msme: { monthlyTurnover: 1350000, employees: 9, cashFlow: 500000, customerBase: 380, yearsInOperation: 10 } },
-    { name: 'Grace Umeh', coop: 'Kosofe Poultry Farmers Coop', sector: 'Agriculture', lasmecoSector: 'Agriculture', accel: 'Agriculture Accelerator', phone: '08031000005', gender: 'Female', bvn: 0, nin: 0, msme: { monthlyTurnover: 110000, employees: 1, cashFlow: 30000, customerBase: 40, yearsInOperation: 2 } },
-    { name: 'Ngozi Balogun', coop: 'Ikeja Hospital Staff Multipurpose Coop', sector: 'Services', lasmecoSector: 'Health', accel: 'Health Accelerator', phone: '08031000007', gender: 'Female', bvn: 1, nin: 1, msme: { monthlyTurnover: 1900000, employees: 12, cashFlow: 700000, customerBase: 540, yearsInOperation: 9 } },
-    { name: 'Ibrahim Sule', coop: 'Alimosho Tailors Multipurpose', sector: 'Artisan', lasmecoSector: 'Manufacturing', accel: 'Manufacturing Accelerator', phone: '08031000006', gender: 'Male', bvn: 1, nin: 1, msme: { monthlyTurnover: 430000, employees: 3, cashFlow: 150000, customerBase: 120, yearsInOperation: 5 } },
-  ]
-  const memberMap = {}
-  for (let i = 0; i < memberSeeds.length; i++) {
-    const s = memberSeeds[i], id = 'M-' + String(100001 + i), email = 'demo.' + s.name.toLowerCase().replace(/[^a-z]+/g, '.') + '@coopeco.ng'
-    const status = s.bvn && s.nin ? 'Verified' : (s.bvn || s.nin) ? 'Partial' : 'Unverified'
-    const coopM = { 'Grace Umeh': 10, 'Folake Adisa': 30, 'Chidi Okafor': 40, 'Aisha Bello': 4, 'Segun Ade': 60, 'Ngozi Balogun': 26, 'Ibrahim Sule': 18 }[s.name] || 12
-    const bizM = Math.round((s.msme.yearsInOperation || 1) * 12)
-    // Contribution history: a monthly amount over the member's tenure, with a consistency profile.
-    const contribProfile = { 'Grace Umeh': { monthly: 25000, missed: 0 }, 'Folake Adisa': { monthly: 40000, missed: 1 }, 'Chidi Okafor': { monthly: 60000, missed: 0 }, 'Aisha Bello': { monthly: 15000, missed: 2 }, 'Segun Ade': { monthly: 55000, missed: 0 }, 'Ngozi Balogun': { monthly: 80000, missed: 1 }, 'Ibrahim Sule': { monthly: 30000, missed: 3 } }[s.name] || { monthly: 20000, missed: 1 }
-    const paidMonths = Math.max(0, coopM - contribProfile.missed)
-    const savingsTotal = paidMonths * contribProfile.monthly
-    const consistency = coopM > 0 ? Math.round((paidMonths / coopM) * 100) : 0
-    await kvSet('member:' + id, { memberId: id, source: 'MCCTI', name: s.name, coop: s.coop, sector: s.sector, lasmecoSector: s.lasmecoSector, accel: s.accel, phone: s.phone, gender: s.gender, memberSince: isoAgo(coopM * 30 * day), businessStart: isoAgo(bizM * 30 * day), memberSinceConfirmed: coopM >= 6, coopMonths: coopM, businessMonths: bizM, savingsTotal, monthlyContribution: contribProfile.monthly, contributionMonthsPaid: paidMonths, contributionConsistency: consistency, kyc: { bvn: s.bvn ? 'on file' : '', nin: s.nin ? 'on file' : '', bvnVerified: !!s.bvn, ninVerified: !!s.nin, status }, msme: s.msme, createdBy: email, createdAt: isoAgo((10 - i) * day) })
-    memberMap[s.name] = { memberId: id, email, phone: s.phone, coop: s.coop, sector: s.sector, lasmecoSector: s.lasmecoSector, accel: s.accel }
-  }
-  // 3) Loans across every pipeline stage (with schedules, repayments, arrears, default)
-  const mkSchedLoan = (m, amount, tenor, disbMonths, paidCount, status, extra) => {
-    const disbAt = monthsAgoISO(disbMonths), mv = loanVariant((extra && extra.type) || LOAN_TYPES[0]), schedule = buildSchedule(amount, tenor, 9, disbAt, mv.moratorium)
-    const repayments = []
-    for (let k = 0; k < paidCount && k < schedule.length; k++) repayments.push({ at: monthsAgoISO(Math.max(0, disbMonths - k - 1)), amount: schedule[k].amount, by: m.name, method: 'manual' })
-    return { memberId: m.memberId, memberName: m.name, memberPhone: m.phone, createdBy: m.email, coop: m.coop, sector: m.lasmecoSector, amountRequested: amount, amountRecommended: amount, amountApproved: amount, type: LOAN_TYPES[0], purpose: 'Business expansion', status, apName: m.accel, tenorMonths: tenor, disbursedAt: disbAt, schedule, repayments, createdAt: monthsAgoISO(disbMonths + 1), updatedAt: new Date().toISOString(), ...(extra || {}) }
-  }
-  const M = memberMap
-  const loanRecs = []
-  loanRecs.push({ memberId: M['Grace Umeh'].memberId, memberName: 'Grace Umeh', memberPhone: M['Grace Umeh'].phone, createdBy: M['Grace Umeh'].email, coop: M['Grace Umeh'].coop, sector: M['Grace Umeh'].lasmecoSector, amountRequested: 900000, type: LOAN_TYPES[0], purpose: 'Feed and stock', status: 'Applied', apName: M['Grace Umeh'].accel, createdAt: isoAgo(2 * day), updatedAt: isoAgo(2 * day) })
-  loanRecs.push({ memberId: M['Aisha Bello'].memberId, memberName: 'Aisha Bello', memberPhone: M['Aisha Bello'].phone, createdBy: M['Aisha Bello'].email, coop: M['Aisha Bello'].coop, sector: M['Aisha Bello'].lasmecoSector, amountRequested: 1500000, type: LOAN_TYPES[0], purpose: 'Vehicle maintenance', status: 'In training', apName: M['Aisha Bello'].accel, createdAt: isoAgo(6 * day), updatedAt: isoAgo(3 * day) })
-  loanRecs.push({ memberId: M['Ibrahim Sule'].memberId, memberName: 'Ibrahim Sule', memberPhone: M['Ibrahim Sule'].phone, createdBy: M['Ibrahim Sule'].email, coop: M['Ibrahim Sule'].coop, sector: M['Ibrahim Sule'].lasmecoSector, amountRequested: 2200000, amountRecommended: 2000000, type: LOAN_TYPES[0], purpose: 'Industrial machines', status: 'Shortlisted', apName: M['Ibrahim Sule'].accel, createdAt: isoAgo(9 * day), updatedAt: isoAgo(4 * day) })
-  loanRecs.push({ memberId: M['Folake Adisa'].memberId, memberName: 'Folake Adisa', memberPhone: M['Folake Adisa'].phone, createdBy: M['Folake Adisa'].email, coop: M['Folake Adisa'].coop, sector: M['Folake Adisa'].lasmecoSector, amountRequested: 4000000, amountRecommended: 4000000, type: LOAN_TYPES[0], purpose: 'Bulk inventory', status: 'Coop validated', apName: M['Folake Adisa'].accel, createdAt: isoAgo(12 * day), updatedAt: isoAgo(5 * day) })
-  loanRecs.push({ memberId: M['Chidi Okafor'].memberId, memberName: 'Chidi Okafor', memberPhone: M['Chidi Okafor'].phone, createdBy: M['Chidi Okafor'].email, coop: M['Chidi Okafor'].coop, sector: M['Chidi Okafor'].lasmecoSector, amountRequested: 5000000, amountRecommended: 5000000, type: LOAN_TYPES[0], purpose: 'Cold room', status: 'Bank assessment', apName: M['Chidi Okafor'].accel, createdAt: isoAgo(14 * day), updatedAt: isoAgo(6 * day) })
-  loanRecs.push({ memberId: M['Segun Ade'].memberId, memberName: 'Segun Ade', memberPhone: M['Segun Ade'].phone, createdBy: M['Segun Ade'].email, coop: M['Segun Ade'].coop, sector: M['Segun Ade'].lasmecoSector, amountRequested: 6000000, amountRecommended: 6000000, amountApproved: 6000000, type: LOAN_TYPES[0], purpose: 'Studio expansion', status: 'BOI approved', apName: M['Segun Ade'].accel, createdAt: isoAgo(16 * day), updatedAt: isoAgo(7 * day) })
-  loanRecs.push(mkSchedLoan(M['Folake Adisa'], 3000000, 24, 5, 0, 'Disbursed', { purpose: 'Inventory (working capital)', type: LOAN_TYPES[0] }))     // WC, early arrears
-  loanRecs.push(mkSchedLoan(M['Chidi Okafor'], 4500000, 36, 10, 10, 'Repaying', { purpose: 'Distribution van (asset finance)', type: LOAN_TYPES[1] })) // Asset, current
-  loanRecs.push(mkSchedLoan(M['Folake Adisa'], 2000000, 24, 6, 6, 'Repaying', { purpose: 'Inventory restock', type: LOAN_TYPES[0] }))                 // performing
-  loanRecs.push(mkSchedLoan(M['Segun Ade'], 5000000, 36, 9, 9, 'Repaying', { purpose: 'Studio fit-out', type: LOAN_TYPES[1] }))                        // performing
-  loanRecs.push(mkSchedLoan(M['Chidi Okafor'], 3200000, 36, 7, 7, 'Repaying', { purpose: 'Cold storage', type: LOAN_TYPES[1] }))                       // performing
-  loanRecs.push(mkSchedLoan(M['Segun Ade'], 2400000, 24, 26, 24, 'Completed', { purpose: 'Studio equipment', type: LOAN_TYPES[0] }))                  // fully repaid
-  // Agriculture accelerator portfolio (so accel.agric@coopeco.ng has a rating + earnings to view)
-  loanRecs.push(mkSchedLoan(M['Grace Umeh'], 2500000, 24, 8, 8, 'Repaying', { purpose: 'Feed and layer stock', type: LOAN_TYPES[0] }))                 // performing
-  loanRecs.push(mkSchedLoan(M['Grace Umeh'], 4200000, 36, 12, 12, 'Repaying', { purpose: 'Cold chain for eggs (asset finance)', type: LOAN_TYPES[1] })) // performing
-  loanRecs.push(mkSchedLoan(M['Grace Umeh'], 1800000, 24, 26, 24, 'Completed', { purpose: 'Poultry expansion', type: LOAN_TYPES[0] }))                 // fully repaid
-  const defLoan = mkSchedLoan(M['Ibrahim Sule'], 3600000, 36, 14, 1, 'Default', { purpose: 'Workshop machinery', type: LOAN_TYPES[1] })
-  defLoan.recovery = recoveryPlan(loanRepayState(defLoan).outstanding, loanBreakdown(3600000))
-  loanRecs.push(defLoan)
-  loanRecs.push({ memberId: M['Grace Umeh'].memberId, memberName: 'Grace Umeh', memberPhone: M['Grace Umeh'].phone, createdBy: M['Grace Umeh'].email, coop: M['Grace Umeh'].coop, sector: M['Grace Umeh'].lasmecoSector, amountRequested: 8000000, type: LOAN_TYPES[0], purpose: 'Over-exposure request', status: 'Declined', apName: M['Grace Umeh'].accel, createdAt: isoAgo(20 * day), updatedAt: isoAgo(15 * day) })
-  const apEmailFor = (name) => (ACCEL_SEEDS.find((a) => a.name === name) || {}).email || ''
-  for (const r of loanRecs) { const id = genLoanId(); await kvSet('loan:' + id, { loanId: id, amountApproved: null, amountRecommended: null, ...r, apEmail: r.apName ? apEmailFor(r.apName) : '', loanId: id }); await addAudit({ trackingId: id, action: 'Application submitted', by: r.memberName, role: 'member', note: r.purpose || '', at: r.createdAt }) }
-  // Accelerators are seeded/refreshed separately by ensureAccelerators() so name changes propagate without re-seeding everything.
-  // 4) Wallets + esusu rotation
-  await kvSet('wallet:' + mWallet(M['Folake Adisa'].memberId), { id: mWallet(M['Folake Adisa'].memberId), balance: 45000, txns: [{ tid: 'Ts1', type: 'topup', amount: 60000, note: 'Card top-up', by: 'Folake Adisa', at: isoAgo(8 * day) }, { tid: 'Ts2', type: 'debit', amount: 15000, note: 'Saved to cooperative', by: 'Folake Adisa', at: isoAgo(6 * day) }] })
-  await kvSet('wallet:' + mWallet(M['Chidi Okafor'].memberId), { id: mWallet(M['Chidi Okafor'].memberId), balance: 30000, txns: [{ tid: 'Ts3', type: 'topup', amount: 50000, note: 'Card top-up', by: 'Chidi Okafor', at: isoAgo(7 * day) }, { tid: 'Ts4', type: 'debit', amount: 20000, note: 'Saved to cooperative', by: 'Chidi Okafor', at: isoAgo(5 * day) }] })
-  const poolCoop = coopMap['Oshodi Market Women Coop']
-  const order = [M['Folake Adisa'], M['Chidi Okafor']].map((m) => ({ memberId: m.memberId, name: m.name }))
-  await kvSet('wallet:' + cWallet(poolCoop), { id: cWallet(poolCoop), balance: 35000, txns: [{ tid: 'Tp1', type: 'contribution-in', amount: 15000, note: 'Save from Folake Adisa', by: 'Folake Adisa', at: isoAgo(6 * day) }, { tid: 'Tp2', type: 'contribution-in', amount: 20000, note: 'Save from Chidi Okafor', by: 'Chidi Okafor', at: isoAgo(5 * day) }], esusu: { order, startAt: monthsAgoISO(1), freq: 'monthly', paid: [] } })
-  // 5) Support tickets (varied status/category)
-  const tk = (n, status, cat, subject, raiser, raiserName, ageDays, resolvedDays) => { const created = isoAgo(ageDays * day); const updated = resolvedDays != null ? isoAgo(resolvedDays * day) : created; return { ticketId: 'TK-25-' + String(90000 + n), status, category: cat, subject, raisedBy: raiser, raisedByName: raiserName, role: 'member', thread: [{ by: raiserName, role: 'member', text: subject, at: created }, ...(resolvedDays != null ? [{ by: 'Support desk', role: 'officer', text: 'Resolved and closed.', at: updated }] : [])], createdAt: created, updatedAt: updated } }
-  const tickets = [
-    tk(1, 'Open', 'Wallet / payments', 'Top-up not reflecting', M['Aisha Bello'].email, 'Aisha Bello', 5, null),
-    tk(2, 'In progress', 'LASMECO / finance', 'Loan status stuck at assessment', M['Chidi Okafor'].email, 'Chidi Okafor', 4, null),
-    tk(3, 'Resolved', 'Registration', 'How to file annual returns', M['Folake Adisa'].email, 'Folake Adisa', 9, 8),
-    tk(4, 'Escalated', 'Data / privacy', 'Request to correct my BVN', M['Segun Ade'].email, 'Segun Ade', 6, null),
-    tk(5, 'Resolved', 'Annual returns', 'Certificate download failed', M['Ibrahim Sule'].email, 'Ibrahim Sule', 12, 10),
-  ]
-  for (const t of tickets) await kvSet('ticket:' + t.ticketId, t)
-  // 6) Notifications (in-app queues for staff + members)
-  const nt = (to, title, body, ageDays) => ({ id: genNotifId(), to, title, body, event: 'seed', at: isoAgo(ageDays * day), read: false })
-  const notifs = [
-    nt('role:officer', 'New support ticket', 'Top-up not reflecting \u2014 Wallet / payments', 5),
-    nt('role:leadership', 'New support ticket', 'Request to correct my BVN \u2014 Data / privacy', 6),
-    nt('role:accelerator', 'New LASMECO application', 'Grace Umeh \u2014 Agriculture', 2),
-    nt('role:leadership', 'New cooperative application', 'Kosofe Poultry Farmers Coop', 3),
-    nt(M['Folake Adisa'].email, 'Welcome to MCCTI CoopEco', 'Your member profile is set up.', 10),
-    nt(M['Chidi Okafor'].email, 'LASMECO application update', 'Your application is now: Repaying', 4),
-  ]
-  for (const n of notifs) await kvSet('notif:' + n.id, n)
-  // 7) Documents (metadata) for an approved cooperative
-  const docCoop = coopMap['Eti-Osa Fashion Enterprise Coop']
-  await kvSet('doc:' + docCoop + ':Dseed1', { id: 'Dseed1', coopId: docCoop, name: 'by-laws.pdf', category: 'By-laws', size: 284000, type: 'application/pdf', url: '', path: '', storage: 'demo', uploadedBy: 'T. Coker', uploadedAt: isoAgo(9 * day), verified: true, verifiedBy: 'Area Registrar' })
-  await kvSet('doc:' + docCoop + ':Dseed2', { id: 'Dseed2', coopId: docCoop, name: 'registration-certificate.pdf', category: 'Registration certificate', size: 156000, type: 'application/pdf', url: '', path: '', storage: 'demo', uploadedBy: 'T. Coker', uploadedAt: isoAgo(9 * day), verified: false })
-  await kvSet('integration:seed-v12', { done: true, at: new Date().toISOString() })
-  return true
-}
-const ACCEL_SEEDS = [
-  { email: 'accel.agric@coopeco.ng', name: 'Agriculture Accelerator', sectors: ['Agriculture'] },
-  { email: 'accel.mfg@coopeco.ng', name: 'Manufacturing Accelerator', sectors: ['Manufacturing'] },
-  { email: 'accel.health@coopeco.ng', name: 'Health Accelerator', sectors: ['Health'] },
-  { email: 'accel.tourism@coopeco.ng', name: 'Tourism Accelerator', sectors: ['Tourism'] },
-  { email: 'accel.services@coopeco.ng', name: 'Service Delivery Accelerator', sectors: ['Service Delivery'] },
-  { email: 'accel.circular@coopeco.ng', name: 'Circular Economy Accelerator', sectors: ['Circular Economy'] },
-  { email: 'accel.digital@coopeco.ng', name: 'Digital Economy Accelerator', sectors: ['Digital Economy'] },
-]
-async function listAccelerators() { return (await kvList('accelerator:')).sort((a, b) => (a.name > b.name ? 1 : -1)) }
-/* Accelerator rating = share of the MSMEs it sponsored that were approved for a loan.
-   "Approved" = reached bank assessment or beyond (Bank assessment, BOI approved, Disbursed,
-   Repaying, Completed, Default). "Decided" excludes applications still early in the pipeline
-   (Applied, In training, Shortlisted, Coop validated), which have no outcome yet. */
-const ACCEL_APPROVED_STATES = ['Bank assessment', 'BOI approved', 'Disbursed', 'Repaying', 'Completed', 'Default']
-const ACCEL_PENDING_STATES = ['Applied', 'In training', 'Shortlisted', 'Coop validated']
-function accelLoans(accel, loans) {
-  const names = accel.sectors || []
-  return (loans || []).filter((l) => (accel.email && l.apEmail === accel.email) || (accel.name && l.apName === accel.name) || (names.indexOf(l.sector) > -1))
-}
-const ACCEL_EARNED_STATES = ['Disbursed', 'Repaying', 'Completed', 'Default'] // fee is earned once the loan is disbursed
-function accelEarnings(accel, loans) {
-  const earned = accelLoans(accel, loans).filter((l) => ACCEL_EARNED_STATES.indexOf(l.status) > -1)
-  const perLoan = earned.map((l) => ({ loanId: l.loanId, member: l.memberName, coop: l.coop, sector: l.sector, status: l.status, amount: l.amountApproved || l.amountRequested || 0, fee: (loanBreakdown(l.amountApproved || l.amountRequested || 0).apFee) || 0, at: l.disbursedAt || l.updatedAt }))
-  const gross = perLoan.reduce((a, x) => a + x.fee, 0)
-  return { count: earned.length, gross, perLoan }
-}
-async function accelWallet(email) {
-  const w = await kvGet('accelwallet:' + email)
-  return w || { id: email, withdrawn: 0, account: null, txns: [] }
-}
-async function saveAccelWallet(email, w) { await kvSet('accelwallet:' + email, { ...w, id: email }) }
-async function accelDrawdown(email, amount, account, gross) {
-  const w = await accelWallet(email)
-  const available = gross - (w.withdrawn || 0)
-  if (amount <= 0 || amount > available) throw new Error('Amount exceeds available earnings')
-  const txn = { tid: 'AW' + Math.random().toString(36).slice(2, 7).toUpperCase(), type: 'drawdown', amount, account, at: new Date().toISOString() }
-  await saveAccelWallet(email, { ...w, withdrawn: (w.withdrawn || 0) + amount, account, txns: [txn, ...(w.txns || [])] })
-  return txn
-}
-function accelRating(accel, loans) {
-  const ls = accelLoans(accel, loans)
-  const decided = ls.filter((l) => ACCEL_APPROVED_STATES.indexOf(l.status) > -1 || l.status === 'Declined')
-  const approved = ls.filter((l) => ACCEL_APPROVED_STATES.indexOf(l.status) > -1)
-  const pending = ls.filter((l) => ACCEL_PENDING_STATES.indexOf(l.status) > -1)
-  const rate = decided.length ? approved.length / decided.length : null // null = no decided outcomes yet
-  const stars = rate == null ? 0 : Math.max(1, Math.round(rate * 5))
-  const grade = rate == null ? 'Unrated' : rate >= 0.8 ? 'Excellent' : rate >= 0.6 ? 'Strong' : rate >= 0.4 ? 'Fair' : 'Developing'
-  return { sponsored: ls.length, decided: decided.length, approved: approved.length, pending: pending.length, rate, pct: rate == null ? null : Math.round(rate * 100), stars, grade }
-}
-async function getAccelerator(email) { return kvGet('accelerator:' + email) }
-async function saveAccelerator(rec) { const prior = await kvGet('accelerator:' + rec.email); const status = rec.status || (prior && prior.status) || 'Pending'; await kvSet('accelerator:' + rec.email, { ...rec, status, updatedAt: new Date().toISOString() }, rec.uid || null); return rec }
-async function acceleratorsForSector(sector) { return (await listAccelerators()).filter((a) => (a.sectors || []).includes(sector) && (a.status || 'Pending') === 'Appointed') }
-async function ensureAccelerators() {
-  if (await kvGet('integration:accel-v8')) return false
-  const prior = await kvList('accelerator:')
-  for (const a of prior) { if (a && a.email && a.email.startsWith('accel.') && a.email.endsWith('@coopeco.ng')) await kvDelete('accelerator:' + a.email) }
-  for (const a of ACCEL_SEEDS) await kvSet('accelerator:' + a.email, { ...a, status: 'Appointed', createdAt: new Date().toISOString() })
-  await kvSet('integration:accel-v8', { done: true, at: new Date().toISOString() })
-  return true
-}
-async function ensureLoanDocsSeed() {
-  if (await kvGet('integration:loandocs-v4')) return false
-  try {
-    const loans = await listLoans()
-    const targets = loans.filter((l) => ['Coop validated', 'Bank assessment', 'BOI approved', 'Disbursed', 'Repaying'].includes(l.status)).slice(0, 4)
-    for (const l of targets) {
-      const cats = ['Valid ID (NIN slip / passport)', 'BVN confirmation', '12-month bank statements (all accounts)', 'Credit bureau report (business & promoter)', CREDIT_CLEARANCE_DOC]
-      for (let i = 0; i < cats.length; i++) {
-        const id = 'LD' + String(l.loanId).replace(/[^0-9]/g, '') + i
-        await kvSet('doc:' + l.loanId + ':' + id, { id, coopId: l.loanId, name: cats[i].toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') + '.pdf', category: cats[i], size: 180000 + i * 24000, type: 'application/pdf', url: '', path: '', storage: 'demo', uploadedBy: l.memberName, uploadedByRole: 'member', uploadedAt: new Date().toISOString(), verified: (l.status !== 'Coop validated') && i < 3 })
-      }
-    }
-  } catch (e) { /* best-effort */ }
-  // Seed approved independent audits so several cooperatives can guarantee their members.
-  try {
-    const coops = await listCoops()
-    const auditReady = ['Kosofe Poultry Farmers Coop', 'Oshodi Market Women Coop', 'Ikeja Hospital Staff Multipurpose Coop', 'Eti-Osa Fashion Enterprise Coop']
-    for (const name of auditReady) {
-      const c = coops.find((x) => x.name === name)
-      if (!c) continue
-      const key = 'coopaudit:' + c.trackingId
-      await kvSet('doc:' + key + ':CA1', { id: 'CA1', coopId: key, name: 'independent-audit-2025.pdf', category: COOP_AUDIT_DOC, size: 320000, type: 'application/pdf', url: '', path: '', storage: 'demo', uploadedBy: c.custodian || 'Cooperative Secretary', uploadedByRole: 'society', uploadedAt: new Date().toISOString(), verified: true, verifiedBy: 'MCCTI Leadership' })
-    }
-  } catch (e) { /* best-effort */ }
-  await kvSet('integration:loandocs-v4', { done: true, at: new Date().toISOString() })
-  return true
-}
-let _seedInFlight = null
-async function ensureSeedData() {
-  if (_seedInFlight) return _seedInFlight
-  _seedInFlight = (async () => {
-    let changed = false
-    // Registry sync: on live, only ingest when a real API returns data (never the sample feed).
-    try {
-      const last = await kvGet('integration:sekat')
-      const stale = !last || !last.lastSync || (Date.now() - new Date(last.lastSync).getTime()) > 86400000
-      if (stale) {
-        const a = await syncFromSekat({ name: 'SEKAT gateway', role: 'officer', email: 'sekat@system' }, true)
-        const b = await syncFromQoop({ name: 'QooP gateway', role: 'officer', email: 'qoop@system' }, true)
-        if (a || b) changed = true
-      }
-    } catch (e) { /* not configured */ }
-    try { if (await ensureValueChains()) changed = true } catch (e) { /* value chains are structural: provision in live too */ }
-    if (!DEMO_DATA) return changed // live database: never seed fictional records
-    try { if (await seedDemoData()) changed = true } catch (e) { /* best-effort, once */ }
-    try { if (await ensureAccelerators()) changed = true } catch (e) { /* keep accelerator directory current */ }
-    try { if (await ensureLoanDocsSeed()) changed = true } catch (e) { /* seed loan documents once */ }
-    try { if (await ensureCoopSnapshots()) changed = true } catch (e) { /* seed contribution history once */ }
-    try { await ensureMonthlySnapshots() } catch (e) { /* record all cooperatives once per month */ }
-    return changed
-  })()
-  try { return await _seedInFlight } finally { _seedInFlight = null }
-}
-async function seedDemoLoans() {
-  if (supa) return
-  if ((await kvList('loan:')).length) return
-  const base = Date.now() - 5 * 86400000
-  const seeds = [
-    { memberName: 'Tunde Salami', coop: 'Ibeju-Lekki Farmers Multipurpose Coop', sector: 'Agriculture', amountRequested: 2000000, type: LOAN_TYPES[0], purpose: 'Irrigation equipment', status: 'Applied', apName: '' },
-    { memberName: 'Adaeze Okonkwo', coop: 'Ikeja Grand Traders Cooperative', sector: 'Trade', amountRequested: 6000000, amountRecommended: 5000000, type: LOAN_TYPES[0], purpose: 'Expand retail stock', status: 'Shortlisted', apName: 'Trade & Commerce Accelerator' },
-    { memberName: 'Emeka Balogun', coop: 'Idumota Textile Merchants Coop', sector: 'Trade', amountRequested: 10000000, amountRecommended: 10000000, type: LOAN_TYPES[0], purpose: 'New machinery', status: 'Coop validated', apName: 'Manufacturing Accelerator' },
-    { memberName: 'Blessing Achebe', coop: 'Ikeja Grand Traders Cooperative', sector: 'Trade', amountRequested: 3000000, amountRecommended: 3000000, amountApproved: 3000000, type: LOAN_TYPES[1], purpose: 'Inventory finance', status: 'Disbursed', apName: 'Trade & Commerce Accelerator' },
-  ]
-  for (let i = 0; i < seeds.length; i++) {
-    const id = genLoanId(); const created = new Date(base + i * 86400000).toISOString()
-    await kvSet('loan:' + id, { loanId: id, amountApproved: null, amountRecommended: null, ...seeds[i], createdBy: 'qoop@system', createdAt: created, updatedAt: created })
-    await addAudit({ trackingId: id, action: 'Application submitted', by: seeds[i].memberName, role: 'member', note: seeds[i].purpose, at: created })
-  }
-}
-
-function LoanTable({ loans, onOpen, ctx }) {
-  const [q, setQ] = useState(''), [st, setSt] = useState('All'), [sel, setSel] = useState(() => new Set()), [busy, setBusy] = useState(false)
-  if (!loans.length) return <p className="muted-line">No applications to show.</p>
-  const statuses = ['All', ...Array.from(new Set(loans.map((l) => l.status)))]
-  const filtered = loans.filter((l) => (st === 'All' || l.status === st) && (!q || [l.memberName, l.loanId, l.coop, l.sector].join(' ').toLowerCase().includes(q.toLowerCase())))
-  const toggle = (id) => { const n = new Set(sel); n.has(id) ? n.delete(id) : n.add(id); setSel(n) }
-  const allOn = filtered.length > 0 && filtered.every((l) => sel.has(l.loanId))
-  const toggleAll = () => { const n = new Set(sel); if (allOn) filtered.forEach((l) => n.delete(l.loanId)); else filtered.forEach((l) => n.add(l.loanId)); setSel(n) }
-  const chosen = filtered.filter((l) => sel.has(l.loanId))
-  const exportCsv = () => downloadCSV('lasmeco-loans.csv', chosen.map((l) => ({ applicant: l.memberName, loanId: l.loanId, cooperative: l.coop, sector: l.sector, amount: l.amountApproved || l.amountRecommended || l.amountRequested, status: l.status })))
-  const notifyChosen = async () => { setBusy(true); for (const l of chosen) { try { await notify({ to: l.createdBy, title: 'Update on your LASMECO application', body: 'There is an update on your application ' + l.loanId + '. Please open the platform to review.', event: 'loan', phone: l.memberPhone }) } catch (e) { /* continue */ } } setBusy(false); toast('Notified ' + chosen.length + ' member' + (chosen.length === 1 ? '' : 's') + '.', 'success'); setSel(new Set()) }
-  return (
-    <div>
-      <div className="table-filter">
-        <input className="table-search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search applicant, ID, cooperative or sector…" aria-label="Search applications" />
-        <select value={st} onChange={(e) => setSt(e.target.value)} aria-label="Filter by status">{statuses.map((s) => <option key={s}>{s}</option>)}</select>
-        <span className="table-count">{filtered.length} of {loans.length}</span>
-      </div>
-      {sel.size > 0 && <div className="bulk-bar"><span>{sel.size} selected</span><button className="btn btn-outline btn-sm" onClick={exportCsv}>Export CSV</button>{!isReviewer(ctx) && <button className="btn btn-outline btn-sm" disabled={busy} onClick={notifyChosen}>Notify members</button>}<button className="link-inline" onClick={() => setSel(new Set())}>Clear</button></div>}
-      {filtered.length ? <div className="rtable-wrap"><table className="rtable">
-        <thead><tr><th className="th-check"><input type="checkbox" checked={allOn} onChange={toggleAll} aria-label="Select all" /></th><th>Applicant</th><th>Loan ID</th><th>Cooperative</th><th>Sector</th><th>Requested</th><th>Status</th><th></th></tr></thead>
-        <tbody>{filtered.map((l) => (<tr key={l.loanId} className={cx(sel.has(l.loanId) && 'row-sel')}><td className="th-check"><input type="checkbox" checked={sel.has(l.loanId)} onChange={() => toggle(l.loanId)} aria-label={'Select ' + l.memberName} /></td><td className="td-name">{l.memberName}</td><td className="mono">{l.loanId}</td><td>{l.coop}</td><td>{l.sector}</td><td className="mono">{fmtNaira(l.amountApproved || l.amountRecommended || l.amountRequested)}</td><td><StatusChip status={l.status} kind="loan" /></td><td><button className="btn-open" onClick={() => onOpen(l)}>Open</button></td></tr>))}</tbody>
-      </table></div> : <p className="muted-line">No applications match your search.</p>}
-    </div>
-  )
-}
-function LoanApplyForm({ ctx, member, onDone, onCancel }) {
-  const [f, setF] = useState({ amountRequested: '', type: LOAN_TYPES[0], purpose: '', sector: LASMECO_SECTORS[0] })
-  const [accels, setAccels] = useState([]), [apEmail, setApEmail] = useState('')
-  const [busy, setBusy] = useState(false), [err, setErr] = useState('')
-  const [coopAdm, setCoopAdm] = useState(null)
-  const set = (k) => (e) => setF({ ...f, [k]: e.target.value })
-  useEffect(() => { acceleratorsForSector(f.sector).then((list) => { setAccels(list); setApEmail(list[0] ? list[0].email : '') }) }, [f.sector])
-  useEffect(() => { listCoops().then((cs) => { const mc = cs.find((c) => c.name === member.coop); setCoopAdm(mc ? coopAdmission(mc) : { admitted: false, outstanding: [{ label: 'Cooperative not found on the registry' }] }) }) }, [member.coop])
-  const submit = async () => {
-    setErr('')
-    const amt = Number(f.amountRequested) || 0
-    if (amt <= 0) { setErr('Enter the amount you need.'); return }
-    if (amt > 10000000) { setErr('The LASMECO cap is ₦10,000,000.'); return }
-    if (!f.purpose.trim()) { setErr('Describe what the loan is for.'); return }
-    if (accels.length && !apEmail) { setErr('Select an accelerator to prepare your application.'); return }
-    if (coopAdm && !coopAdm.admitted) { setErr('Your cooperative is not yet admitted to the LASMECO scheme, so it cannot nominate members yet. Ask your cooperative to complete admission with MCCTI.'); return }
-    setBusy(true)
-    const ap = accels.find((a) => a.email === apEmail)
-    try { await createLoan({ memberId: member.memberId, memberName: member.name, memberPhone: member.phone, coop: member.coop, sector: f.sector, amountRequested: amt, type: f.type, purpose: f.purpose.trim(), apName: ap ? ap.name : '', apEmail: ap ? ap.email : '' }, ctx); onDone() }
-    catch (e) { setErr(e.message || 'Could not submit the application.') } setBusy(false)
-  }
-  return (
-    <div className="panel">
-      <div className="panel-head"><h3>Apply for LASMECO finance</h3><button className="link-back" onClick={onCancel}>Cancel</button></div>
-      <p className="panel-sub">{member.name} &middot; {member.coop}</p>
-      <div className="form-grid">
-        <label className="field"><span>LASMECO priority sector</span><select value={f.sector} onChange={set('sector')}>{LASMECO_SECTORS.map((s) => <option key={s}>{s}</option>)}</select></label>
-        <label className="field"><span>Accelerator</span><select value={apEmail} onChange={(e) => setApEmail(e.target.value)} disabled={!accels.length}>{accels.length ? accels.map((a) => <option key={a.email} value={a.email}>{a.name}</option>) : <option value="">No accelerator for this sector yet</option>}</select></label>
-        <label className="field"><span>Amount needed (₦, up to 10,000,000)</span><input type="number" value={f.amountRequested} onChange={set('amountRequested')} placeholder="0" /></label>
-        <label className="field"><span>Loan type</span><select value={f.type} onChange={set('type')}>{LOAN_TYPES.map((t) => <option key={t}>{t}</option>)}</select></label>
-        <label className="field span2"><span>Purpose</span><textarea value={f.purpose} onChange={set('purpose')} rows={3} placeholder="What the finance is for and the growth it will drive." /></label>
-      </div>
-      {member.msme && member.msme.monthlyTurnover ? <p className="panel-note">Indicative facility limit for your turnover ({fmtNaira(member.msme.monthlyTurnover)}/month): about {fmtNaira(facilityLimit(member, f.type, true))} ({loanVariant(f.type).label}). If 12-month turnover consistency is below the RAC threshold this reduces to {fmtNaira(facilityLimit(member, f.type, false))}. Final limit is set by Sterling Bank on assessment.</p> : null}
-      {coopAdm && !coopAdm.admitted ? <p className="auth-err">Your cooperative is not yet admitted to LASMECO ({coopAdm.outstanding.length} requirement(s) outstanding). It must be admitted by MCCTI before members can be nominated.</p> : null}
-      {!accels.length && <p className="panel-note">No accelerator is registered for this sector yet. You can still submit and MCCTI will assign one, or choose another sector.</p>}
-      {err && <p className="auth-err">{err}</p>}
-      <div className="panel-actions"><button className="btn btn-gold" onClick={submit} disabled={busy}>{busy ? 'Submitting…' : 'Submit to Accelerator'}</button></div>
-      <p className="panel-note">No upfront fees. Your chosen Accelerator prepares you to bankable standard and recommends an amount. 9% fixed, up to 36 months, 6-month moratorium. A ₦200,000 Accelerator fee and 1% BOI appraisal fee are deducted only on disbursement. This is not legal advice.</p>
-    </div>
-  )
-}
-const LASMECO_DOC_REQUIREMENTS = ['Valid ID (NIN slip / passport)', 'BVN confirmation', '12-month bank statements (all accounts)', 'Credit bureau report (business & promoter)', 'Credit clearance letter (no outstanding loans)', 'Cooperative letter of guarantee (25%)', 'Cooperative letter of introduction', 'CAC / business registration certificate', 'Operating licences / permits', 'Cash-flow analysis with assumptions', "Promoter's statement of net worth", 'Asset register & vendor invoices (asset finance)', 'Insurance (asset + credit-life)', 'Passport photograph']
-const CREDIT_CLEARANCE_DOC = 'Credit clearance letter (no outstanding loans)'
-const GUARANTEE_LETTER_DOC = 'Cooperative letter of guarantee (25%)'
-function lasmecoChecklist(loan, member, docs) {
-  const has = (c) => docs.find((x) => x.category === c)
-  const items = []
-  items.push({ label: 'BVN verified', ok: !!(member && member.kyc && member.kyc.bvnVerified) })
-  items.push({ label: 'NIN verified', ok: !!(member && member.kyc && member.kyc.ninVerified) })
-  items.push({ label: 'Recommended by an accelerator', ok: !!loan.apName })
-  items.push({ label: 'Affiliated to a cooperative society', ok: !!(member && member.coop) })
-  items.push({ label: 'Operating 12+ months (not a startup)', ok: !!(member && member.msme && (member.msme.yearsInOperation || 0) >= 1) })
-  const score = member ? scoreMember(member).score : 0
-  items.push({ label: 'Acceptable credit profile \u2014 score at least 500 (currently ' + score + ')', ok: score >= 500 })
-  // Mandatory credit-clearance letter from a credit bureau, uploaded by the member.
-  const cc = has(CREDIT_CLEARANCE_DOC)
-  items.push({ label: CREDIT_CLEARANCE_DOC, ok: !!cc && !!cc.verified, verified: cc ? cc.verified : false, doc: true, mandatory: true })
-  // Mandatory cooperative letter of guarantee (25%), generated on cooperative approval.
-  const gl = has(GUARANTEE_LETTER_DOC)
-  items.push({ label: GUARANTEE_LETTER_DOC, ok: !!gl && !!gl.verified, verified: gl ? gl.verified : false, doc: true, mandatory: true })
-  const keyDocs = ['12-month bank statements (all accounts)', 'Credit bureau report (business & promoter)', 'Cooperative letter of introduction', 'Cash-flow analysis with assumptions', 'CAC / business registration certificate']
-  keyDocs.forEach((c) => { const d = has(c); items.push({ label: c, ok: !!d, verified: d ? d.verified : false, doc: true }) })
-  const outstanding = items.filter((i) => !i.ok)
-  const unverifiedDocs = items.filter((i) => i.doc && i.ok && !i.verified)
-  return { items, outstanding, unverifiedDocs, qualifies: outstanding.length === 0 }
-}
-function LoanKycPanel({ loan, ctx }) {
-  const [member, setMember] = useState(undefined), [docs, setDocs] = useState([]), [busy, setBusy] = useState(false)
-  const role = ctx.role
-  const isBorrower = role === 'member' && (loan.createdBy === ctx.email || loan.memberId === ctx.focusId)
-  const canVerify = role === 'sterling'
-  const reloadDocs = useCallback(() => listDocs(loan.loanId).then(setDocs), [loan.loanId])
-  useEffect(() => { (async () => { const ms = await listMembers(); setMember(ms.find((m) => m.memberId === loan.memberId) || null) })() }, [loan.memberId])
-  useEffect(() => { reloadDocs() }, [reloadDocs])
-  const chk = lasmecoChecklist(loan, member, docs)
-  const requestFeedback = async () => {
-    setBusy(true)
-    const missing = chk.outstanding.map((i) => '\u2022 ' + i.label).join('\n')
-    await notify({ to: loan.createdBy, title: 'Action needed on your LASMECO application', body: 'To continue, please submit or update:\n' + (missing || 'Documents pending verification'), event: 'loan', phone: loan.memberPhone })
-    setBusy(false); toast('The member has been notified (in-app' + (loan.memberPhone ? ' and SMS' : '') + ') of the outstanding items.')
-  }
-  if (member === undefined) return <div className="returns-box"><h4>Application documents &amp; KYC</h4><p className="muted-line">Loading…</p></div>
-  return (
-    <div className="returns-box"><h4>Application documents &amp; KYC</h4>
-      <p className="muted-line">{isBorrower ? 'Submit the documents below so your Accelerator and Sterling Bank can verify your KYC and process your application. You will be notified if anything is outstanding.' : 'Documents submitted by the applicant. Sterling Bank verifies each item for KYC; BOI sees the verified set.'}</p>
-      <div className="kyc-check">{chk.items.map((it, i) => (<div className={cx('kyc-item', it.ok && 'ok')} key={i}><span className="kyc-mark">{it.ok ? '\u2713' : '\u25cb'}</span><span className="kyc-label">{it.label}{it.mandatory ? ' (mandatory)' : ''}{it.doc && it.ok ? (it.verified ? ' \u2014 verified' : ' \u2014 submitted, awaiting verification') : ''}</span></div>))}</div>
-      <div className={cx('kyc-status', chk.qualifies ? 'ok' : 'pending')}>{chk.qualifies ? 'All requirements met \u2014 ready to proceed to assessment.' : chk.outstanding.length + ' item(s) outstanding' + (chk.unverifiedDocs.length ? ', ' + chk.unverifiedDocs.length + ' awaiting Sterling verification' : '') + '.'}</div>
-      {isBorrower ? <div className="doc-guide"><h5>Documents to upload</h5><ul>{LASMECO_DOC_REQUIREMENTS.map((c) => { const has = docs.find((d) => d.category === c); return <li key={c} className={cx(has && 'done')}><span aria-hidden="true">{has ? '\u2713' : '\u2022'}</span> {c}{c === CREDIT_CLEARANCE_DOC ? ' (mandatory — from a credit bureau, confirming no outstanding or pending loans)' : ''}{c.indexOf('asset finance') > -1 ? ' (only if applying for Asset Finance)' : ''}</li> })}</ul><p className="chart-note">Pick the matching type from the dropdown below, choose your file, and it uploads straight to your Accelerator and Sterling Bank for review.</p></div> : null}
-      {isReviewer(ctx) && !DEMO_DATA ? <p className="panel-note">Applicant documents are hidden in review access because this database holds real member data (NDPR). The qualification checklist above shows the review outcome without exposing the underlying KYC files.</p> : <DocumentsPanel coopId={loan.loanId} ctx={ctx} canVerify={canVerify} canUpload={isBorrower} categories={LASMECO_DOC_REQUIREMENTS} onChange={reloadDocs} />}
-      {!isBorrower && (role === 'accelerator' || role === 'sterling') && (chk.outstanding.length > 0) && <div className="panel-actions"><button className="btn btn-outline btn-sm" disabled={busy} onClick={requestFeedback}>Notify member of outstanding items</button></div>}
-    </div>
-  )
-}
-function RevenuePanel({ ctx }) {
-  const [fig, setFig] = useState(null), [amounts, setAmounts] = useState({}), [busy, setBusy] = useState('')
-  useEffect(() => { escrowFigures().then(setFig) }, [])
-  const fixed = { 'Cooperative registration': COOP_FEES.registration, 'Annual returns filing': COOP_FEES.annualReturns, 'Directory & verification search': 2000 }
-  const pay = (name) => async () => {
-    const amt = Number(amounts[name] != null ? amounts[name] : (fixed[name] || 0)) || 0
-    if (amt <= 0) { toast('Enter an amount to collect for this stream.'); return }
-    setBusy(name)
-    const r = await collectPayment({ email: ctx.email, amountNaira: amt, purpose: name, metadata: { stream: name } })
-    setBusy('')
-    if (r.ok) toast('Payment ' + (r.ref && String(r.ref).startsWith('DEMO') ? '(demo) ' : '') + 'received for ' + name + '.')
-    else if (!r.cancelled) toast('Payment could not be completed.')
-  }
-  if (!fig) return <p className="muted-line">Loading revenue…</p>
-  const accrued = { 'Cooperative registration': fig.regFees, 'Annual returns filing': fig.returnsFees, 'LASMECO disbursement portal': fig.portalFees, 'Digital wallet & payments': fig.walletFees }
-  return (
-    <div className="ws">
-      <div className="statgrid"><div className="stat"><span className="stat-fig">{fmtNaira(fig.accrued)}</span><span className="stat-lab">Total accrued to escrow</span></div><div className="stat"><span className="stat-fig">{fmtNaira(fig.portalFees)}</span><span className="stat-lab">Disbursement portal (2.5%)</span></div><div className="stat"><span className="stat-fig">{fmtNaira(fig.boiMgmtFeeQuarter)}</span><span className="stat-lab">BOI mgmt fee / quarter (2.5% p.a.)</span></div><div className="stat"><span className="stat-fig">{fmtNaira(fig.walletFees)}</span><span className="stat-lab">Wallet fees (1%)</span></div></div>
-      <div className="revenue-grid">{PRICING.map((pr) => (
-        <div className="revenue-card" key={pr.name}>
-          <div className="revenue-top"><h4>{pr.name}</h4><span className="revenue-price">{pr.price}<em> {pr.unit}</em></span></div>
-          <p className="revenue-who">{pr.who}</p>
-          <p className="revenue-body">{pr.body}</p>
-          {accrued[pr.name] != null && <p className="revenue-accrued">Accrued to date: {fmtNaira(accrued[pr.name])}</p>}
-          {!isReviewer(ctx) && <div className="revenue-pay"><input type="number" value={amounts[pr.name] != null ? amounts[pr.name] : (fixed[pr.name] || '')} onChange={(e) => setAmounts({ ...amounts, [pr.name]: e.target.value })} placeholder="Amount (₦)" /><button className="btn btn-gold btn-sm" disabled={busy === pr.name} onClick={pay(pr.name)}>{busy === pr.name ? 'Opening\u2026' : (PAYSTACK_PUBLIC ? 'Send pay link' : 'Collect (demo)')}</button></div>}
-        </div>))}</div>
-      <p className="panel-note">Each stream can raise a payment on request through a secure Paystack checkout (test/demo until live keys are set). Percentage and custom streams also accrue automatically from platform activity; the amount field lets you raise a one-off charge or reconciliation for any stream.</p>
-    </div>
-  )
-}
-function PortfolioMonitoring() {
-  const [m, setM] = useState(null), [gg, setGg] = useState(0)
-  useEffect(() => { listLoans().then((l) => { setM(nplMetrics(l)); setGg(globalGuaranteeUsed(l)) }) }, [])
-  if (!m) return <p className="muted-line">Computing portfolio…</p>
-  const pct = (x) => (x * 100).toFixed(1) + '%'
-  const ggPct = gg / GLOBAL_GUARANTEE_LIMIT
-  return (
-    <div className="ws">
-      <div className={cx('kyc-status', m.status === 'Healthy' ? 'ok' : 'pending')} style={m.status === 'Suspended' ? { background: '#f7e4de', color: 'var(--err)', borderColor: 'var(--err)' } : undefined}>Portfolio status: {m.status}. {m.status === 'Suspended' ? 'NPL \u2265 10% \u2014 new disbursements should be suspended until recovery.' : m.status === 'Review' ? 'NPL \u2265 5% \u2014 Fund review and recovery drive triggered.' : 'NPL within tolerance.'}</div>
-      <div className="statgrid">
-        <div className="stat"><span className="stat-fig">{fmtNaira(m.disbursed)}</span><span className="stat-lab">Disbursed (guaranteed {fmtNaira(m.guaranteed)})</span></div>
-        <div className="stat"><span className="stat-fig" style={m.nplRatio >= 0.05 ? { color: 'var(--err)' } : undefined}>{pct(m.nplRatio)}</span><span className="stat-lab">NPL ratio ({fmtNaira(m.nplValue)})</span></div>
-        <div className="stat"><span className="stat-fig" style={m.lossNorm >= 0.01 ? { color: 'var(--err)' } : undefined}>{pct(m.lossNorm)}</span><span className="stat-lab">Loss norm (RAC cap 1%)</span></div>
-        <div className="stat"><span className="stat-fig" style={ggPct >= 1 ? { color: 'var(--err)' } : undefined}>{pct(ggPct)}</span><span className="stat-lab">Global guarantee used ({fmtNaira(gg)} of ₦5bn)</span></div>
-      </div>
-      {m.nplLoans.length ? <div className="risk-list">{m.nplLoans.map((x, i) => (<div className="risk-item" key={i}><span className={cx('chip', x.loan.status === 'Default' ? 'st-returned' : 'st-review')}>{x.loan.status === 'Default' ? 'Default' : x.overdue + ' overdue'}</span><div className="risk-body"><strong>{x.loan.memberName} — {x.loan.loanId}</strong><p>{x.loan.sector} &middot; outstanding {fmtNaira(x.outstanding)}</p></div></div>))}</div> : <div className="empty"><span className="empty-mark">&#9670;</span><h3>No non-performing loans</h3><p>All disbursed loans are performing.</p></div>}
-      <p className="panel-note">NPL = loans in default or 3+ installments overdue, over total disbursed. Loss norm = crystallised guarantee losses over guaranteed exposure (RAC cap 1%). Global guarantee cap ₦5bn; single-obligor guarantee cap ₦5m (50% of the ₦10m loan ceiling). Thresholds: NPL review 5%, suspend 10%.</p>
-    </div>
-  )
-}
-function SecurityChecklist({ loan, ctx, onChanged }) {
-  const [l, setL] = useState(loan), [busy, setBusy] = useState(false)
-  const canEdit = ctx.role === 'sterling'
-  const b = loanBreakdown(l.amountApproved || l.amountRecommended || l.amountRequested)
-  const s = securityState(l)
-  const amt = { cashDeposit: b.collateral, lien: b.lien, sterlingGuarantee: b.sterlingGuarantee, coopGuarantee: b.coopGuarantee }
-  const toggle = async (k) => { if (!canEdit) return; setBusy(true); const security = { ...(l.security || {}), [k]: !(l.security && l.security[k]) }; const next = await updateLoan(l.loanId, { security }, ctx, 'Security ' + (security[k] ? 'confirmed' : 'cleared') + ': ' + k, ''); setL(next); setBusy(false); onChanged && onChanged() }
-  return (
-    <div className="returns-box"><h4>Security &amp; guarantee checklist ({s.done}/{s.total})</h4>
-      <div className="kyc-check">{SECURITY_ITEMS.map(([k, label]) => { const on = !!(l.security && l.security[k]); return (<button type="button" className={cx('kyc-item', 'sec-item', on && 'ok', canEdit && 'clickable')} key={k} disabled={!canEdit || busy} onClick={() => toggle(k)}><span className="kyc-mark">{on ? '\u2713' : '\u25cb'}</span><span className="kyc-label">{label}{amt[k] ? ' \u2014 ' + fmtNaira(amt[k]) : ''}</span></button>) })}</div>
-      <div className={cx('kyc-status', s.complete ? 'ok' : 'pending')}>{s.complete ? 'All security perfected \u2014 cleared for guarantee issuance.' : (s.total - s.done) + ' security item(s) outstanding before disbursement.'}</div>
-      <p className="panel-note">{canEdit ? 'Confirm each item as it is perfected during assessment.' : 'Sterling Bank completes this during assessment; BOI and leadership see the confirmed status.'}</p>
-    </div>
-  )
-}
-function CoopTierPanel({ coop, ctx, onChanged }) {
-  const [c, setC] = useState(coop), [nav, setNav] = useState(String(coop.nav || '')), [busy, setBusy] = useState(false), [loans, setLoans] = useState([])
-  const canEdit = ['officer', 'leadership'].includes(ctx.role)
-  useEffect(() => { listLoans().then(setLoans) }, [])
-  const active = loans.filter((l) => l.coop === c.name && !['Declined', 'Completed', 'Default'].includes(l.status)).length
-  const nl = coopNominationLimit(c, active)
-  const adm = coopAdmission(c)
-  const liab = coopGuaranteeLiability(c.name, loans)
-  const setTier = async (t) => { setBusy(true); const next = await updateCoop(c.trackingId, { tier: t }, ctx, 'Tier classification set to ' + t, ''); setC(next); setBusy(false); onChanged && onChanged() }
-  const saveNav = async () => { setBusy(true); const next = await updateCoop(c.trackingId, { nav: Number(nav) || 0 }, ctx, 'Net asset value updated', fmtNaira(Number(nav) || 0)); setC(next); setBusy(false); onChanged && onChanged() }
-  return (
-    <div className="trail-box"><h4>Scheme admission, tiering &amp; guarantee</h4>
-      <div className={cx('kyc-status', adm.admitted ? 'ok' : 'pending')}>{adm.admitted ? 'Admitted to the LASMECO scheme \u2014 may nominate members.' : adm.outstanding.length + ' admission requirement(s) outstanding \u2014 cannot nominate yet.'}</div>
-      <div className="kyc-check">{adm.items.map((it, i) => (<div className={cx('kyc-item', it.ok && 'ok')} key={i}><span className="kyc-mark">{it.ok ? '\u2713' : '\u25cb'}</span><span className="kyc-label">{it.label}</span></div>))}</div>
-      <div className="statgrid"><div className="stat"><span className="stat-fig">{nl.tier}</span><span className="stat-lab">Tier</span></div><div className="stat"><span className="stat-fig">{nl.limit}</span><span className="stat-lab">Nomination limit</span></div><div className="stat"><span className="stat-fig">{nl.used}</span><span className="stat-lab">Active nominations</span></div><div className="stat"><span className="stat-fig" style={nl.remaining === 0 ? { color: 'var(--err)' } : undefined}>{nl.remaining}</span><span className="stat-lab">Remaining</span></div></div>
-      <div className="statgrid"><div className="stat"><span className="stat-fig">{fmtNaira(liab.contingent)}</span><span className="stat-lab">Contingent guarantee (25%)</span></div><div className="stat"><span className="stat-fig" style={liab.crystallised ? { color: 'var(--err)' } : undefined}>{fmtNaira(liab.crystallised)}</span><span className="stat-lab">Crystallised on default</span></div></div>
-      {canEdit ? <div className="wallet-actions" style={{ marginTop: '12px' }}><select value={c.tier || 'C'} onChange={(e) => setTier(e.target.value)} disabled={busy}>{Object.keys(COOP_TIERS).map((t) => <option key={t} value={t}>{COOP_TIERS[t].label}</option>)}</select><input type="number" value={nav} onChange={(e) => setNav(e.target.value)} placeholder="Net asset value (₦)" /><button className="btn btn-outline btn-sm" disabled={busy} onClick={saveNav}>Save NAV</button></div> : null}
-      <p className="panel-note">MCCTI classifies the tier and records NAV. Tier caps: A {COOP_TIERS.A.cap}, B {COOP_TIERS.B.cap}, C {COOP_TIERS.C.cap} borrowers; actual limit = min(tier cap, NAV ÷ (25% × ₦{NAV_REF_LOAN / 1e6}m reference loan)). On default the cooperative's 25% guarantee crystallises into a cash liability.</p>
-    </div>
-  )
-}
-function AcceleratorAppointments({ ctx }) {
-  const [list, setList] = useState(null), [busy, setBusy] = useState(''), [docs, setDocs] = useState({}), [loans, setLoans] = useState([])
-  const reload = useCallback(async () => { const l = await listAccelerators(); setList(l); setLoans(await listLoans()); const d = {}; for (const a of l) { try { d[a.email] = (await listDocs('accel:' + a.email)).length } catch (e) { d[a.email] = 0 } } setDocs(d) }, [])
-  useEffect(() => { reload() }, [reload])
-  const setStatus = (a, status) => async () => { setBusy(a.email); await saveAccelerator({ ...a, status }); setBusy(''); reload() }
-  if (!list) return <p className="muted-line">Loading accelerators…</p>
-  return (
-    <div className="ws">
-      <p className="muted-line">The Ministry (MCCTI) formally appoints accelerators before they operate, following the Consortium call. Appointed accelerators can be routed applications by members in their sectors.</p>
-      {list.length ? <div className="risk-list">{list.map((a) => { const appointed = a.status === 'Appointed'; const r = accelRating(a, loans); return (<div className="risk-item" key={a.email}><span className={cx('chip', appointed ? 'st-approved' : 'st-review')}>{a.status || 'Pending'}</span><div className="risk-body"><strong>{a.name}</strong><p>{(a.sectors || []).join(', ') || 'No sectors set'} &middot; {a.email} &middot; {docs[a.email] || 0} document(s) submitted</p><div className="accel-rating"><Stars n={r.stars} /><span className="accel-grade">{r.pct == null ? 'Unrated' : r.pct + '% approved'}</span><span className="accel-sub">{r.approved}/{r.decided} decided · {r.sponsored} sponsored{r.pending ? ' · ' + r.pending + ' in pipeline' : ''}</span></div></div>{!isReviewer(ctx) && <div className="doc-actions">{!appointed ? <button className="link-inline" disabled={busy === a.email} onClick={setStatus(a, 'Appointed')}>Appoint</button> : <button className="link-inline danger" disabled={busy === a.email} onClick={setStatus(a, 'Suspended')}>Suspend</button>}</div>}</div>) })}</div> : <p className="muted-line">No accelerators have registered yet.</p>}
-      <p className="panel-note">Rating = share of sponsored MSMEs approved for a loan (reached bank assessment or beyond), out of those with a decided outcome. Applications still in training or coop validation are shown as “in pipeline” and do not yet count. RAC vetting before appointment: CAC registration, valid permits, 3+ years in enterprise development, sector track record, audited financials, and CVs of key staff.</p>
-    </div>
-  )
-}
-function Stars({ n }) { return (<span className="stars" aria-label={n + ' of 5'}>{[1, 2, 3, 4, 5].map((i) => <span key={i} className={cx('star', i <= n && 'on')}>{i <= n ? '\u2605' : '\u2606'}</span>)}</span>) }
-function LoanDetail({ loan, ctx, onClose, onChanged }) {
-  const [l, setL] = useState(loan), [note, setNote] = useState(''), [amt, setAmt] = useState(''), [busy, setBusy] = useState(false), [rk, setRk] = useState(0), [tenorInput, setTenorInput] = useState('12'), [repay, setRepay] = useState('')
-  const [disb, setDisb] = useState({ sterlingAccount: '', supplier: '', supplierAccount: '' })
-  const role = ctx.role
-  const b = loanBreakdown(l.amountApproved || l.amountRecommended || l.amountRequested)
-  const rp = ['Disbursed', 'Repaying', 'Completed', 'Default'].includes(l.status) && (l.schedule || []).length ? loanRepayState(l) : null
-  const isBorrower = role === 'member' && (l.createdBy === ctx.email || l.memberId === ctx.focusId)
-  const canRecover = role === 'sterling' || role === 'leadership'
-  const act = async (patch, action, needNote) => {
-    if (needNote && !note.trim()) { toast('Add a note for the record.'); return }
-    setBusy(true); const next = await updateLoan(l.loanId, patch, ctx, action, note.trim()); setL(next); setNote(''); setRk((k) => k + 1); setBusy(false); onChanged && onChanged()
-  }
-  const recommend = async () => { const a = Number(amt) || 0; if (a <= 0 || a > 10000000) { toast('Enter a recommended amount up to ₦10,000,000.'); return } await act({ status: 'Shortlisted', amountRecommended: a }, 'Shortlisted; amount recommended', false) }
-  const boiApprove = async () => { const a = Number(amt) || l.amountRecommended || 0; if (a <= 0) { toast('Enter the approved amount.'); return } await act({ status: 'BOI approved', amountApproved: a }, 'Final approval and funding (BOI)', true) }
-  const doRepay = async (method) => {
-    const a = Number(repay) || 0; if (a <= 0) { toast('Enter a repayment amount.'); return }
-    setBusy(true)
-    if (method === 'card') { const r = await collectPayment({ email: ctx.email, amountNaira: a, purpose: 'LASMECO repayment ' + l.loanId, metadata: { loanId: l.loanId } }); if (!r.ok) { setBusy(false); if (!r.cancelled) toast('Payment could not be completed.'); return } }
-    const next = await recordRepayment(l, a, ctx, method === 'card' ? 'card' : 'manual'); setL(next); setRepay(''); setRk((k) => k + 1); setBusy(false); onChanged && onChanged()
-  }
-  const doRecover = async () => {
-    const plan = recoveryPlan(rp.outstanding, b)
-    setBusy(true); const next = await updateLoan(l.loanId, { status: 'Default', recovery: plan }, ctx, 'Default recorded; recovery: collateral ' + fmtNaira(plan.collateral) + ', cooperative ' + fmtNaira(plan.coop) + ', Sterling ' + fmtNaira(plan.sterling) + (plan.shortfall ? ', shortfall ' + fmtNaira(plan.shortfall) : ''), '')
-    setL(next); setRk((k) => k + 1); setBusy(false); onChanged && onChanged()
-  }
-  const canAP = role === 'accelerator', canOff = role === 'officer' || role === 'leadership', canSterling = role === 'sterling', canBOI = role === 'boi'
-  const canDecline = (canAP && ['Applied', 'In training'].includes(l.status)) || (canOff && l.status === 'Shortlisted') || (canSterling && ['Coop validated', 'BOI approved'].includes(l.status)) || (canBOI && l.status === 'Bank assessment')
-  return (
-    <div className="detail">
-      <div className="detail-head"><div><h3>{l.memberName}</h3><p className="detail-sub">{l.loanId} &middot; {l.coop} &middot; {l.sector} &middot; {l.type}</p></div><button className="link-back" onClick={onClose}>&larr; Back to list</button></div>
-      <div className="detail-chips"><StatusChip status={l.status} kind="loan" />{l.apName && <span className="src-badge src-mccti">{l.apName}</span>}</div>
-      <div className="detail-grid" style={{ marginTop: '20px' }}>
-        <div className="field-ro"><span>Requested</span><strong>{fmtNaira(l.amountRequested)}</strong></div>
-        <div className="field-ro"><span>Recommended</span><strong>{l.amountRecommended ? fmtNaira(l.amountRecommended) : '—'}</strong></div>
-        <div className="field-ro"><span>Approved</span><strong>{l.amountApproved ? fmtNaira(l.amountApproved) : '—'}</strong></div>
-        <div className="field-ro span2"><span>Purpose</span><strong className="normal">{l.purpose}</strong></div>
-      </div>
-
-      <LoanKycPanel loan={l} ctx={ctx} />
-      {['Coop validated', 'Bank assessment', 'BOI approved', 'Disbursed', 'Repaying', 'Completed', 'Default'].includes(l.status) && (ctx.role === 'sterling' || ctx.role === 'boi' || ctx.role === 'leadership' || ctx.role === 'officer') ? <SecurityChecklist loan={l} ctx={ctx} onChanged={onChanged} /> : null}
-
-      {['Bank assessment', 'BOI approved', 'Disbursed', 'Repaying', 'Completed'].includes(l.status) && (
-        <div className="returns-box"><h4>Guarantee stack &amp; disbursement</h4>
-          <div className="returns-grid">
-            <div><span>Loan amount</span><strong>{fmtNaira(b.amount)}</strong></div>
-            <div><span>Borrower collateral (10%)</span><strong>{fmtNaira(b.collateral)}</strong></div>
-            <div><span>Cooperative guarantee (25%)</span><strong>{fmtNaira(b.coopGuarantee)}</strong></div>
-            <div><span>Sterling guarantee (50%)</span><strong>{fmtNaira(b.sterlingGuarantee)}</strong></div>
-            <div><span>Accelerator fee</span><strong>{fmtNaira(b.apFee)}</strong></div>
-            <div><span>BOI appraisal (1%)</span><strong>{fmtNaira(b.boiFee)}</strong></div>
-            <div><span>Net to borrower</span><strong>{fmtNaira(b.netToBorrower)}</strong></div>
-            <div><span>Interest</span><strong>9% fixed</strong></div>
-          </div>
-          {['Disbursed', 'Repaying', 'Completed'].includes(l.status) && <p className="muted-line">Interest 9% = 5% base + 2% Sterling guarantee + 1% Accelerator + 0.5% cooperative + 0.5% monitoring. Repayment over the tenor after the moratorium, by direct debit.</p>}
-        </div>
-      )}
-
-      {rp && (
-        <div className="returns-box"><h4>Repayment schedule{l.tenorMonths ? ' \u00b7 ' + l.tenorMonths + ' months at 9%' : ''}</h4>
-          <div className="statgrid">
-            <div className="stat"><span className="stat-fig">{fmtNaira(rp.outstanding)}</span><span className="stat-lab">Outstanding</span></div>
-            <div className="stat"><span className="stat-fig">{fmtNaira(rp.paid)}</span><span className="stat-lab">Repaid</span></div>
-            <div className="stat"><span className="stat-fig">{rp.nextDue ? fmtNaira(rp.nextDue.amount) : '\u2014'}</span><span className="stat-lab">{rp.nextDue ? 'Next due ' + fmtDate(rp.nextDue.dueDate) : 'Fully repaid'}</span></div>
-            <div className="stat"><span className="stat-fig" style={rp.arrears ? { color: 'var(--err)' } : undefined}>{fmtNaira(rp.arrears)}</span><span className="stat-lab">In arrears</span></div>
-          </div>
-          <div className="rtable-wrap"><table className="rtable"><thead><tr><th>#</th><th>Due date</th><th>Amount</th><th>Principal</th><th>Interest</th><th>Status</th></tr></thead>
-            <tbody>{rp.schedule.map((s) => { const st = rp.instStatus(s); return (<tr key={s.n}><td className="mono">{s.n}</td><td>{fmtDate(s.dueDate)}</td><td className="mono">{fmtNaira(s.amount)}</td><td className="mono">{fmtNaira(s.principal)}</td><td className="mono">{fmtNaira(s.interest)}</td><td><span className={cx('chip', st === 'Paid' ? 'st-approved' : st === 'Overdue' ? 'st-returned' : 'st-review')}>{st}</span></td></tr>) })}</tbody>
-          </table></div>
-          {rp.outstanding > 0 && (isBorrower || role === 'sterling' || canOff) && (
-            <div className="wallet-actions" style={{ marginTop: '14px' }}>
-              <input type="number" value={repay} onChange={(e) => setRepay(e.target.value)} placeholder={'Amount (₦)' + (rp.nextDue ? ', next ' + fmtNaira(rp.nextDue.amount) : '')} />
-              {isBorrower && <button className="btn btn-gold btn-sm" disabled={busy} onClick={() => doRepay('card')}>{PAYSTACK_PUBLIC ? 'Pay installment' : 'Pay installment (demo)'}</button>}
-              {(role === 'sterling' || canOff) && <button className="btn btn-outline btn-sm" disabled={busy} onClick={() => doRepay('manual')}>Record repayment</button>}
-            </div>
-          )}
-          {rp.arrears > 0 && canRecover && l.status !== 'Default' && (
-            <div className="fee-banner" style={{ marginTop: '14px' }}><span>In arrears {fmtNaira(rp.arrears)}. Recovery waterfall: collateral {fmtNaira(recoveryPlan(rp.outstanding, b).collateral)} &rarr; cooperative {fmtNaira(recoveryPlan(rp.outstanding, b).coop)} &rarr; Sterling {fmtNaira(recoveryPlan(rp.outstanding, b).sterling)}.</span><button className="btn btn-outline btn-sm" disabled={busy} onClick={doRecover}>Record default &amp; recovery</button></div>
-          )}
-          {l.status === 'Default' && l.recovery && (<p className="muted-line">Default recorded. Recovery applied: collateral {fmtNaira(l.recovery.collateral)}, cooperative {fmtNaira(l.recovery.coop)}, Sterling {fmtNaira(l.recovery.sterling)}{l.recovery.shortfall ? ', shortfall ' + fmtNaira(l.recovery.shortfall) : ''}.</p>)}
-        </div>
-      )}
-
-      <div className="action-box">
-        <label className="field"><span>Note (recorded on the audit trail)</span><textarea value={note} onChange={(e) => setNote(e.target.value)} rows={2} placeholder="Decision, conditions or findings." /></label>
-        {(canAP && l.status === 'In training') || (canBOI && l.status === 'Bank assessment') ? <label className="field"><span>Amount (₦)</span><input type="number" value={amt} onChange={(e) => setAmt(e.target.value)} placeholder={String(l.amountRecommended || l.amountRequested || '')} /></label> : null}
-        {canSterling && l.status === 'BOI approved' ? <p className="panel-note">Product: {loanVariant(l.type).label} — {loanVariant(l.type).tenor}-month tenor with a {loanVariant(l.type).moratorium}-month principal moratorium (fixed by the RAC). The schedule is generated automatically on disbursement.</p> : null}
-        {canSterling && l.status === 'BOI approved' ? <div className="form-grid"><label className="field"><span>Beneficiary Sterling account no.</span><input value={disb.sterlingAccount} onChange={(e) => setDisb({ ...disb, sterlingAccount: e.target.value })} placeholder="10-digit NUBAN" /></label>{loanVariant(l.type).label === 'Asset Finance' ? <><label className="field"><span>Supplier / vendor</span><input value={disb.supplier} onChange={(e) => setDisb({ ...disb, supplier: e.target.value })} placeholder="Equipment supplier" /></label><label className="field"><span>Supplier account no.</span><input value={disb.supplierAccount} onChange={(e) => setDisb({ ...disb, supplierAccount: e.target.value })} placeholder="Supplier NUBAN" /></label></> : null}</div> : null}
-        <div className="action-row">
-          {canAP && l.status === 'Applied' && <button className="btn btn-gold btn-sm" disabled={busy} onClick={() => act({ status: 'In training', apName: ctx.name }, 'Enrolled in capacity building')}>Begin capacity building</button>}
-          {canAP && l.status === 'In training' && <button className="btn btn-gold btn-sm" disabled={busy} onClick={recommend}>Shortlist &amp; recommend amount</button>}
-          {canOff && l.status === 'Shortlisted' && <button className="btn btn-gold btn-sm" disabled={busy} onClick={() => act({ status: 'Coop validated' }, 'Cooperative validated; 25% guarantee issued', true)}>Validate cooperative &amp; guarantee</button>}
-          {canSterling && l.status === 'Coop validated' && <button className="btn btn-gold btn-sm" disabled={busy} onClick={() => act({ status: 'Bank assessment' }, 'KYC and assessment complete; 50% Sterling guarantee applied', true)}>Assess &amp; apply 50% guarantee</button>}
-          {canBOI && l.status === 'Bank assessment' && <button className="btn btn-gold btn-sm" disabled={busy} onClick={boiApprove}>Grant final approval &amp; fund</button>}
-          {canSterling && l.status === 'BOI approved' && <button className="btn btn-gold btn-sm" disabled={busy} onClick={async () => { if (!disb.sterlingAccount.trim()) { toast('Enter the beneficiary Sterling account for disbursement.', 'error'); return } if (!securityState(l).complete) { if (!(await confirmDialog('Not all security items are perfected. Disburse anyway?', { danger: true, confirmLabel: 'Disburse' }))) return } const v = loanVariant(l.type); const t = v.tenor; const sched = buildSchedule(l.amountApproved || b.amount, t, 9, new Date().toISOString(), v.moratorium); act({ status: 'Disbursed', tenorMonths: t, moratoriumMonths: v.moratorium, disbursedAt: new Date().toISOString(), schedule: sched, disbursement: { ...disb } }, 'Funds disbursed to ' + (disb.supplier ? 'supplier ' + disb.supplier : 'beneficiary account ' + disb.sterlingAccount) + '; ' + t + '-month schedule (' + v.moratorium + '-month moratorium)', true) }}>Disburse to beneficiary</button>}
-          {canDecline && <button className="btn btn-outline btn-sm" disabled={busy} onClick={() => act({ status: 'Declined' }, 'Application declined', true)}>Decline</button>}
-        </div>
-      </div>
-
-      <div className="trail-box"><h4>Loan trail</h4><AuditTrail trackingId={l.loanId} refreshKey={rk} /></div>
-    </div>
-  )
-}
-function useLoans() { const [loans, setLoans] = useState(null); const reload = useCallback(() => listLoans().then(setLoans), []); useEffect(() => { reload() }, [reload]); return [loans, reload] }
-function AccelDashboard({ accel, loans }) {
-  const mine = accelLoans(accel, loans)
-  const r = accelRating(accel, loans)
-  const e = accelEarnings(accel, loans)
-  const statusColors = { Repaying: CHART_C.green, Disbursed: CHART_C.teal, Completed: CHART_C.slate, Default: CHART_C.red, 'Bank assessment': CHART_C.gold, 'Coop validated': CHART_C.amber, 'BOI approved': CHART_C.plum, Applied: CHART_C.gold, 'In training': CHART_C.gold, Shortlisted: CHART_C.teal, Declined: CHART_C.red }
-  const stageOrder = ['Applied', 'In training', 'Shortlisted', 'Coop validated', 'Bank assessment', 'BOI approved', 'Disbursed', 'Repaying', 'Completed']
-  const pipeline = stageOrder.map((s) => ({ label: s, value: mine.filter((l) => l.status === s).length, color: statusColors[s] || CHART_C.gold })).filter((d) => d.value)
-  const sectors = Array.from(new Set(mine.map((l) => l.sector))).map((s, i) => ({ label: s || 'Unspecified', value: mine.filter((l) => l.sector === s).length, color: [CHART_C.green, CHART_C.teal, CHART_C.gold, CHART_C.plum, CHART_C.amber][i % 5] })).filter((d) => d.value)
-  const outcome = [{ label: 'Approved', value: r.approved, color: CHART_C.green }, { label: 'Declined', value: r.decided - r.approved, color: CHART_C.red }, { label: 'In pipeline', value: r.pending, color: CHART_C.gold }].filter((d) => d.value)
-  // Monthly disbursement value over the last 6 months, from disbursed loans
-  const months = []; const now = new Date()
-  for (let i = 5; i >= 0; i--) { const d = new Date(now.getFullYear(), now.getMonth() - i, 1); months.push({ key: d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0'), label: d.toLocaleString('en-NG', { month: 'short' }) }) }
-  const disb = mine.filter((l) => ACCEL_EARNED_STATES.indexOf(l.status) > -1)
-  const monthVals = months.map((m) => disb.filter((l) => (l.disbursedAt || '').slice(0, 7) === m.key).reduce((a, l) => a + (l.amountApproved || l.amountRequested || 0), 0))
-  const disbursedValue = disb.reduce((a, l) => a + (l.amountApproved || l.amountRequested || 0), 0)
-  const kpis = [
-    ['Sponsored MSMEs', String(mine.length)],
-    ['Disbursed value', fmtNaira(disbursedValue)],
-    ['Earned to date', fmtNaira(e.gross)],
-    ['Approval rate', r.pct == null ? '\u2014' : r.pct + '%'],
-  ]
-  return (
-    <div className="ws">
-      <div className="kpi-row">{kpis.map(([l, v]) => (<div className="kpi" key={l}><span className="kpi-fig">{v}</span><span className="kpi-lab">{l}</span></div>))}</div>
-      <div className="chart-grid">
-        <section className="chart-card"><h4>Application pipeline</h4>{pipeline.length ? <Bars data={pipeline} /> : <p className="muted-line">No applications yet.</p>}</section>
-        <section className="chart-card"><h4>Approval outcomes</h4>{outcome.length ? <Donut data={outcome} centerTop={r.pct == null ? '\u2014' : r.pct + '%'} centerBottom="approved" /> : <p className="muted-line">No decided outcomes yet.</p>}</section>
-        <section className="chart-card"><h4>By sector</h4>{sectors.length ? <Donut data={sectors} centerTop={String(mine.length)} centerBottom="loans" /> : <p className="muted-line">No loans yet.</p>}</section>
-      </div>
-      <section className="chart-card"><h4>Disbursement value — last 6 months</h4>{disbursedValue > 0 ? (<><MiniArea points={monthVals} color={CHART_C.green} /><div className="spark-axis">{months.map((m) => <span key={m.key}>{m.label}</span>)}</div></>) : <p className="muted-line">No disbursements in the last six months.</p>}</section>
-    </div>
-  )
-}
-function AccelEarnings({ accel, loans }) {
-  const [wallet, setWallet] = useState(null), [busy, setBusy] = useState(false)
-  const [amt, setAmt] = useState(''), [acct, setAcct] = useState({ bank: '', number: '', name: '' }), [open, setOpen] = useState(false)
-  const e = accelEarnings(accel, loans)
-  const reload = useCallback(() => accelWallet(accel.email).then(setWallet), [accel.email])
-  useEffect(() => { reload() }, [reload])
-  if (!wallet) return <p className="muted-line">Loading earnings…</p>
-  const withdrawn = wallet.withdrawn || 0
-  const available = Math.max(0, e.gross - withdrawn)
-  const last = wallet.account
-  const submit = async () => {
-    const n = Number(amt)
-    if (!n || n <= 0) { toast('Enter an amount to transfer.', 'error'); return }
-    if (n > available) { toast('That is more than your available earnings.', 'error'); return }
-    if (!acct.bank || !acct.number || !acct.name) { toast('Enter the destination bank, account number and name.', 'error'); return }
-    setBusy(true)
-    try { await accelDrawdown(accel.email, n, acct, e.gross); toast('Transfer of ' + fmtNaira(n) + ' initiated to ' + acct.bank + ' ' + acct.number + '.', 'success'); setAmt(''); setOpen(false); reload() }
-    catch (err) { toast(err.message || 'Transfer failed.', 'error') } finally { setBusy(false) }
-  }
-  return (
-    <div className="returns-box"><h4>Earnings from disbursed loans</h4>
-      <p className="muted-line">You earn a facilitation fee of {fmtNaira(loanBreakdown(1000000).apFee)} for each MSME you sponsored that reaches disbursement. Earnings become available to draw down once the loan is disbursed.</p>
-      <div className="statgrid">
-        <div className="stat"><span className="stat-fig">{fmtNaira(e.gross)}</span><span className="stat-lab">Total earned</span></div>
-        <div className="stat"><span className="stat-fig">{fmtNaira(withdrawn)}</span><span className="stat-lab">Transferred out</span></div>
-        <div className="stat"><span className="stat-fig" style={{ color: 'var(--green)' }}>{fmtNaira(available)}</span><span className="stat-lab">Available to draw down</span></div>
-        <div className="stat"><span className="stat-fig">{e.count}</span><span className="stat-lab">Disbursed loans</span></div>
-      </div>
-      <div className="panel-actions"><button className="btn btn-gold btn-sm" disabled={available <= 0} onClick={() => setOpen(!open)}>{available <= 0 ? 'No earnings available yet' : 'Draw down / transfer to account'}</button></div>
-      {open && <div className="returns-box" style={{ marginTop: '12px' }}>
-        <h5>Transfer to a bank account</h5>
-        {last && <p className="chart-note">Last used: {last.bank} &middot; {last.number} &middot; {last.name}. <button className="link-inline" onClick={() => setAcct(last)}>Use again</button></p>}
-        <div className="form-grid">
-          <label className="field"><span>Amount (₦)</span><input type="number" value={amt} onChange={(e2) => setAmt(e2.target.value)} placeholder={String(available)} /></label>
-          <label className="field"><span>Bank</span><input value={acct.bank} onChange={(e2) => setAcct({ ...acct, bank: e2.target.value })} placeholder="e.g. Sterling Bank" /></label>
-          <label className="field"><span>Account number</span><input value={acct.number} onChange={(e2) => setAcct({ ...acct, number: e2.target.value })} placeholder="10-digit NUBAN" /></label>
-          <label className="field"><span>Account name</span><input value={acct.name} onChange={(e2) => setAcct({ ...acct, name: e2.target.value })} placeholder="Registered account name" /></label>
-        </div>
-        <div className="panel-actions"><button className="btn btn-gold btn-sm" disabled={busy} onClick={submit}>{busy ? 'Processing…' : 'Transfer ' + (Number(amt) ? fmtNaira(Number(amt)) : '')}</button><button className="btn btn-ghost btn-sm" onClick={() => setOpen(false)}>Cancel</button></div>
-        <p className="panel-note">Transfers are recorded here and reduce your available balance. In live operation this routes to the programme’s settlement account for payout.</p>
-      </div>}
-      {e.perLoan.length ? <div className="doc-guide" style={{ marginTop: '14px' }}><h5>Fee-earning loans</h5><ul>{e.perLoan.map((x) => (<li key={x.loanId} className="done"><span aria-hidden="true">✓</span> {x.member} &middot; {x.coop} &middot; {fmtNaira(x.amount)} ({x.status}) &mdash; fee {fmtNaira(x.fee)}</li>))}</ul></div> : null}
-      {wallet.txns && wallet.txns.length ? <div className="doc-guide" style={{ marginTop: '10px' }}><h5>Transfer history</h5><ul>{wallet.txns.map((t) => (<li key={t.tid}><span aria-hidden="true">→</span> {fmtNaira(t.amount)} to {t.account ? t.account.bank + ' ' + t.account.number : 'account'} &middot; {fmtDate(t.at)}</li>))}</ul></div> : null}
-    </div>
-  )
-}
-function AcceleratorWorkspace({ ctx, section }) {
-  const [loans, reload] = useLoans(); const [sel, setSel] = useState(null)
-  const [accel, setAccel] = useState(undefined), [pick, setPick] = useState([]), [busy, setBusy] = useState(false)
-  const loadAccel = useCallback(() => getAccelerator(ctx.email).then((a) => { setAccel(a); if (a) setPick(a.sectors || []) }), [ctx.email])
-  useEffect(() => { loadAccel() }, [loadAccel])
-  if (!loans || accel === undefined) return <p className="muted-line">Loading pipeline…</p>
-  if (!accel) {
-    const toggle = (s) => setPick(pick.includes(s) ? pick.filter((x) => x !== s) : [...pick, s])
-    const save = async () => { if (!pick.length) { toast('Select at least one sector you support.'); return } setBusy(true); await saveAccelerator({ email: ctx.email, name: ctx.name, sectors: pick, uid: ctx.uid }); await loadAccel(); setBusy(false) }
-    return (
-      <div className="panel">
-        <div className="panel-head"><h3>Set up your Accelerator profile</h3></div>
-        <p className="panel-sub">Choose the LASMECO priority sectors you support. Members applying for finance in these sectors can route their applications directly to you.</p>
-        <div className="sector-pick">{LASMECO_SECTORS.map((s) => (<button key={s} className={cx('sector-chip', pick.includes(s) && 'on')} onClick={() => toggle(s)}>{s}</button>))}</div>
-        <div className="panel-actions"><button className="btn btn-gold" onClick={save} disabled={busy}>{busy ? 'Saving\u2026' : 'Save profile'}</button></div>
-        <p className="panel-note">You can change your sectors at any time from the Overview.</p>
-      </div>
-    )
-  }
-  if (sel) return <LoanDetail loan={sel} ctx={ctx} onClose={() => { setSel(null); reload() }} onChanged={reload} />
-  const mine = (l) => (l.apEmail === ctx.email) || ((accel.sectors || []).includes(l.sector))
-  const myLoans = loans.filter(mine)
-  const queue = myLoans.filter((l) => AP_STATUSES.includes(l.status))
-  const by = (s) => myLoans.filter((l) => l.status === s).length
-  const cards = () => [['New applications', by('Applied')], ['In training', by('In training')], ['Shortlisted', by('Shortlisted')], ['My pipeline', myLoans.length]]
-  return (
-    <div className="ws">
-      {section === 'overview' && (<>
-        <div className="accel-sectors"><span>Serving: {(accel.sectors || []).join(', ') || 'no sectors set'} &middot; {accel.status || 'Pending'}</span><button className="link-inline" onClick={() => setAccel(null)}>Edit sectors</button></div>
-        {(accel.status || 'Pending') !== 'Appointed' ? <div className="returns-box"><h4>Appointment documents</h4><div className={cx('kyc-status', 'pending')}>Pending MCCTI appointment. Submit the documents below; members can be routed to you once MCCTI appoints you.</div><DocumentsPanel coopId={'accel:' + ctx.email} ctx={ctx} canVerify={false} canUpload={true} categories={ACCEL_DOC_REQUIREMENTS} /></div> : <div className="returns-box"><h4>Appointment</h4><div className={cx('kyc-status', 'ok')}>Appointed by MCCTI — you can receive applications in your sectors.</div></div>}
-        <AccelDashboard accel={accel} loans={loans} />
-        {(() => { const r = accelRating(accel, loans); return (<div className="returns-box"><h4>Your approval rating</h4><div className="accel-rating"><Stars n={r.stars} /><span className="accel-grade">{r.pct == null ? 'Unrated yet' : r.pct + '% approved'}</span><span className="accel-sub">{r.approved}/{r.decided} decided · {r.sponsored} sponsored{r.pending ? ' · ' + r.pending + ' in pipeline' : ''}</span></div><p className="panel-note">Share of the MSMEs you sponsored that were approved for a loan (reached bank assessment or beyond), out of those with a decided outcome. Applications still in training or coop validation are not counted yet.</p></div>) })()}
-        <AccelEarnings accel={accel} loans={loans} />
-      </>)}
-      {section === 'earnings' && <AccelEarnings accel={accel} loans={loans} />}
-      {section === 'queue' && (<><p className="muted-line">Applications awaiting your action — new, in training and shortlisted.</p><LoanTable loans={queue} onOpen={setSel} /></>)}
-      {section === 'all' && (<><p className="muted-line">Every application in your sectors, at all stages (including validated, funded, disbursed, repaying and closed).</p><LoanTable loans={myLoans} onOpen={setSel} /></>)}
-      {section === 'chains' && <ChainsPanel ctx={ctx} />}
-    </div>
-  )
-}
-function LoanRoleWorkspace({ ctx, section, statuses, cards }) {
-  const [loans, reload] = useLoans(); const [sel, setSel] = useState(null)
-  if (!loans) return <p className="muted-line">Loading loans…</p>
-  if (sel) return <LoanDetail loan={sel} ctx={ctx} onClose={() => { setSel(null); reload() }} onChanged={reload} />
-  const queue = loans.filter((l) => statuses.includes(l.status))
-  return (
-    <div className="ws">
-      {section === 'overview' && <LoanStageOverview loans={loans} cards={cards} />}
-      {section === 'queue' && <LoanTable loans={queue} onOpen={setSel} />}
-      {section === 'all' && <LoanTable loans={loans} onOpen={setSel} />}
-      {section === 'monitoring' && <PortfolioMonitoring />}
-      {section === 'accelerators' && <AcceleratorAppointments ctx={ctx} />}
-    </div>
-  )
-}
-function SterlingWorkspace({ ctx, section }) {
-  const cards = (loans) => { const d = loans.filter((l) => ['Disbursed', 'Repaying', 'Completed'].includes(l.status)); return [['Awaiting assessment', loans.filter((l) => l.status === 'Coop validated').length], ['To disburse', loans.filter((l) => l.status === 'BOI approved').length], ['Disbursed', d.length], ['Disbursed value', fmtNaira(d.reduce((a, l) => a + (l.amountApproved || 0), 0))]] }
-  return <LoanRoleWorkspace ctx={ctx} section={section} statuses={['Coop validated', 'BOI approved', 'Disbursed']} cards={cards} />
-}
-function BoiWorkspace({ ctx, section }) {
-  const cards = (loans) => [['Awaiting approval', loans.filter((l) => l.status === 'Bank assessment').length], ['Approved', loans.filter((l) => l.status === 'BOI approved').length], ['Disbursed', loans.filter((l) => ['Disbursed', 'Repaying', 'Completed'].includes(l.status)).length], ['Applications', loans.length]]
-  return <LoanRoleWorkspace ctx={ctx} section={section} statuses={['Bank assessment', 'BOI approved']} cards={cards} />
-}
-const SPV_SPLIT = [['Lagos State (MCCTI)', 50], ['Asset Matrix MFB', 15], ['Imade / Catridge', 15], ['QooP', 10], ['SEKAT', 10]]
-function AssetMatrixWorkspace({ ctx, section }) {
-  const [coops, setCoops] = useState(null), [loans, setLoans] = useState([]), [wallets, setWallets] = useState([]), [last, setLast] = useState(null), [busy, setBusy] = useState(false)
-  const reload = useCallback(() => { listCoops().then(setCoops); listLoans().then(setLoans); kvList('wallet:').then(setWallets); kvGet('escrow:last').then(setLast) }, [])
-  useEffect(() => { reload() }, [reload])
-  if (!coops) return <p className="muted-line">Loading escrow…</p>
-  const regFees = coops.filter((c) => c.feeStatus === 'Paid').length * COOP_FEES.registration
-  const returnsFees = coops.filter((c) => c.returns).length * COOP_FEES.annualReturns
-  const disbursedValue = loans.filter((l) => ['Disbursed', 'Repaying', 'Completed'].includes(l.status)).reduce((a, l) => a + (l.amountApproved || 0), 0)
-  const portalFees = Math.round(disbursedValue * 0.025)
-  const sumTxn = (type) => wallets.reduce((a, w) => a + (w.txns || []).filter((t) => t.type === type).reduce((s, t) => s + (t.amount || 0), 0), 0)
-  const funding = sumTxn('topup'), payouts = sumTxn('payout')
-  const walletFees = Math.round(funding * 0.01)
-  const accrued = regFees + returnsFees + portalFees + walletFees
-  const revenueDonut = [{ label: 'Registration & returns', value: regFees + returnsFees, color: CHART_C.gold }, { label: 'Disbursement portal', value: portalFees, color: CHART_C.green }, { label: 'Wallet fees', value: walletFees, color: CHART_C.teal }].filter((d) => d.value)
-  const distribute = async () => { setBusy(true); const rec = { amount: accrued, at: new Date().toISOString(), by: ctx.name, split: SPV_SPLIT.map(([n, p]) => [n, Math.round(accrued * p / 100)]) }; await kvSet('escrow:last', rec); await addAudit({ trackingId: 'ESCROW', action: 'Revenue distributed on 50/15/15/10/10', by: ctx.name, role: 'assetmatrix', note: fmtNaira(accrued) }); setLast(rec); setBusy(false) }
-  return (
-    <div className="ws">
-      {section === 'overview' && (<>
-        <div className="statgrid">
-          <div className="stat"><span className="stat-fig">{fmtNaira(accrued)}</span><span className="stat-lab">Escrow accrued</span></div>
-          <div className="stat"><span className="stat-fig">{fmtNaira(regFees + returnsFees)}</span><span className="stat-lab">Registration &amp; returns</span></div>
-          <div className="stat"><span className="stat-fig">{fmtNaira(portalFees)}</span><span className="stat-lab">Disbursement portal (2.5%)</span></div>
-          <div className="stat"><span className="stat-fig">{fmtNaira(walletFees)}</span><span className="stat-lab">Wallet fees (1%)</span></div>
-        </div>
-        <div className="chart-grid">
-          <section className="chart-card"><h4>Revenue by stream</h4>{revenueDonut.length ? <Donut data={revenueDonut} centerTop={fmtNaira(accrued)} centerBottom="accrued" /> : <p className="muted-line">No revenue accrued yet.</p>}</section>
-          <section className="chart-card wide"><h4>Payments throughput</h4><div className="status-row"><span>Wallet funding processed</span><span className="mono">{fmtNaira(funding)}</span></div><div className="status-row"><span>Esusu payouts</span><span className="mono">{fmtNaira(payouts)}</span></div><div className="status-row"><span>LASMECO disbursed</span><span className="mono">{fmtNaira(disbursedValue)}</span></div><div className="status-row"><span>Active wallets</span><span className="mono">{wallets.length}</span></div></section>
-        </div>
-      </>)}
-      {section === 'distribution' && (
-        <div className="dash-grid">
-          <section className="dash-card"><h3>Sharing formula distribution</h3>{SPV_SPLIT.map(([n, p]) => (<div className="status-row" key={n}><span>{n} ({p}%)</span><span className="mono">{fmtNaira(Math.round(accrued * p / 100))}</span></div>))}<div className="panel-actions"><button className="btn btn-gold btn-sm" onClick={distribute} disabled={busy}>{busy ? 'Recording\u2026' : 'Record distribution'}</button></div></section>
-          <section className="dash-card"><h3>Last distribution</h3>{last ? (<><p className="dash-card-sub">{fmtNaira(last.amount)} on {fmtDate(last.at)} by {last.by}</p>{(last.split || []).map(([n, v]) => (<div className="status-row" key={n}><span>{n}</span><span className="mono">{fmtNaira(v)}</span></div>))}</>) : <p className="muted-line">No distribution recorded yet.</p>}</section>
-        </div>
-      )}
-      <p className="dash-foot">Asset Matrix MFB holds the platform revenue escrow, distributed on the 50/15/15/10/10 formula. Live bank settlement connects through Paystack or Flutterwave. Not financial advice.</p>
-    </div>
-  )
-}
-function LasmecoOverview({ ctx }) {
-  const [loans, reload] = useLoans(); const [sel, setSel] = useState(null)
-  if (!loans) return <p className="muted-line">Loading LASMECO…</p>
-  if (sel) return <LoanDetail loan={sel} ctx={ctx} onClose={() => { setSel(null); reload() }} onChanged={reload} />
-  const disbursed = loans.filter((l) => ['Disbursed', 'Repaying', 'Completed'].includes(l.status))
-  const disbursedValue = disbursed.reduce((a, l) => a + (l.amountApproved || 0), 0)
-  const bySector = Array.from(new Set(loans.map((l) => l.sector))).map((s) => [s, loans.filter((l) => l.sector === s).length])
-  return (
-    <div className="ws">
-      <div className="statgrid"><div className="stat"><span className="stat-fig">{loans.length}</span><span className="stat-lab">Applications</span></div><div className="stat"><span className="stat-fig">{disbursed.length}</span><span className="stat-lab">Disbursed</span></div><div className="stat"><span className="stat-fig">{fmtNaira(disbursedValue)}</span><span className="stat-lab">Disbursed value</span></div><div className="stat"><span className="stat-fig">{loans.filter((l) => !['Disbursed', 'Repaying', 'Completed', 'Declined'].includes(l.status)).length}</span><span className="stat-lab">In pipeline</span></div></div>
-      <div className="band-dist">{bySector.map(([s, n]) => (<div className="bd" key={s}><span className="src-badge src-mccti">{s}</span><span className="bd-n">{n}</span></div>))}</div>
-      <LoanTable loans={loans} onOpen={setSel} ctx={ctx} />
-    </div>
-  )
-}
-
-
-/* =============================== STAGE 6 ===============================
-   Digital Wallet & Payments. Member wallets, cooperative savings pools and a
-   rotating esusu / ajo, with transactions. Payments run through a stub that
-   uses Paystack or Flutterwave when their keys are configured.
-   ====================================================================== */
-/* ---- Paystack collections (test mode until keys are set) -----------------
-   Inbound payments (fees, wallet funding) run through Paystack when
-   VITE_PAYSTACK_PUBLIC_KEY is set and are verified server-side via
-   /api/paystack/verify (PAYSTACK_SECRET_KEY). With no key the app falls back to
-   a demo success so every flow keeps working. Disbursements use bank rails, not
-   card checkout. */
-const PAYSTACK_PUBLIC = (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_PAYSTACK_PUBLIC_KEY) || ''
-let _psLoad
-function loadPaystack() {
-  if (typeof window !== 'undefined' && window.PaystackPop) return Promise.resolve()
-  if (_psLoad) return _psLoad
-  _psLoad = new Promise((res, rej) => { const s = document.createElement('script'); s.src = 'https://js.paystack.co/v1/inline.js'; s.onload = res; s.onerror = rej; document.body.appendChild(s) })
-  return _psLoad
-}
-async function verifyPaystack(reference) {
-  if (!reference || String(reference).startsWith('DEMO-')) return { status: 'success', demo: true }
-  try { const r = await fetch('/api/paystack/verify?reference=' + encodeURIComponent(reference)); return await r.json() } catch (e) { return { status: 'unknown' } }
-}
-async function collectPayment({ email, amountNaira, purpose, metadata }) {
-  const amt = Number(amountNaira) || 0
-  if (!PAYSTACK_PUBLIC) return { ok: true, demo: true, reference: 'DEMO-' + Date.now() }
-  try { await loadPaystack() } catch (e) { return { ok: false, error: 'Could not load Paystack' } }
-  const res = await new Promise((resolve) => {
-    try {
-      const handler = window.PaystackPop.setup({
-        key: PAYSTACK_PUBLIC, email: email || 'member@coopeco.ng', amount: Math.round(amt * 100), currency: 'NGN',
-        ref: 'CE-' + Date.now() + '-' + Math.floor(Math.random() * 100000), metadata: Object.assign({ purpose }, metadata || {}),
-        callback: (resp) => resolve({ ok: true, reference: resp.reference }), onClose: () => resolve({ ok: false, cancelled: true }),
-      })
-      handler.openIframe()
-    } catch (e) { resolve({ ok: false, error: 'Paystack init failed' }) }
-  })
-  if (!res.ok) return res
-  const v = await verifyPaystack(res.reference)
-  return { ok: v.status === 'success' || v.demo || v.status === 'demo', reference: res.reference, status: v.status, demo: res.demo || v.demo }
-}
-/* ---- Notifications (in-app + SMS/WhatsApp) -------------------------------
-   Every notification is stored in-app so recipients always see it. When a phone
-   number and a provider (Termii or Twilio) are configured, it is also sent by
-   SMS or WhatsApp via /api/notify. Recipients are an email or a role (role:officer,
-   role:leadership) so staff share a queue. */
-function genNotifId() { return 'N' + Date.now() + Math.floor(Math.random() * 10000) }
-async function listNotifs(ctx) { const all = await kvList('notif:'); return all.filter((n) => n.to === ctx.email || n.to === 'role:' + ctx.role).sort((a, b) => (a.at < b.at ? 1 : -1)) }
-async function notify({ to, title, body, event, phone, channel, link }) {
-  if (!to) return
-  const id = genNotifId()
-  await kvSet('notif:' + id, { id, to, title, body: body || '', event: event || '', link: link || null, at: new Date().toISOString(), read: false })
-  if (phone) { try { await fetch('/api/notify', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ to: phone, channel: channel || 'sms', message: title + (body ? ': ' + body : '') }) }) } catch (e) { /* in-app only */ } }
-}
-async function markNotifRead(id) { const n = await kvGet('notif:' + id); if (n && !n.read) await kvSet('notif:' + id, { ...n, read: true }) }
-async function markAllNotifsRead(ctx) { const list = await listNotifs(ctx); for (const n of list) if (!n.read) await kvSet('notif:' + n.id, { ...n, read: true }) }
-function NotificationCenter({ ctx, onChange, onNavigate }) {
-  const [items, setItems] = useState(null), [open, setOpen] = useState(null)
-  const reload = useCallback(() => listNotifs(ctx).then((l) => { setItems(l); onChange && onChange() }), [ctx.email, ctx.role])
-  useEffect(() => { reload() }, [reload])
-  if (!items) return <p className="muted-line">Loading notifications…</p>
-  const unread = items.filter((n) => !n.read).length
-  const openNotif = async (n) => { await markNotifRead(n.id); setOpen(n); reload() }
-  const goTo = (n) => { if (n.link && n.link.section && onNavigate) onNavigate(n.link.section); else if (onNavigate) onNavigate('overview') }
-  if (open) {
-    return (
-      <div className="ws">
-        <button className="back-link" onClick={() => setOpen(null)}>&larr; Back to notifications</button>
-        <div className="returns-box"><h4>{open.title}</h4>
-          <p className="notif-at">{fmtDate(open.at)}</p>
-          {open.body ? <p className="notif-msg">{open.body}</p> : null}
-          {open.link && open.link.section ? <div className="panel-actions"><button className="btn btn-gold btn-sm" onClick={() => goTo(open)}>{open.link.label || 'Go to this'}</button></div> : <p className="chart-note">No further action is needed here.</p>}
-        </div>
-      </div>
-    )
-  }
-  return (
-    <div className="ws">
-      <div className="support-cta"><span>{unread ? unread + ' unread notification' + (unread === 1 ? '' : 's') : 'You\u2019re all caught up.'}</span>{unread ? <button className="btn btn-outline btn-sm" onClick={async () => { await markAllNotifsRead(ctx); reload() }}>Mark all read</button> : null}</div>
-      {items.length ? <div className="notif-list">{items.map((n) => (<div className={cx('notif', !n.read && 'unread')} key={n.id} onClick={() => openNotif(n)}><span className="notif-dot" aria-hidden="true" /><div className="notif-body"><strong>{n.title}</strong>{n.body ? <p>{n.body}</p> : null}<span className="notif-at">{fmtDate(n.at)}{n.link && n.link.section ? ' \u00b7 tap to open' : ''}</span></div></div>))}</div> : <p className="muted-line">No notifications yet.</p>}
-    </div>
-  )
-}
-/* ---- Document uploads (Supabase Storage, demo fallback) ------------------ */
-const DOC_CATEGORIES = ['By-laws', 'Registration certificate', 'Trustee ID', 'Financial statement', 'Meeting minutes', 'Other']
-function fileToDataURL(file) { return new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(String(r.result)); r.onerror = rej; r.readAsDataURL(file) }) }
-function genDocId() { return 'D' + Date.now() + Math.floor(Math.random() * 10000) }
-async function listDocs(coopId) { const all = await kvList('doc:'); return all.filter((d) => d.coopId === coopId).sort((a, b) => (a.uploadedAt < b.uploadedAt ? 1 : -1)) }
-async function uploadDocument(file, coopId, category, ctx) {
-  if (!file) return { ok: false, error: 'No file selected.' }
-  if (file.size > 5 * 1024 * 1024) return { ok: false, error: 'File exceeds 5MB. Please compress and retry.' }
-  const id = genDocId(), safe = file.name.replace(/[^A-Za-z0-9._-]+/g, '_'), path = coopId + '/' + id + '-' + safe
-  let url = '', storage = 'demo'
-  if (supa) {
-    try {
-      const up = await supa.storage.from('coop-docs').upload(path, file, { upsert: true, contentType: file.type })
-      if (up.error) return { ok: false, error: up.error.message || 'Upload failed. Is the coop-docs bucket created?' }
-      storage = 'supabase' // private bucket: no public URL stored; access via short-lived signed URLs on view
-    } catch (e) { return { ok: false, error: 'Storage upload failed.' } }
-  } else if (file.size <= 1024 * 1024) { url = await fileToDataURL(file) }
-  const rec = { id, coopId, name: file.name, category, size: file.size, type: file.type, url, path, storage, uploadedBy: ctx.name, uploadedAt: new Date().toISOString(), verified: false }
-  await kvSet('doc:' + coopId + ':' + id, rec)
-  return { ok: true, rec }
-}
-async function openDocument(d) {
-  let url = ''
-  if (d.storage === 'supabase' && d.path && supa) {
-    try { const s = await supa.storage.from('coop-docs').createSignedUrl(d.path, 300); url = (s && s.data && s.data.signedUrl) || '' } catch (e) { /* fall through */ }
-    if (!url) { toast('Could not open the document. You may not have access, or it has been removed.', 'error'); return false }
-  } else if (d.url) { url = d.url }
-  else if (d.storage === 'demo') { url = demoDocPreview(d) } // sample records have no file; show a representative preview
-  else { toast('This document is stored securely; open it from a device with access to the storage bucket.'); return false }
-  showPreview(d, url); return true
-}
-// Build a readable placeholder page for sample documents so approvers can still "view" before approving.
-function demoDocPreview(d) {
-  const esc = (t) => String(t || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-  const html = '<!doctype html><html><head><meta charset="utf-8"><style>body{font-family:Georgia,serif;margin:0;background:#f3f5f2;color:#1f2a24}.pg{max-width:640px;margin:28px auto;background:#fff;border:1px solid #dfe5df;border-radius:8px;padding:40px 44px;box-shadow:0 8px 30px rgba(0,0,0,.06)}h1{font-size:19px;color:#1C8A4F;margin:0 0 4px}.sub{color:#5b665e;font-size:12px;margin:0 0 22px;border-bottom:1px solid #eceeec;padding-bottom:14px}.row{display:flex;justify-content:space-between;font-size:13px;padding:7px 0;border-bottom:1px dashed #eee}.row span:first-child{color:#5b665e}.note{margin-top:22px;font-size:12px;color:#8a948c;font-style:italic}.stamp{margin-top:26px;display:inline-block;border:2px solid #1C8A4F;color:#1C8A4F;border-radius:6px;padding:6px 12px;font-size:11px;letter-spacing:.08em;text-transform:uppercase}</style></head><body><div class="pg"><h1>' + esc(d.category) + '</h1><p class="sub">' + esc(d.name) + '</p><div class="row"><span>Uploaded by</span><strong>' + esc(d.uploadedBy || 'Applicant') + '</strong></div><div class="row"><span>File</span><strong>' + esc(d.name) + '</strong></div><div class="row"><span>Type</span><strong>' + esc(d.type || 'application/pdf') + '</strong></div><div class="row"><span>Status</span><strong>' + (d.verified ? 'Verified' : 'Awaiting verification') + '</strong></div><p class="note">This is a sample document generated for demonstration. In live use, the applicant\u2019s actual uploaded file appears here for the approver to review before approving.</p>' + (d.verified ? '<span class="stamp">Verified</span>' : '') + '</div></body></html>'
-  return 'data:text/html;charset=utf-8,' + encodeURIComponent(html)
-}
-async function setDocVerified(coopId, id, verified, ctx) { const d = await kvGet('doc:' + coopId + ':' + id); if (d) await kvSet('doc:' + coopId + ':' + id, { ...d, verified, verifiedBy: ctx.name, verifiedAt: new Date().toISOString() }) }
-async function deleteDocument(coopId, id) { const d = await kvGet('doc:' + coopId + ':' + id); if (d && supa && d.path) { try { await supa.storage.from('coop-docs').remove([d.path]) } catch (e) { /* ignore */ } } await kvDelete('doc:' + coopId + ':' + id) }
-function fmtFileSize(b) { return b > 1048576 ? (b / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(b / 1024)) + ' KB' }
-const KYC_RETENTION_MONTHS = 60
-async function expiredDocuments() {
-  const docs = await kvList('doc:'), loans = await listLoans()
-  const byId = {}; loans.forEach((l) => { byId[l.loanId] = l })
-  const cutoff = new Date(); cutoff.setMonth(cutoff.getMonth() - KYC_RETENTION_MONTHS)
-  return docs.filter((d) => {
-    const loan = byId[d.coopId]
-    if (!loan) return false // non-loan (cooperative governance) documents are retained
-    if (!['Completed', 'Declined', 'Default'].includes(loan.status)) return false // keep while application is live
-    const closed = new Date(loan.updatedAt || d.uploadedAt)
-    return closed < cutoff
-  })
-}
-async function purgeExpiredDocuments() {
-  const exp = await expiredDocuments()
-  for (const d of exp) { try { await deleteDocument(d.coopId, d.id) } catch (e) { /* continue */ } }
-  return exp.length
-}
-function RetentionPanel() {
-  const [exp, setExp] = useState(null), [busy, setBusy] = useState(false), [done, setDone] = useState(null)
-  const reload = useCallback(() => expiredDocuments().then(setExp), [])
-  useEffect(() => { reload() }, [reload])
-  const purge = async () => {
-    if (!exp || !exp.length) return
-    if (!(await confirmDialog('Permanently delete ' + exp.length + ' expired KYC document(s)? This cannot be undone.', { danger: true, confirmLabel: 'Delete' }))) return
-    setBusy(true); const n = await purgeExpiredDocuments(); setDone(n); setBusy(false); reload()
-  }
-  return (
-    <div className="ws">
-      <div className="returns-box"><h4>KYC document retention</h4>
-        <p className="muted-line">Loan/KYC documents are retained for {Math.round(KYC_RETENTION_MONTHS / 12)} years ({KYC_RETENTION_MONTHS} months) after an application closes (completed, declined or defaulted), then deleted — aligned with financial-institution KYC record-keeping. Cooperative governance documents (by-laws, certificates) are retained on the registry. Adjust the period in KYC_RETENTION_MONTHS after confirming the schedule with your data-protection officer (NDPR).</p>
-        <div className="statgrid"><div className="stat"><span className="stat-fig">{exp ? exp.length : '\u2026'}</span><span className="stat-lab">Documents past retention</span></div><div className="stat"><span className="stat-fig">{KYC_RETENTION_MONTHS} mo</span><span className="stat-lab">Retention after closure</span></div></div>
-        {exp && exp.length ? <div className="docs-list" style={{ marginTop: '12px' }}>{exp.slice(0, 8).map((d) => (<div className="doc-row" key={d.id}><div className="doc-meta"><strong>{d.name}</strong><span>{d.category} &middot; loan {d.coopId} &middot; uploaded {fmtDate(d.uploadedAt)}</span></div></div>))}</div> : <p className="muted-line" style={{ marginTop: '10px' }}>Nothing is past retention right now.</p>}
-        <div className="panel-actions"><button className="btn btn-outline btn-sm" disabled={busy || !exp || !exp.length} onClick={purge}>{busy ? 'Purging\u2026' : 'Purge expired documents'}</button></div>
-        {done != null && <p className="panel-note" style={{ color: 'var(--green)' }}>Purged {done} document{done === 1 ? '' : 's'}.</p>}
-        <p className="panel-note">For unattended enforcement, schedule the purge server-side (Supabase pg_cron / an Edge Function) on the same rule. See the deploy guide for the SQL.</p>
-      </div>
-    </div>
-  )
-}
-function DocumentsPanel({ coopId, ctx, canVerify, canUpload = true, categories, onChange }) {
-  const cats = categories || DOC_CATEGORIES
-  const [docs, setDocs] = useState(null), [cat, setCat] = useState(cats[0]), [busy, setBusy] = useState(false), [err, setErr] = useState('')
-  const fileRef = useRef(null)
-  const reload = useCallback(() => listDocs(coopId).then((d) => { setDocs(d); onChange && onChange() }), [coopId, onChange])
-  useEffect(() => { reload() }, [reload])
-  const onUpload = async (e) => { const f = e.target.files[0]; if (!f) return; setErr(''); setBusy(true); const r = await uploadDocument(f, coopId, cat, ctx); setBusy(false); if (fileRef.current) fileRef.current.value = ''; if (!r.ok) setErr(r.error || 'Upload failed.'); else reload() }
-  if (!docs) return <p className="muted-line">Loading documents…</p>
-  return (
-    <div className="docs">
-      {canUpload && <div className="docs-upload"><select value={cat} onChange={(e) => setCat(e.target.value)}>{cats.map((c) => <option key={c}>{c}</option>)}</select><input ref={fileRef} type="file" accept=".pdf,.png,.jpg,.jpeg,.webp,.doc,.docx" onChange={onUpload} disabled={busy} /></div>}
-      {busy && <p className="muted-line">Uploading…</p>}
-      {err && <p className="auth-err">{err}</p>}
-      {docs.length ? <div className="docs-list">{docs.map((d) => (<div className="doc-row" key={d.id}><div className="doc-meta"><strong>{d.name}</strong><span>{d.category} &middot; {fmtFileSize(d.size)} &middot; {d.uploadedBy} {d.verified ? <span className="chip st-approved">Verified</span> : null}</span></div><div className="doc-actions"><button className="link-inline" onClick={() => openDocument(d)}>View</button>{canVerify && !d.verified ? <button className="link-inline" onClick={async () => { await setDocVerified(coopId, d.id, true, ctx); reload() }}>Verify</button> : null}{(canUpload || canVerify) ? <button className="link-inline danger" onClick={async () => { await deleteDocument(coopId, d.id); reload() }}>Remove</button> : null}</div></div>))}</div> : <p className="muted-line">No documents uploaded yet.</p>}
-      {!hasSupabase ? <p className="panel-note">Demo mode: small files preview in-browser only. Connect Supabase Storage (run supabase_setup.sql to create the private “coop-docs” bucket) to store documents securely; they are then served only via short-lived signed links to signed-in staff.</p> : <p className="panel-note">Documents are stored in a private bucket and opened via short-lived signed links. Only signed-in platform users can view them.</p>}
-    </div>
-  )
-}
-async function getWallet(id) { return (await kvGet('wallet:' + id)) || { id, balance: 0, txns: [] } }
-async function walletTxn(id, type, amount, note, by) {
-  const w = await getWallet(id); const amt = Number(amount) || 0
-  const credit = ['credit', 'payout', 'topup', 'contribution-in'].includes(type)
-  const bal = Math.max(0, (w.balance || 0) + (credit ? amt : -amt))
-  const txn = { tid: 'T' + Date.now() + Math.floor(Math.random() * 1000), type, amount: amt, note: note || '', by: by || '', at: new Date().toISOString() }
-  const next = { id, balance: bal, txns: [txn, ...(w.txns || [])].slice(0, 60), esusu: w.esusu }
-  await kvSet('wallet:' + id, next); return next
-}
-async function walletTransfer(from, to, amount, note, by) { await walletTxn(from, 'debit', amount, note, by); return walletTxn(to, 'credit', amount, note, by) }
-const mWallet = (memberId) => 'M:' + memberId
-const cWallet = (coopId) => 'C:' + coopId
-
-function TxnList({ txns }) {
-  if (!txns?.length) return <p className="muted-line">No transactions yet.</p>
-  const label = { topup: 'Added funds', credit: 'Received', debit: 'Sent', payout: 'Esusu payout', 'contribution-in': 'Contribution', 'fee': 'Fee paid' }
-  return (
-    <div className="txns">{txns.map((t) => (
-      <div className="txn" key={t.tid}>
-        <span className={cx('txn-dir', ['topup', 'credit', 'payout', 'contribution-in'].includes(t.type) ? 'in' : 'out')}>{['topup', 'credit', 'payout', 'contribution-in'].includes(t.type) ? '+' : '\u2212'}{fmtNaira(t.amount)}</span>
-        <span className="txn-mid"><strong>{label[t.type] || t.type}</strong>{t.note ? ' \u00b7 ' + t.note : ''}</span>
-        <span className="txn-at">{fmtDate(t.at)}</span>
-      </div>))}</div>
-  )
-}
-function MemberWallet({ member }) {
-  const [w, setW] = useState(null), [amt, setAmt] = useState(''), [busy, setBusy] = useState(false), [coops, setCoops] = useState([])
-  const id = mWallet(member.memberId)
-  const reload = useCallback(() => { getWallet(id).then(setW); listCoops().then(setCoops) }, [id])
-  useEffect(() => { reload() }, [reload])
-  if (!w) return <p className="muted-line">Loading wallet…</p>
-  const coop = coops.find((c) => c.name === member.coop)
-  const topup = async () => { const a = Number(amt) || 0; if (a <= 0) return; setBusy(true); const r = await collectPayment({ email: member.createdBy || 'member@coopeco.ng', amountNaira: a, purpose: 'Wallet funding', metadata: { memberId: member.memberId } }); if (r.ok) { await walletTxn(id, 'topup', a, r.demo ? 'Card top-up (demo)' : 'Card top-up', member.name) } else if (!r.cancelled) { toast('Payment could not be completed. Please try again.') } await reload(); setAmt(''); setBusy(false) }
-  const save = async () => { const a = Number(amt) || 0; if (a <= 0) { toast('Enter an amount.'); return } if (a > w.balance) { toast('Insufficient wallet balance. Add funds first.'); return } if (!coop) { toast('Your cooperative is not on the platform yet.'); return } setBusy(true); await walletTransfer(id, cWallet(coop.trackingId), a, 'Savings to ' + coop.name, member.name); await reload(); setAmt(''); setBusy(false) }
-  return (
-    <div className="wallet">
-      <div className="wallet-top"><div><span className="wallet-lab">Wallet balance</span><span className="wallet-bal">{fmtNaira(w.balance)}</span></div><span className="wallet-chip">Digital wallet</span></div>
-      <div className="wallet-actions">
-        <input type="number" value={amt} onChange={(e) => setAmt(e.target.value)} placeholder="Amount (₦)" />
-        <button className="btn btn-gold btn-sm" onClick={topup} disabled={busy}>Add funds</button>
-        <button className="btn btn-outline btn-sm" onClick={save} disabled={busy}>Save to cooperative</button>
-      </div>
-      <p className="panel-note">{PAYSTACK_PUBLIC ? 'Card top-ups are processed securely through Paystack (test mode until live keys are set).' : 'Top-ups and transfers are demo movements until Paystack is connected.'} Savings move into your cooperative’s pool.</p>
-      <h4 className="wallet-h">Recent transactions</h4>
-      <TxnList txns={w.txns} />
-    </div>
-  )
-}
-function CoopEsusu({ coop, ctx }) {
-  const [w, setW] = useState(null), [members, setMembers] = useState([]), [busy, setBusy] = useState(false)
-  const id = cWallet(coop.trackingId)
-  const reload = useCallback(() => { getWallet(id).then(setW); listMembers().then(setMembers) }, [id])
-  useEffect(() => { reload() }, [reload])
-  if (!w) return <p className="muted-line">Loading savings…</p>
-  const roster = members.filter((m) => m.coop === coop.name)
-  const canManage = ctx.role === 'society' || ctx.role === 'leadership'
-  const es = w.esusu && w.esusu.order ? w.esusu : null
-  const startRotation = async () => {
-    if (roster.length < 2) { toast('You need at least 2 members to start a rotation.'); return }
-    setBusy(true)
-    const order = roster.map((m) => ({ memberId: m.memberId, name: m.name }))
-    const cur = await getWallet(id); await kvSet('wallet:' + id, { ...cur, esusu: { order, startAt: new Date().toISOString(), freq: 'monthly', paid: [] } })
-    await reload(); setBusy(false)
-  }
-  const schedule = () => { if (!es) return []; const start = new Date(es.startAt); return es.order.map((o, i) => { const due = new Date(start); due.setMonth(due.getMonth() + i); const paid = (es.paid || []).find((p) => p.pos === i); return { pos: i, name: o.name, memberId: o.memberId, dueDate: due.toISOString(), paid: !!paid, paidAmount: paid ? paid.amount : 0 } }) }
-  const sched = schedule()
-  const nextDue = sched.find((s) => !s.paid && new Date(s.dueDate).getTime() <= Date.now())
-  const upcoming = sched.find((s) => !s.paid && new Date(s.dueDate).getTime() > Date.now())
-  const processDue = async () => {
-    if (!nextDue) return
-    if (w.balance <= 0) { toast('The savings pool is empty. Members need to save first.'); return }
-    setBusy(true)
-    const payout = w.balance
-    await walletTxn(id, 'debit', payout, 'Esusu payout to ' + nextDue.name, ctx.name)
-    await walletTxn(mWallet(nextDue.memberId), 'payout', payout, 'Esusu payout from ' + coop.name, ctx.name)
-    const cur = await getWallet(id); const paid = [...((cur.esusu && cur.esusu.paid) || []), { memberId: nextDue.memberId, pos: nextDue.pos, at: new Date().toISOString(), amount: payout }]
-    await kvSet('wallet:' + id, { ...cur, esusu: { ...cur.esusu, paid } })
-    const m = roster.find((x) => x.memberId === nextDue.memberId); if (m) await notify({ to: m.createdBy, title: 'Esusu payout received', body: fmtNaira(payout) + ' from ' + coop.name, event: 'esusu', phone: m.phone })
-    await reload(); setBusy(false)
-  }
-  return (
-    <div className="wallet">
-      <div className="wallet-top"><div><span className="wallet-lab">Cooperative savings pool (esusu / ajo)</span><span className="wallet-bal">{fmtNaira(w.balance)}</span></div><span className="wallet-chip">{roster.length} members</span></div>
-      {!es ? (
-        <div className="esusu-next"><span>No rotation set up yet. Members save into the pool; a rotation pays the pool to each member in turn, on a monthly schedule.</span>{canManage ? <button className="btn btn-gold btn-sm" onClick={startRotation} disabled={busy}>{busy ? 'Starting\u2026' : 'Start rotation'}</button> : null}</div>
-      ) : (<>
-        <div className="esusu-next"><span>{nextDue ? 'Due now \u2014 pays to' : upcoming ? 'Next payout goes to' : 'Rotation complete for'}</span><strong>{(nextDue || upcoming || sched[sched.length - 1] || {}).name || '\u2014'}</strong>{canManage && nextDue ? <button className="btn btn-gold btn-sm" onClick={processDue} disabled={busy}>{busy ? 'Paying\u2026' : 'Process due payout'}</button> : null}</div>
-        <div className="rtable-wrap"><table className="rtable"><thead><tr><th>#</th><th>Member</th><th>Scheduled</th><th>Status</th></tr></thead>
-          <tbody>{sched.map((s) => { const st = s.paid ? 'Paid' : (new Date(s.dueDate).getTime() <= Date.now() ? 'Due' : 'Upcoming'); return (<tr key={s.pos}><td className="mono">{s.pos + 1}</td><td>{s.name}</td><td>{fmtDate(s.dueDate)}</td><td><span className={cx('chip', st === 'Paid' ? 'st-approved' : st === 'Due' ? 'st-review' : 'st-filed')}>{st}{s.paid ? ' \u00b7 ' + fmtNaira(s.paidAmount) : ''}</span></td></tr>) })}</tbody>
-        </table></div>
-      </>)}
-      <p className="panel-note">Rotation is scheduled monthly and pays the pool to each member in turn. In production a scheduled job processes each due payout automatically and notifies the recipient; here the society triggers the due payout. Demo movements until payments are connected.</p>
-      <h4 className="wallet-h">Pool activity</h4>
-      <TxnList txns={w.txns} />
-    </div>
-  )
-}
-/* =============================== STAGE 7 ===============================
-   Support & Grievance Redress. A help concierge with an FAQ, an optional AI
-   assistant (via the server-side proxy when a key is configured), and a
-   ticketing / grievance system: members and partners raise issues, the
-   Directorate triages, and leadership is the escalation panel.
-   ====================================================================== */
-const TICKET_CATS = ['Registration', 'Annual returns', 'LASMECO / finance', 'Wallet / payments', 'Data / privacy', 'Other']
-const FAQ = [
-  { q: 'How do I register my cooperative?', a: 'Sign in as a Cooperative Society and file your society. You receive a tracking ID; MCCTI leadership reviews the documents and approves or returns the application.' },
-  { q: 'What does it cost to join?', a: 'A one-time registration fee of \u20A650,000, plus \u20A615,000 per year for annual returns filing. LASMECO loans carry no upfront fee to the borrower.' },
-  { q: 'How do I apply for a LASMECO loan?', a: 'As a member, complete your profile and apply from your dashboard. An Accelerator prepares you, your cooperative is validated, Sterling Bank assesses and guarantees, the Bank of Industry approves and funds, and Sterling disburses.' },
-  { q: 'How do the wallet and esusu work?', a: 'Add funds to your wallet and save into your cooperative pool. The society disburses the pool to members in rotation (esusu / ajo).' },
-  { q: 'How is my data handled?', a: 'You consent to processing at sign-up, can download your data, and can erase your personal data at any time from your dashboard. See the Privacy notice.' },
-]
-function genTicketId() { return 'TK-' + String(new Date().getFullYear()).slice(2) + '-' + String(Math.floor(Math.random() * 100000)).padStart(5, '0') }
-async function listTickets() { return (await kvList('ticket:')).sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1)) }
-async function createTicket(rec, ctx) {
-  const id = genTicketId(), now = new Date().toISOString()
-  const t = { ticketId: id, status: 'Open', raisedBy: ctx.email, raisedByName: ctx.name, role: ctx.role, thread: [{ by: ctx.name, role: ctx.role, text: rec.message, at: now }], createdAt: now, updatedAt: now, ...rec }
-  await kvSet('ticket:' + id, t, ctx.uid)
-  await notify({ to: 'role:officer', title: 'New support ticket', body: rec.subject + ' \u2014 ' + (rec.category || ''), event: 'ticket' })
-  await notify({ to: 'role:leadership', title: 'New support ticket', body: rec.subject + ' \u2014 ' + (rec.category || ''), event: 'ticket' })
-  return t
-}
-async function updateTicket(id, patch, ctx, reply) {
-  const cur = await kvGet('ticket:' + id); if (!cur) return null
-  const now = new Date().toISOString()
-  const thread = reply ? [...(cur.thread || []), { by: ctx.name, role: ctx.role, text: reply, at: now }] : cur.thread
-  const next = { ...cur, ...patch, thread, updatedAt: now }
-  await kvSet('ticket:' + id, next, cur.user_id)
-  if ((reply || patch.status) && cur.raisedBy && cur.raisedBy !== ctx.email) {
-    await notify({ to: cur.raisedBy, title: 'Support ticket update', body: cur.subject + (patch.status ? ' \u2014 ' + patch.status : ' \u2014 new reply'), event: 'ticket' })
-  }
-  return next
-}
-function AskConcierge() {
-  const [q, setQ] = useState(''), [a, setA] = useState(null), [busy, setBusy] = useState(false)
-  const ask = async () => {
-    if (!q.trim()) return; setBusy(true); setA(null)
-    let ans = ''
-    try {
-      const r = await fetch('/api/anthropic', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ messages: [{ role: 'user', content: q.trim() }] }) })
-      const d = await r.json().catch(() => ({}))
-      if (r.ok && d && d.content) ans = Array.isArray(d.content) ? d.content.map((x) => x.text || '').join('') : String(d.content)
-    } catch (e) { ans = '' }
-    setA(ans || 'The AI concierge activates once the Ministry connects its assistant key. In the meantime, browse the FAQ below or raise a ticket and the Directorate will respond.')
-    setBusy(false)
-  }
-  return (
-    <div className="concierge">
-      <div className="concierge-row"><input value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && ask()} placeholder="Ask a question, e.g. how do I apply for LASMECO?" /><button className="btn btn-gold btn-sm" onClick={ask} disabled={busy}>{busy ? 'Asking\u2026' : 'Ask'}</button></div>
-      {a && <div className="concierge-ans">{a}</div>}
-    </div>
-  )
-}
-function RaiseTicketForm({ ctx, coop, onDone, onCancel }) {
-  const [f, setF] = useState({ subject: '', category: TICKET_CATS[0], message: '' })
-  const [busy, setBusy] = useState(false), [err, setErr] = useState('')
-  const set = (k) => (e) => setF({ ...f, [k]: e.target.value })
-  const submit = async () => { setErr(''); if (!f.subject.trim() || !f.message.trim()) { setErr('Add a subject and a message.'); return } setBusy(true); await createTicket({ subject: f.subject.trim(), category: f.category, message: f.message.trim(), coop: coop || '' }, ctx); setBusy(false); onDone() }
-  return (
-    <div className="panel">
-      <div className="panel-head"><h3>Raise a support ticket</h3><button className="link-back" onClick={onCancel}>Cancel</button></div>
-      <div className="form-grid">
-        <label className="field span2"><span>Subject</span><input value={f.subject} onChange={set('subject')} placeholder="Briefly, what is the issue?" /></label>
-        <label className="field"><span>Category</span><select value={f.category} onChange={set('category')}>{TICKET_CATS.map((c) => <option key={c}>{c}</option>)}</select></label>
-        <label className="field span2"><span>Message</span><textarea value={f.message} onChange={set('message')} rows={4} placeholder="Describe the issue or grievance in detail." /></label>
-      </div>
-      {err && <p className="auth-err">{err}</p>}
-      <div className="panel-actions"><button className="btn btn-gold" onClick={submit} disabled={busy}>{busy ? 'Submitting\u2026' : 'Submit ticket'}</button></div>
-      <p className="panel-note">Grievances are tracked and addressed by the Directorate within the programme’s service timelines, and escalated to leadership where unresolved.</p>
-    </div>
-  )
-}
-function TicketDetail({ ticket, ctx, onClose, onChanged }) {
-  const [t, setT] = useState(ticket), [reply, setReply] = useState(''), [busy, setBusy] = useState(false)
-  const staff = ctx.role === 'officer' || ctx.role === 'leadership'
-  const act = async (patch, needReply) => {
-    if (needReply && !reply.trim()) { toast('Add a message.'); return }
-    setBusy(true); const n = await updateTicket(t.ticketId, patch, ctx, reply.trim()); setT(n); setReply(''); setBusy(false); onChanged && onChanged()
-  }
-  return (
-    <div className="detail">
-      <div className="detail-head"><div><h3>{t.subject}</h3><p className="detail-sub">{t.ticketId} &middot; {t.category} &middot; raised by {t.raisedByName}{t.coop ? ' \u00b7 ' + t.coop : ''}</p></div><button className="link-back" onClick={onClose}>&larr; Back</button></div>
-      <div className="detail-chips"><StatusChip status={t.status} kind="ticket" /></div>
-      <div className="thread">{(t.thread || []).map((m, i) => (<div className={cx('msg', (m.role === 'officer' || m.role === 'leadership') && 'staff')} key={i}><div className="msg-head"><strong>{m.by}</strong><span>{roleTitle(m.role)} &middot; {fmtDate(m.at)}</span></div><p>{m.text}</p></div>))}</div>
-      {t.status !== 'Resolved' && (
-        <div className="action-box">
-          <label className="field"><span>Reply</span><textarea value={reply} onChange={(e) => setReply(e.target.value)} rows={3} placeholder="Add a reply or update." /></label>
-          <div className="action-row">
-            <button className="btn btn-gold btn-sm" disabled={busy} onClick={() => act({ status: staff && t.status === 'Open' ? 'In progress' : t.status }, true)}>Send reply</button>
-            {staff && <button className="btn btn-outline btn-sm" disabled={busy} onClick={() => act({ status: 'Resolved' }, false)}>Mark resolved</button>}
-            {ctx.role === 'officer' && <button className="btn btn-outline btn-sm" disabled={busy} onClick={() => act({ status: 'Escalated' }, true)}>Escalate to leadership</button>}
-          </div>
-        </div>
-      )}
-    </div>
-  )
-}
-function SupportConcierge({ ctx }) {
-  const staff = ctx.role === 'officer' || ctx.role === 'leadership'
-  const [tickets, setTickets] = useState(null), [mode, setMode] = useState('home'), [sel, setSel] = useState(null)
-  const reload = useCallback(() => { listTickets().then(setTickets) }, [])
-  useEffect(() => { reload() }, [reload])
-  if (!tickets) return <p className="muted-line">Loading support…</p>
-  if (sel) return <TicketDetail ticket={sel} ctx={ctx} onClose={() => { setSel(null); reload() }} onChanged={reload} />
-  if (mode === 'raise') return <RaiseTicketForm ctx={ctx} onCancel={() => setMode('home')} onDone={() => { setMode('home'); reload() }} />
-  const mine = tickets.filter((t) => t.raisedBy === ctx.email)
-  const open = tickets.filter((t) => t.status !== 'Resolved')
-  const rows = (list) => (
-    <div className="rtable-wrap"><table className="rtable"><thead><tr><th>Ticket</th><th>Subject</th><th>Category</th><th>Raised by</th><th>Status</th><th></th></tr></thead>
-      <tbody>{list.map((t) => (<tr key={t.ticketId}><td className="mono">{t.ticketId}</td><td className="td-name">{t.subject}</td><td>{t.category}</td><td>{t.raisedByName}</td><td><StatusChip status={t.status} kind="ticket" /></td><td><button className="btn-open" onClick={() => setSel(t)}>Open</button></td></tr>))}</tbody>
-    </table></div>
-  )
-  return (
-    <div className="ws">
-      <div className="section-head" style={{ maxWidth: 'none', marginBottom: '8px' }}><h2 style={{ fontSize: '24px' }}>{staff ? 'Support &amp; grievance desk' : 'Help &amp; support'}</h2></div>
-      <AskConcierge />
-      {staff ? (
-        <>
-          <div className="statgrid"><div className="stat"><span className="stat-fig">{tickets.filter((t) => t.status === 'Open').length}</span><span className="stat-lab">Open</span></div><div className="stat"><span className="stat-fig">{tickets.filter((t) => t.status === 'In progress').length}</span><span className="stat-lab">In progress</span></div><div className="stat"><span className="stat-fig">{tickets.filter((t) => t.status === 'Escalated').length}</span><span className="stat-lab">Escalated</span></div><div className="stat"><span className="stat-fig">{tickets.filter((t) => t.status === 'Resolved').length}</span><span className="stat-lab">Resolved</span></div></div>
-          <h4 className="wallet-h">Open tickets</h4>
-          {open.length ? rows(open) : <p className="muted-line">No open tickets.</p>}
-        </>
-      ) : (
-        <>
-          <div className="support-cta"><span>Can’t find an answer? Raise a ticket and the Directorate will respond.</span><button className="btn btn-gold btn-sm" onClick={() => setMode('raise')}>Raise a ticket</button></div>
-          <h4 className="wallet-h">Frequently asked</h4>
-          <Accordion items={FAQ} />
-          <h4 className="wallet-h">My tickets</h4>
-          {mine.length ? rows(mine) : <p className="muted-line">You have no tickets yet.</p>}
-        </>
-      )}
-    </div>
-  )
-}
-const ROLE_NAV = {
-  society: [['overview', 'Overview'], ['cooperative', 'My cooperative'], ['lending', 'LASMECO readiness'], ['guarantees', 'Guarantee requests'], ['chains', 'Value chains'], ['savings', 'Savings & esusu']],
-  member: [['overview', 'Overview'], ['wallet', 'Wallet & savings'], ['finance', 'LASMECO finance'], ['chains', 'Value chains']],
-  officer: [['overview', 'Overview'], ['queue', 'Review queue'], ['all', 'All societies'], ['members', 'Members'], ['lasmeco', 'LASMECO'], ['offices', 'Area offices'], ['risk', 'Risk & fraud'], ['audit', 'Audit log'], ['reports', 'Reports'], ['integrations', 'Integrations']],
-  auditor: [['overview', 'Overview'], ['returns', 'Returns to examine'], ['all', 'All societies']],
-  accelerator: [['overview', 'Overview'], ['queue', 'My pipeline'], ['all', 'All loans'], ['earnings', 'Earnings'], ['chains', 'Value chains']],
-  sterling: [['overview', 'Overview'], ['queue', 'My queue'], ['all', 'All loans'], ['monitoring', 'Portfolio monitoring']],
-  boi: [['overview', 'Overview'], ['queue', 'My queue'], ['all', 'All loans'], ['monitoring', 'Portfolio monitoring']],
-  assetmatrix: [['overview', 'Overview'], ['distribution', 'Distribution']],
-  reviewer: [['overview', 'Overview'], ['applications', 'Applications'], ['chains', 'Value chains'], ['accelerators', 'Accelerators'], ['members', 'Members'], ['lasmeco', 'LASMECO'], ['monitoring', 'Portfolio monitoring'], ['sla', 'Service levels'], ['risk', 'Risk & fraud'], ['revenue', 'Revenue & billing'], ['reports', 'Reports & exports']],
-  leadership: [['overview', 'Overview'], ['applications', 'Applications'], ['chains', 'Value chains'], ['accelerators', 'Accelerators'], ['members', 'Members'], ['lasmeco', 'LASMECO'], ['monitoring', 'Portfolio monitoring'], ['sla', 'Service levels'], ['risk', 'Risk & fraud'], ['revenue', 'Revenue & billing'], ['reports', 'Reports & exports'], ['retention', 'Data retention'], ['integrations', 'Integrations']],
-}
-const WORKSPACES = { society: SocietyWorkspace, member: MemberWorkspace, officer: OfficerWorkspace, auditor: AuditorWorkspace, sterling: SterlingWorkspace, boi: BoiWorkspace, assetmatrix: AssetMatrixWorkspace, accelerator: AcceleratorWorkspace, leadership: LeadershipOverview, reviewer: LeadershipOverview }
-function SideIcon({ name }) {
-  const p = { fill: 'none', stroke: 'currentColor', strokeWidth: 1.7, strokeLinecap: 'round', strokeLinejoin: 'round' }
-  const paths = {
-    workspace: <><rect {...p} x="3" y="3" width="7" height="7" rx="1.5" /><rect {...p} x="14" y="3" width="7" height="7" rx="1.5" /><rect {...p} x="3" y="14" width="7" height="7" rx="1.5" /><rect {...p} x="14" y="14" width="7" height="7" rx="1.5" /></>,
-    help: <><circle {...p} cx="12" cy="12" r="9" /><path {...p} d="M9.5 9.2a2.5 2.5 0 1 1 3 2.4c-.8.3-1.5 1-1.5 2M12 17h.01" /></>,
-    privacy: <path {...p} d="M12 3l7 3v5c0 4.5-3 7.6-7 9-4-1.4-7-4.5-7-9V6z" />,
-    bell: <path {...p} d="M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9M13.7 21a2 2 0 0 1-3.4 0" />,
-  }
-  return <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">{paths[name]}</svg>
-}
-function Sidebar({ role, profile, sections, section, setSection, onSignOut, onHome, canPrivacy, unread, impersonating, onExitView }) {
-  return (
-    <aside className="side">
-      <button className="side-brand" onClick={onHome}><span className="brand-mark" aria-hidden="true">&#9670;</span><span className="side-brand-name">MCCTI <em>CoopEco</em></span></button>
-      <div className="side-scroll">
-        {impersonating && <button className="side-return" onClick={onExitView}>&larr; Return to my workspace</button>}
-        <nav className="side-nav" aria-label="Sections">{sections.map(([id, label]) => (<button key={id} className={cx('side-item', section === id && 'on')} onClick={() => setSection(id)}><span className="side-dot" aria-hidden="true" /><span>{label}</span></button>))}</nav>
-        <div className="side-sep" />
-        <nav className="side-nav" aria-label="Support">
-          <button className={cx('side-item', section === 'notifications' && 'on')} onClick={() => setSection('notifications')}><SideIcon name="bell" /><span>Notifications</span>{unread ? <span className="side-badge">{unread}</span> : null}</button>
-          <button className={cx('side-item', section === 'help' && 'on')} onClick={() => setSection('help')}><SideIcon name="help" /><span>Help & support</span></button>
-          {canPrivacy && <button className={cx('side-item', section === 'privacy' && 'on')} onClick={() => setSection('privacy')}><SideIcon name="privacy" /><span>Privacy & data</span></button>}
-        </nav>
-      </div>
-      <div className="side-foot">
-        {DEMO_DATA && <div className="demo-badge" title={hasSupabase ? 'VITE_DEMO_DATA is true' : 'No database connected'}>Demo data</div>}
-        <div className="side-user"><Avatar name={profile.name} photo={profile.photo} size={34} /><div className="side-user-text"><span className="side-name">{profile.name}</span><span className="side-role">{roleTitle(role)}</span></div></div>
-        <button className="side-signout" onClick={onSignOut}>Sign out</button>
-      </div>
-    </aside>
-  )
-}
-function Dashboard({ session, onSignOut, onHome }) {
-  const p = session.profile
-  const [viewAs, setViewAs] = useState(null)
-  const eff = viewAs || { role: p.role, name: p.name, email: session.email, office: p.office, title: p.title }
-  const ctx = { email: eff.email, uid: session.id, role: eff.role, name: eff.name, focusId: eff.focusId }
-  const sections = ROLE_NAV[eff.role] || [['overview', 'Overview']]
-  const [section, setSection] = useState(sections[0][0])
-  useEffect(() => { setSection((ROLE_NAV[eff.role] || [['overview', 'Overview']])[0][0]) }, [eff.role])
-  const canPrivacy = p.role === 'society' || p.role === 'member'
-  const Workspace = WORKSPACES[eff.role] || CapabilityPreview
-  const [unread, setUnread] = useState(0)
-  const refreshUnread = useCallback(() => { listNotifs(ctx).then((l) => setUnread(l.filter((n) => !n.read).length)) }, [ctx.email, ctx.role])
-  useEffect(() => { refreshUnread() }, [refreshUnread, section])
-  const content = section === 'help'
-    ? <SupportConcierge ctx={ctx} />
-    : section === 'notifications'
-      ? <NotificationCenter ctx={ctx} onChange={refreshUnread} onNavigate={setSection} />
-      : (section === 'privacy' && canPrivacy)
-        ? <DataControls ctx={ctx} onDeleted={onSignOut} />
-        : (eff.role === 'leadership' && !viewAs)
-          ? <LeadershipOverview ctx={ctx} section={section} onViewAs={setViewAs} />
-          : <Workspace ctx={ctx} section={section} />
-  return (
-    <div className="shell">
-      <Sidebar role={eff.role} profile={p} sections={sections} section={section} setSection={setSection} onSignOut={onSignOut} onHome={onHome} canPrivacy={canPrivacy} unread={unread} impersonating={!!viewAs} onExitView={() => setViewAs(null)} />
-      <main className="shell-main"><div className="dash-inner">
-        {viewAs && <div className="viewas-banner"><span>Viewing as <strong>{eff.name}</strong> &middot; {roleTitle(eff.role)}</span><button className="link-inline" onClick={() => setViewAs(null)}>Exit view</button></div>}
-        <div className="dash-hero">
-          <Avatar name={eff.name} photo={p.photo} size={64} />
-          <div className="dash-hero-text"><p className="eyebrow"><span className="eb-dot" />{viewAs ? 'Impersonation view' : greeting()}</p><h1 className="dash-name">{eff.name}</h1><p className="dash-meta">{eff.title} &middot; {eff.office}</p></div>
-          <span className="dash-rolebadge">{roleTitle(eff.role)}</span>
-        </div>
-        {content && eff.role === 'leadership' && !viewAs && <ViewAsBar onViewAs={setViewAs} />}
-        {content}
-      </div></main>
-    </div>
-  )
-}
-
-/* ------------------------------- app ---------------------------------- */
-/* ---- Toasts & confirm modals (replace blocking alert/confirm) ------------ */
-const _toastBus = { listeners: new Set(), toasts: [] }
-let _toastId = 0
-function _emitToasts() { _toastBus.listeners.forEach((fn) => fn([..._toastBus.toasts])) }
-function dismissToast(id) { _toastBus.toasts = _toastBus.toasts.filter((t) => t.id !== id); _emitToasts() }
-function toast(message, kind = 'info') { const id = ++_toastId; _toastBus.toasts = [..._toastBus.toasts, { id, message: String(message), kind }]; _emitToasts(); setTimeout(() => dismissToast(id), kind === 'error' ? 6500 : 4200); return id }
-const _confirmBus = { listeners: new Set(), current: null }
-function _emitConfirm() { _confirmBus.listeners.forEach((fn) => fn(_confirmBus.current)) }
-function confirmDialog(message, opts = {}) { return new Promise((resolve) => { _confirmBus.current = { message: String(message), confirmLabel: opts.confirmLabel || 'Confirm', cancelLabel: opts.cancelLabel || 'Cancel', danger: !!opts.danger, resolve }; _emitConfirm() }) }
-function _resolveConfirm(v) { const c = _confirmBus.current; _confirmBus.current = null; _emitConfirm(); if (c) c.resolve(v) }
-const _previewBus = { listeners: new Set(), current: null }
-function _emitPreview() { _previewBus.listeners.forEach((fn) => fn(_previewBus.current)) }
-function showPreview(doc, url) { _previewBus.current = { name: doc.name, type: doc.type, url }; _emitPreview() }
-function closePreview() { _previewBus.current = null; _emitPreview() }
-function DocumentPreview() {
-  const [doc, setDoc] = useState(null)
-  useEffect(() => { const l = (d) => setDoc(d ? { ...d } : null); _previewBus.listeners.add(l); return () => _previewBus.listeners.delete(l) }, [])
-  useEffect(() => { if (!doc) return; const onKey = (e) => { if (e.key === 'Escape') closePreview() }; window.addEventListener('keydown', onKey); return () => window.removeEventListener('keydown', onKey) }, [doc])
-  if (!doc) return null
-  const isImg = (doc.type || '').indexOf('image/') === 0 || /\.(png|jpe?g|webp|gif)$/i.test(doc.name || '')
-  const isHtml = /^data:text\/html/.test(doc.url || '')
-  const isPdf = !isHtml && ((doc.type || '') === 'application/pdf' || /\.pdf$/i.test(doc.name || ''))
-  return (
-    <div className="modal-overlay" onClick={closePreview}>
-      <div className="preview" onClick={(e) => e.stopPropagation()}>
-        <div className="preview-bar"><strong>{doc.name}</strong><div className="preview-acts"><a className="link-inline" href={doc.url} target="_blank" rel="noreferrer">Open in new tab</a><button className="preview-x" onClick={closePreview} aria-label="Close preview">&times;</button></div></div>
-        <div className="preview-body">{isImg ? <img src={doc.url} alt={doc.name} /> : (isPdf || isHtml) ? <iframe title={doc.name} src={doc.url} /> : <div className="preview-fallback"><p>Preview isn't available for this file type.</p><a className="btn btn-gold btn-sm" href={doc.url} target="_blank" rel="noreferrer" download>Download to view</a></div>}</div>
-      </div>
-    </div>
-  )
-}
-function ToastHost() {
+/* ---------- global toasts + confirm ---------- */
+const uiListeners = new Set()
+function toast(message, kind = 'ok') { uiListeners.forEach(l => l({ t: 'toast', message, kind })) }
+function confirmAction(message, opts = {}) {
+  if (!uiListeners.size) { try { return Promise.resolve(window.confirm(((opts.title ? opts.title + '\n\n' : '') + message))) } catch (e) { return Promise.resolve(false) } }
+  return new Promise(res => { let done = false; const resolve = v => { if (!done) { done = true; res(v) } }; uiListeners.forEach(l => l({ t: 'confirm', message, opts, resolve })) })
+}
+function Overlays() {
   const [toasts, setToasts] = useState([])
   const [confirm, setConfirm] = useState(null)
   useEffect(() => {
-    const tl = (t) => setToasts(t); _toastBus.listeners.add(tl); setToasts([..._toastBus.toasts])
-    const cl = (c) => setConfirm(c ? { ...c } : null); _confirmBus.listeners.add(cl)
-    return () => { _toastBus.listeners.delete(tl); _confirmBus.listeners.delete(cl) }
+    const l = (e) => {
+      if (e.t === 'toast') { const id = Math.random().toString(36).slice(2); setToasts(ts => ts.concat([{ id, message: e.message, kind: e.kind }])); setTimeout(() => setToasts(ts => ts.filter(x => x.id !== id)), 3400) }
+      else if (e.t === 'confirm') setConfirm(e)
+    }
+    uiListeners.add(l); return () => { uiListeners.delete(l) }
   }, [])
-  useEffect(() => {
-    if (!confirm) return
-    const onKey = (e) => { if (e.key === 'Escape') _resolveConfirm(false); if (e.key === 'Enter') _resolveConfirm(true) }
-    window.addEventListener('keydown', onKey); return () => window.removeEventListener('keydown', onKey)
-  }, [confirm])
   return (<>
-    <div className="toast-host" role="status" aria-live="polite">{toasts.map((t) => (<div key={t.id} className={cx('toast', 'toast-' + t.kind)} onClick={() => dismissToast(t.id)}><span>{t.message}</span><button className="toast-x" aria-label="Dismiss" onClick={(e) => { e.stopPropagation(); dismissToast(t.id) }}>&times;</button></div>))}</div>
-    {confirm && <div className="modal-overlay" onClick={() => _resolveConfirm(false)}><div className="modal" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}><p className="modal-msg">{confirm.message}</p><div className="modal-actions"><button className="btn btn-ghost btn-sm" onClick={() => _resolveConfirm(false)}>{confirm.cancelLabel}</button><button className={cx('btn', 'btn-sm', confirm.danger ? 'btn-danger' : 'btn-gold')} onClick={() => _resolveConfirm(true)} autoFocus>{confirm.confirmLabel}</button></div></div></div>}
-    <DocumentPreview />
+    <div className="toaster" aria-live="polite">{toasts.map(t => (<div key={t.id} className={'toast ' + t.kind}>{t.message}</div>))}</div>
+    {confirm && (<div className="modal-scrim" onClick={() => { confirm.resolve(false); setConfirm(null) }}>
+      <div className="modal anim" onClick={e => e.stopPropagation()} role="dialog" aria-modal="true">
+        <h3>{confirm.opts.title || 'Please confirm'}</h3>
+        <p>{confirm.message}</p>
+        <div className="modal-actions">
+          <button className="btn ghost" onClick={() => { confirm.resolve(false); setConfirm(null) }}>{confirm.opts.cancel || 'Cancel'}</button>
+          <button className={'btn ' + (confirm.opts.danger ? 'danger' : 'primary')} onClick={() => { confirm.resolve(true); setConfirm(null) }}>{confirm.opts.ok || 'Confirm'}</button>
+        </div>
+      </div>
+    </div>)}
   </>)
 }
-export default function App() {
-  const [area, setArea] = useState('state')
-  const [view, setView] = useState('landing')
-  const [chosenRole, setChosenRole] = useState(null)
-  const [session, setSession] = useState(null)
-  const [ready, setReady] = useState(false)
-  const [seedTick, setSeedTick] = useState(0)
-  const bgSeed = useCallback(() => { ensureSeedData().then((changed) => { if (changed) setSeedTick((t) => t + 1) }).catch(() => { }) }, [])
-  const [lang, setLang] = useState(() => LS.get('coopeco.lang', 'en'))
-  useEffect(() => { LS.set('coopeco.lang', lang) }, [lang])
-  const [landingTab, setLandingTab] = useState('home')
-  const goLanding = (tab) => { setView('landing'); setLandingTab(tab); if (typeof window !== 'undefined') window.scrollTo({ top: 0 }) }
-  useEffect(() => {
-    (async () => {
-      const s = await loadSession()
-      setSession(s); setReady(true)
-      if (!hasSupabase || s) bgSeed()
-    })()
-  }, [bgSeed])
-  const enter = useCallback(() => setView(session ? 'dashboard' : 'role'), [session])
-  const pickRole = (id) => { setChosenRole(id); setView('auth') }
-  const onAuthed = (res) => { setSession(res); setView('dashboard'); bgSeed() }
-  const doSignOut = async () => { await signOutNow(); setSession(null); setView('landing') }
-  useEffect(() => {
-    if (!session) return
-    const p = session.profile || {}
-    if (p.role === 'reviewer' && reviewAccessExpired()) { toast('Review access has expired. Contact MCCTI to extend it.', 'error'); doSignOut(); return }
-    const SESSION_MS = 30 * 60 * 1000
-    let timer, last = 0
-    const arm = () => { clearTimeout(timer); timer = setTimeout(() => { toast('Signed out after 30 minutes of inactivity.'); doSignOut() }, SESSION_MS) }
-    const reset = () => { const now = Date.now(); if (now - last < 5000) return; last = now; arm() } // throttle: at most once per 5s
-    const evts = ['mousemove', 'keydown', 'click', 'scroll', 'touchstart']
-    evts.forEach((e) => window.addEventListener(e, reset, { passive: true }))
-    arm()
-    return () => { clearTimeout(timer); evts.forEach((e) => window.removeEventListener(e, reset)) }
-  }, [session])
-  const goHome = () => { setView('landing'); setLandingTab('home'); if (typeof window !== 'undefined') window.scrollTo({ top: 0 }) }
-  const inApp = view === 'dashboard' && session
+const LEADERS = [
+  { name: 'Dr. Olamide Okulaja', role: 'Founder & Executive Chairman', photo: '/photos/olamide.jpg', bio: 'A healthcare systems leader whose expertise in systems reform, policy and strategic leadership guides RHSC. His career spans healthcare financing, policy and advocacy, with senior roles at PharmAccess Foundation, the International Finance Corporation (World Bank Group) and the Lagos State Ministry of Health, where he led major universal health coverage and diagnostics initiatives.' },
+  { name: 'Ms. Jennifer Kaja', role: 'Managing Director', photo: '/photos/jennifer.jpg', bio: 'A distinguished Nigerian lawyer with first-class honours from the University of Wales and a decade of practice across corporate, commercial and real estate law. As Chief Legal Officer of Periwinkle Empire she oversaw landmark transactions, governance and compliance.' }
+]
+const STAFF = [
+  {
+    name: 'Ojuma Joy', role: 'Team Lead (interim), Registered Nurse', unit: 'Field Monitoring Team',
+    purpose: 'Leads and supervises daily monitoring across assigned Lagos State local government areas, combining accurate field documentation with professional nursing oversight and regulatory guidance.',
+    duties: ['Plans routes, assigns daily rounds and briefs the team', 'Supervises checklist-based inspections and photographic evidence', 'Documents staffing, duty rosters, equipment, wards, beds and services', 'Facility debriefing and practical corrective guidance', 'Assesses nursing quality, uniforms, practising licences and staffing', 'Reviews and signs off reports before HEFAMAA submission', 'Upholds professional ethics, integrity and accountability in the field']
+  },
+  {
+    name: 'Anele Goodnews', role: 'Medical Laboratory Scientist, Monitoring Agent', unit: 'Field Monitoring Team',
+    purpose: 'Evaluates laboratory services, personnel, infrastructure, documentation and biosafety practices during routine monitoring, ensuring findings are objective and aligned with HEFAMAA requirements.',
+    duties: ['Assesses medical laboratory services against licensed scope', 'Verifies laboratory personnel qualifications and licences', 'Inspects equipment, infrastructure and infection control', 'Reviews test registers, QC records and reagent inventories', 'Evaluates biosafety, PPE and specimen handling', 'Documents findings on the HEFAMAA checklist', 'Debriefs facilities and compiles reports in Word and Excel']
+  },
+  {
+    name: 'Registered Nurse, Monitoring Officer', role: 'Role profile', unit: 'Iyana-Ipaja & Ifako-Ijaiye Monitoring Areas', roleOnly: true,
+    purpose: 'Supports HEFAMAA-aligned facility monitoring across Iyana-Ipaja and Ifako-Ijaiye, promoting safe, compliant and high-quality healthcare delivery.',
+    duties: ['Monitoring planning, scheduling and efficient daily routes', 'Facility mapping and routine inspections to HEFAMAA requirements', 'Daily monitoring reports and team updates', 'Compliance assessment: closure notices and reports of findings', 'Stakeholder engagement, commendation and corrective recommendations', 'Clinical quality, infection prevention, medication safety and records', 'Promotes the Genesys Electronic Medical Records system', 'Monthly OKRs and performance management']
+  }
+]
+const INSIGHTS = [
+  { tag: 'Article', title: '[Thought-leadership article title]', blurb: '[One-line summary of the piece.]', date: '2026' },
+  { tag: 'News', title: '[Company update or milestone]', blurb: '[One-line summary.]', date: '2026' },
+  { tag: 'Report', title: '[Whitepaper or report title]', blurb: '[One-line summary.]', date: '2026' }
+]
+const TESTIMONIALS = [
+  { quote: '[Add a short client testimonial here.]', who: '[Client name, organisation]' },
+  { quote: '[Add a second client testimonial here.]', who: '[Client name, organisation]' }
+]
+const CASE_STUDIES = [
+  { title: '[Case study title]', d: '[What we did and the measurable outcome, in two lines.]' },
+  { title: '[Case study title]', d: '[What we did and the outcome.]' }
+]
+const CERTS = ['[Certification]', '[Partner]', '[Membership]', '[Award]']
+
+// Multi-language for the public site. Yoruba, Hausa and Igbo are first-draft
+// and should be reviewed by native speakers before the final launch.
+const LANGS = [{ code: 'en', label: 'English' }, { code: 'yo', label: 'Yorùbá' }, { code: 'pcm', label: 'Pidgin' }, { code: 'ha', label: 'Hausa' }, { code: 'ig', label: 'Igbo' }]
+const TR = {
+  nav_home: { en: 'Home', yo: 'Ilé', pcm: 'Home', ha: 'Gida', ig: 'Ụlọ' },
+  nav_services: { en: 'Services', yo: 'Iṣẹ́', pcm: 'Services', ha: 'Ayyuka', ig: 'Ọrụ' },
+  nav_monitoring: { en: 'Facility Monitoring & Accreditation', yo: 'Ìbójútó Ilé-ìwòsàn', pcm: 'Facility Monitoring', ha: 'Sa Ido da Amincewa', ig: 'Nlekọta Ụlọ Ọgwụ' },
+  nav_about: { en: 'About', yo: 'Nípa Wa', pcm: 'About', ha: 'Game da Mu', ig: 'Banyere Anyị' },
+  nav_leadership: { en: 'Leadership & Staff', yo: 'Àwọn Aṣáájú', pcm: 'Our Team', ha: 'Shugabanni', ig: 'Ndị Isi' },
+  nav_insights: { en: 'Insights', yo: 'Ìjìnlẹ̀', pcm: 'Insights', ha: 'Bayanai', ig: 'Nghọta' },
+  nav_contact: { en: 'Contact', yo: 'Kàn Sí Wa', pcm: 'Contact', ha: 'Tuntuɓe Mu', ig: 'Kpọtụrụ Anyị' },
+  hero_title: { en: 'Raising the standard of healthcare', yo: 'Gbígbé ìlera ga sí ìpele tí ó yẹ', pcm: 'We dey raise di standard of healthcare', ha: 'Ɗaga matsayin kiwon lafiya', ig: 'Ibulite ọkọlọtọ nlekọta ahụike' },
+  hero_lede: { en: 'A full-service healthcare consulting firm, from strategy, quality and financing to training, digital health and regulatory monitoring.', yo: 'Ilé-iṣẹ́ ìmọ̀ràn ìlera pípé, láti ìlànà, ìdánilójú àti ìnáwó, dé ìdánilẹ́kọ̀ọ́, ìlera oní-nọ́mbà àti ìbójútó.', pcm: 'Na full healthcare consulting company, from strategy, quality and money matter, to training, digital health and monitoring.', ha: 'Cikakken kamfanin ba da shawara kan kiwon lafiya, daga dabaru, inganci da kuɗaɗe, zuwa horo, lafiyar dijital da sa ido.', ig: 'Ụlọ ọrụ ndụmọdụ ahụike zuru ezu, site na atụmatụ, ịdị mma na ego, ruo ọzụzụ, ahụike dijitalụ na nlekọta.' },
+  cta_consult: { en: 'Book a consultation', yo: 'Ṣe ìpàdé ìmọ̀ràn', pcm: 'Book consultation', ha: 'Yi rijistar shawara', ig: 'Debe oge ndụmọdụ' },
+  cta_services: { en: 'Explore our services', yo: 'Wo àwọn iṣẹ́ wa', pcm: 'See our services', ha: 'Duba ayyukanmu', ig: 'Chọpụta ọrụ anyị' },
+  cta_proposal: { en: 'Request a proposal', yo: 'Béèrè fún àbá', pcm: 'Request proposal', ha: 'Nemi shawara', ig: 'Rịọ atụmatụ' },
+  cta_signin: { en: 'Staff sign-in', yo: 'Wọlé oṣiṣẹ́', pcm: 'Staff sign-in', ha: 'Shiga ma’aikata', ig: 'Ọrụ banye' },
+  tagline: { en: 'Professional. Educational. Enforcement-driven.', yo: 'Ọjọ̀gbọ́n. Ẹ̀kọ́. Ìmúṣẹ.', pcm: 'Professional. Educational. Enforcement.', ha: 'Ƙwararru. Ilimi. Aiwatarwa.', ig: 'Ọkachamara. Mmụta. Mmezu.' }
+}
+function makeT(lang) { return (key) => (TR[key] && (TR[key][lang] || TR[key].en)) || key }
+
+const ROLES = [
+  { id: 'team_leader', label: 'Team Leader', blurb: 'Assign facilities, plan routes and review your team\u2019s visits.', icon: IconLeader,
+    tools: [ ['Assign & route facilities', 'Stage 3', 'assign'], ['Review team visits', 'Stage 6', 'reports'] ] },
+  { id: 'field_monitor', label: 'Field Monitor', blurb: 'Run visits end to end: map, engage, monitor and debrief.', icon: IconMonitor,
+    tools: [ ['Map & route', 'Stage 3', 'map'], ['Engage check-in', 'Stage 4', 'engage'], ['Monitor checklist', 'Stage 5', 'monitor'], ['Debrief & sign-off', 'Stage 6', 'debrief'] ] },
+  { id: 'rhsc_hq', label: 'RHSC HQ', blurb: 'Oversight, facility data, exports and analytics.', icon: IconHQ,
+    tools: [ ['Facility list ingestion', 'Stage 3', 'facilities'], ['Reports & exports', 'Stage 7', 'reports'] ] },
+  { id: 'hefamaa_reviewer', label: 'HEFAMAA Reviewer', blurb: 'Read and validate monitoring outcomes across the State.', icon: IconShield,
+    tools: [ ['Review facilities', 'Stage 3', 'facilities'], ['Review reports', 'Stage 6', 'reports'] ] },
+  { id: 'facility_proprietor', label: 'Facility Proprietor', blurb: 'View your facility\u2019s outcomes and required actions.', icon: IconStore,
+    tools: [ ['My facility outcomes', 'Live', 'myfacility'], ['My corrective actions', 'Live', 'myfacility'], ['Re-inspection status', 'Live', 'myfacility'] ] }
+]
+
+const ROLE_TABS = {
+  team_leader: ['dashboard', 'facilities', 'map', 'engage', 'monitor', 'debrief', 'secondassessment', 'assign', 'approvals', 'reports'],
+  field_monitor: ['dashboard', 'facilities', 'map', 'engage', 'monitor', 'debrief', 'secondassessment'],
+  rhsc_hq: ['dashboard', 'facilities', 'map', 'secondassessment', 'reports', 'approvals', 'integrity', 'followups', 'access', 'assistant', 'settings'],
+  hefamaa_reviewer: ['dashboard', 'facilities', 'reports'],
+  facility_proprietor: ['dashboard', 'myfacility']
+}
+const TAB_LABEL = { dashboard: 'Dashboard', facilities: 'Facilities', map: 'Map & Route', engage: 'Engage', monitor: 'Monitor', debrief: 'Debrief', secondassessment: 'Second Assessment', assign: 'Assign', reports: 'Reports', analytics: 'Analytics', myfacility: 'My Facility', followups: 'Follow-ups', settings: 'Settings', assistant: 'AI Assistant', approvals: 'Approvals', integrity: 'Integrity', access: 'Access requests' }
+const CAN_EDIT = ['team_leader', 'field_monitor', 'rhsc_hq']
+const AREA_COLORS = ['#6D4B8E', '#3E86C9', '#C7549C', '#5FA35A', '#D08A2E', '#7E63A0', '#4AA3A3', '#B0562E', '#6C6FD0', '#C0603C']
+
+const IDENTITY = {
+}
+function identityFor(email, name) {
+  const found = IDENTITY[(email || '').toLowerCase()]
+  const chosen = name || (found && found.name)
+  if (chosen) return { photo: '', title: '', ...(found || {}), name: chosen, first: chosen.split(' ')[0] }
+  const base = (email || 'staff').split('@')[0].replace(/[._-]+/g, ' ')
+  const n = base.split(' ').map(w => w ? w[0].toUpperCase() + w.slice(1) : w).join(' ') || 'Staff'
+  return { name: n, first: n.split(' ')[0], title: '', photo: '' }
+}
+const DEAD_STATES = ['untraceable', 'closed', 'not_at_address']
+const STATE_LABEL = { untraceable: 'Untraceable', closed: 'Closed', not_at_address: 'Not at address', locked: 'Met locked', relocated: 'Relocated', renovation: 'Under renovation', closure_notice: 'Closure notice', active: '' }
+function isLive(f) { return !f.state || DEAD_STATES.indexOf(f.state) < 0 }
+const OWNER_EMAIL = 'exco@realmsconsulting.com'
+function isOwner(u) { return !!u && String(u.email || '').trim().toLowerCase() === OWNER_EMAIL }
+const TEAM_LABEL = 'Field team'
+const MONITORS = [TEAM_LABEL, 'Ojuma Joy', 'Anele Goodnews']
+const VIEW_USERS = [
+  { name: 'Ojuma Joy', role: 'team_leader' },
+  { name: 'Anele Goodnews', role: 'field_monitor' },
+  { name: 'HEFAMAA Reviewer', role: 'hefamaa_reviewer' },
+  { name: 'Facility Proprietor', role: 'facility_proprietor' }
+]
+function roleById(id) { return ROLES.find(r => r.id === id) || null }
+function hasCoords(f) { return typeof f.lat === 'number' && typeof f.lng === 'number' && !isNaN(f.lat) && !isNaN(f.lng) }
+
+/* ---------- icons ---------- */
+function IconLeader() { return (<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6"><circle cx="12" cy="8" r="3.4"/><path d="M5 20c0-3.6 3.1-6 7-6s7 2.4 7 6"/><path d="M12 1.6l1 2 2.2.2-1.7 1.5.5 2.1L12 6.4 9.9 7.5l.5-2.1L8.8 3.8 11 3.6z"/></svg>) }
+function IconMonitor() { return (<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6"><rect x="5" y="3.5" width="14" height="17" rx="2"/><path d="M9 3.5V6h6V3.5"/><path d="M8.5 11l2 2 4-4.5"/><path d="M8.5 16h7"/></svg>) }
+function IconHQ() { return (<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6"><path d="M3 21h18"/><path d="M5 21V7l7-4 7 4v14"/><path d="M9.5 21v-4h5v4"/><path d="M9 11h1.5M13.5 11H15M9 14h1.5M13.5 14H15"/></svg>) }
+function IconShield() { return (<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6"><path d="M12 2.5l7 2.6v5.4c0 4.7-3 8.2-7 9.5-4-1.3-7-4.8-7-9.5V5.1z"/><path d="M8.8 12l2.1 2.1 4.3-4.6"/></svg>) }
+function IconStore() { return (<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6"><path d="M4 9.5V20h16V9.5"/><path d="M3 4.5h18l1 5H2z"/><path d="M9.5 20v-5h5v5"/></svg>) }
+
+/* ---------- shared ---------- */
+function SectionHead({ eyebrow, title }) { return (<div className="section-head anim"><p className="eyebrow">{eyebrow}</p><h2>{title}</h2></div>) }
+function NumField({ label, value, min, max, onChange, hint }) {
+  const [txt, setTxt] = useState(String(value))
+  useEffect(() => { setTxt(String(value)) }, [value])
+  function commit(raw) {
+    const n = parseInt(String(raw).replace(/[^0-9]/g, ''), 10)
+    const v = isFinite(n) ? Math.max(min, Math.min(max, n)) : value
+    setTxt(String(v)); if (v !== value) onChange(v)
+  }
+  function step(d) { const v = Math.max(min, Math.min(max, Number(value) + d)); setTxt(String(v)); if (v !== value) onChange(v) }
+  return (<label className="field sm numfield">
+    <span>{label}</span>
+    <div className="num-row">
+      <button type="button" className="num-btn" onClick={() => step(-1)} disabled={value <= min} aria-label={'Fewer: ' + label}>&#8722;</button>
+      <input className="num-in" inputMode="numeric" pattern="[0-9]*" value={txt}
+        onChange={e => setTxt(e.target.value)}
+        onBlur={e => commit(e.target.value)}
+        onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); e.currentTarget.blur() } }}
+        aria-label={label} />
+      <button type="button" className="num-btn" onClick={() => step(1)} disabled={value >= max} aria-label={'More: ' + label}>+</button>
+    </div>
+    {hint && <em className="num-hint">{hint}</em>}
+  </label>)
+}
+function SearchBox({ value, onChange, placeholder }) { return <input className="searchbox" value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder || 'Search\u2026'} aria-label="Search" /> }
+function matchQ(v, q) { if (!q) return true; const s = q.toLowerCase(); return ((v.facility_name || v.name || '') + ' ' + (v.area || '') + ' ' + (v.category || '') + ' ' + (v.address || '')).toLowerCase().includes(s) }
+
+/* ---------- public pages ---------- */
+function HomePage({ onSignIn, go, t }) {
   return (
-    <div className={cx('page', inApp && 'is-app')}>
-      <style>{CSS}</style>
-      <div className="letterhead">
-        <div className="lh-left"><img className="lh-seal" src="/lagos-seal.png" alt="Lagos State coat of arms" /><div className="lh-text"><span className="lh-gov">Lagos State Government</span><span className="lh-min">Ministry of Commerce, Cooperatives, Trade &amp; Investment</span></div></div>
-        <img className="lh-mccti" src="/mccti-logo.png" alt="MCCTI" />
-      </div>
-      {!inApp && (
-        <header className="nav">
-          <button className="brand" onClick={goHome}><span className="brand-mark" aria-hidden="true">&#9670;</span><span className="brand-name">MCCTI <em>CoopEco</em></span></button>
-          <nav className="nav-links" aria-label="Primary">{view === 'landing' ? (<>{[['home', 'nav.home'], ['modules', 'nav.modules'], ['leadership', 'nav.leadership'], ['about', 'nav.about'], ['platform', 'nav.platform']].map(([id, k]) => <button key={id} className={cx('nav-page', landingTab === id && 'on')} onClick={() => goLanding(id)}>{t(k, lang)}</button>)}</>) : null}<button className="nav-verify" onClick={() => setView('verify')}>{t('nav.verify', lang)}</button><select className="lang-select" value={lang} onChange={(e) => setLang(e.target.value)} aria-label="Language">{LANGS.map(([code, label]) => <option key={code} value={code}>{label}</option>)}</select></nav>
-          {ready && session ? (
-            <div className="account"><button className="acct-btn" onClick={() => setView('dashboard')}><Avatar name={session.profile.name} photo={session.profile.photo} size={30} /><span className="acct-name">{session.profile.name.split(' ')[0]}</span></button><button className="signout" onClick={doSignOut}>Sign out</button></div>
-          ) : (<button className="btn btn-gold nav-cta" onClick={enter}>{t('cta.enter', lang)}</button>)}
-        </header>
-      )}
-      {view === 'landing' && <Landing area={area} setArea={setArea} onEnter={enter} lang={lang} tab={landingTab} onTab={goLanding} />}
-      {view === 'role' && <RolePage onPick={pickRole} onBack={goHome} />}
-      {view === 'auth' && <AuthPage role={chosenRole} onDone={onAuthed} onBack={() => setView('role')} onPrivacy={() => setView('privacy')} />}
-      {view === 'privacy' && <PrivacyNotice onBack={() => setView(session ? 'dashboard' : 'landing')} />}
-      {view === 'verify' && <PublicVerify onBack={goHome} />}
-      {inApp && <Dashboard key={seedTick} session={session} onSignOut={doSignOut} onHome={goHome} />}
-      {!inApp && (
-        <footer className="foot">
-          <div className="foot-top"><div className="foot-lockup"><img src="/lagos-seal.png" alt="Lagos State" /><img className="foot-mccti" src="/mccti-logo.png" alt="MCCTI" /><div className="foot-lockup-text"><span className="lh-gov">Lagos State Government</span><span className="lh-min">Ministry of Commerce, Cooperatives, Trade &amp; Investment</span></div></div>{!session && <button className="btn btn-gold" onClick={enter}>Enter platform</button>}</div>
-          <div className="foot-grid"><p>A Ministry-owned digital platform for the cooperative economy of Lagos State.</p><p className="foot-conf">&copy; Ministry of Commerce, Cooperatives, Trade &amp; Investment, Lagos State Government. <button className="link-inline" onClick={() => setView('verify')}>Verify a cooperative</button> &middot; <button className="link-inline" onClick={() => setView('privacy')}>Privacy notice</button></p></div>
-        </footer>
-      )}
-      <ConsentBanner onOpenPrivacy={() => setView('privacy')} />
-      <ToastHost />
+    <div className="page">
+      <section className="hero">
+        <div className="hero-copy anim">
+          <p className="eyebrow">REALMS Healthcare Services Consulting Limited</p>
+          <h1>{t('hero_title')}</h1>
+          <p className="lede">{t('hero_lede')}</p>
+          <div className="cta-row">
+            <button className="btn primary" onClick={() => go('contact')}>{t('cta_consult')}</button>
+            <button className="btn ghost" onClick={() => go('services')}>{t('cta_services')}</button>
+          </div>
+          <p className="tagline">{t('tagline')}</p>
+        </div>
+        <div className="hero-art anim" style={{ animationDelay: '120ms' }}>
+          <div className="art-panel"><img src="/rhsc-logo.png" alt="REALMS Healthcare Services Consulting Limited" /></div>
+        </div>
+      </section>
+
+      <section className="home-strip anim">
+        {IMPACT_STATS.map(c => (<div className="mini-stat" key={c.l}><span className="mini-value">{c.v}</span><span className="mini-label">{c.l}</span></div>))}
+      </section>
+
+      <section className="clients-band anim">
+        <p className="eyebrow center">Trusted by</p>
+        <div className="clients-row">{PARTNERS.map(c => <span className="client-chip" key={c}>{c}</span>)}</div>
+        <p className="band-note">RHSC is a licensed HEFAMAA monitoring operator, appointed to carry out routine health facility monitoring and accreditation support across Lagos State.</p>
+      </section>
+
+      <section className="impact anim">
+        <div className="impact-copy">
+          <p className="eyebrow light">Why RHSC</p>
+          <h2>A partner from strategy to the ground</h2>
+          <p>Few firms combine boardroom advisory with field delivery. RHSC does both, advising on strategy, quality and financing, and operating regulatory monitoring at scale as a licensed HEFAMAA operator.</p>
+          <div className="cta-row"><button className="btn light" onClick={() => go('contact')}>{t('cta_proposal')}</button><button className="btn ghost onlight" onClick={() => go('monitoring')}>Our HEFAMAA work</button></div>
+        </div>
+        <div className="impact-art"><img src="/photos/g-network.jpg" alt="Connected healthcare across the State" /></div>
+      </section>
     </div>
   )
 }
 
-const CSS = `
-:root{--ink:#F5F7F3;--ink-2:#FFFFFF;--green:#1C8A4F;--green-panel:#EAF3EC;--line:rgba(20,50,35,.13);--line-soft:rgba(20,50,35,.07);--gold:#8A681E;--gold-soft:#93701F;--cream:#17241C;--cream-ink:#17241C;--sage:#48524B;--sage-dim:#78837C;--err:#C0533A;--serif:'Lora',Georgia,'Times New Roman',serif;--sans:'Inter',system-ui,-apple-system,sans-serif;--mono:'IBM Plex Mono',ui-monospace,monospace}
-*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0}
-.page{background:radial-gradient(1100px 560px at 85% -12%,rgba(28,138,79,.07),transparent 60%),radial-gradient(900px 500px at -5% 15%,rgba(176,132,47,.05),transparent 55%),var(--ink);color:var(--sage);font-family:var(--sans);-webkit-font-smoothing:antialiased;min-height:100vh;overflow-x:hidden;display:flex;flex-direction:column}
-.eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.22em;text-transform:uppercase;color:var(--gold);margin:0 0 16px;display:flex;align-items:center;gap:9px}
-.eb-dot{width:6px;height:6px;border-radius:50%;background:var(--green);display:inline-block}
-h1,h2,h3,h4{font-family:var(--serif);color:var(--cream);font-weight:500;margin:0}p{margin:0}input,select,textarea{font-family:var(--sans)}
-.btn{font-family:var(--sans);font-size:14px;font-weight:600;border:none;cursor:pointer;padding:13px 24px;border-radius:2px;text-decoration:none;display:inline-block;transition:transform .18s ease,background .18s ease,color .18s ease,border-color .18s ease}
-.btn-gold{background:var(--green);color:#fff;box-shadow:0 10px 26px -14px rgba(28,138,79,.55)}
-.btn-gold:hover{background:var(--gold-soft);transform:translateY(-1px)}.btn-gold:disabled{opacity:.6;cursor:default;transform:none}
-.btn-ghost{background:transparent;color:var(--cream);border:1px solid var(--line)}.btn-ghost:hover{border-color:var(--gold);color:var(--gold-soft)}
-.btn-outline{background:transparent;color:var(--cream);border:1px solid var(--line);box-shadow:none}.btn-outline:hover{border-color:var(--gold);color:var(--gold-soft)}
-.btn-sm{padding:9px 16px;font-size:13px}
-.letterhead{display:flex;align-items:center;justify-content:space-between;gap:20px;padding:11px 40px;background:var(--ink-2);color:var(--cream-ink);border-bottom:2px solid var(--green)}
-.lh-left{display:flex;align-items:center;gap:14px;min-width:0}.lh-seal{height:40px;width:auto}
-.lh-text{display:flex;flex-direction:column;line-height:1.25;min-width:0}
-.lh-gov{font-family:var(--serif);font-weight:600;font-size:14px;color:var(--cream-ink)}
-.lh-min{font-family:var(--mono);font-size:10.5px;letter-spacing:.03em;color:#4a5a4f;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.lh-mccti{height:38px;width:auto;flex-shrink:0}
-.nav{position:sticky;top:0;z-index:40;display:flex;align-items:center;justify-content:space-between;padding:15px 40px;background:rgba(255,255,255,.86);backdrop-filter:blur(12px);border-bottom:1px solid var(--line-soft)}
-.brand{display:flex;align-items:center;gap:10px;text-decoration:none;background:none;border:none;cursor:pointer;padding:0}
-.brand-mark{color:var(--green);font-size:13px}.brand-name{font-family:var(--serif);color:var(--cream);font-size:19px;letter-spacing:.01em;font-weight:600}.brand-name em{color:var(--gold-soft);font-style:italic;font-weight:500}
-.nav-links{display:flex;gap:32px}.nav-links a{color:var(--sage);text-decoration:none;font-size:14px;font-weight:500;position:relative}.nav-links a::after{content:'';position:absolute;left:0;right:0;bottom:-6px;height:2px;background:var(--green);transform:scaleX(0);transform-origin:left;transition:transform .25s ease}.nav-links a:hover{color:var(--cream)}.nav-links a:hover::after{transform:scaleX(1)}
-html{scroll-behavior:smooth}section[id]{scroll-margin-top:84px}
-.reveal{opacity:0;transform:translateY(20px);transition:opacity .6s cubic-bezier(.2,.7,.2,1),transform .6s cubic-bezier(.2,.7,.2,1)}.reveal.in{opacity:1;transform:none}
-@media(prefers-reduced-motion:reduce){.reveal{opacity:1;transform:none;transition:none}html{scroll-behavior:auto}}
-/* leadership */
-section.leaders{max-width:1200px;margin:0 auto;padding:64px 40px}
-section.pricing{max-width:1200px;margin:0 auto;padding:64px 40px}
-.price-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-top:36px}
-.price-card{background:var(--ink-2);border:1px solid var(--line-soft);border-radius:10px;padding:22px;display:flex;flex-direction:column;gap:8px;transition:transform .25s cubic-bezier(.2,.7,.2,1),box-shadow .25s ease,border-color .25s ease}
-.price-card:hover{transform:translateY(-4px);box-shadow:0 20px 40px -28px rgba(20,50,35,.4);border-color:var(--line)}
-.price-top{display:flex;align-items:baseline;gap:8px}
-.price-amt{font-family:var(--serif);font-size:26px;font-weight:600;color:var(--green)}
-.price-unit{font-family:var(--mono);font-size:11px;color:var(--sage-dim)}
-.price-card h3{font-size:16px;line-height:1.25;margin-top:4px}
-.price-who{font-family:var(--mono);font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:var(--gold)}
-.price-card>p:last-child{font-size:13px;line-height:1.55;color:var(--sage)}
-.leader-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:24px;margin-top:18px}
-.leader-grid.two{grid-template-columns:repeat(2,1fr);max-width:780px;margin-left:auto;margin-right:auto}
-.leader-group-lab{font-family:var(--mono);font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--gold);margin-top:34px}
-.leader-card{background:var(--ink-2);border:1px solid var(--line-soft);border-radius:12px;overflow:hidden;transition:transform .3s cubic-bezier(.2,.7,.2,1),box-shadow .3s ease,border-color .3s ease}
-.leader-card:hover{transform:translateY(-6px);box-shadow:0 26px 50px -30px rgba(20,50,35,.5);border-color:var(--line)}
-.leader-photo{position:relative;aspect-ratio:1/1;background:linear-gradient(160deg,var(--green-panel),#dfeee2);overflow:hidden}
-.leader-photo img{width:100%;height:100%;object-fit:cover;object-position:center top;transition:transform .5s cubic-bezier(.2,.7,.2,1)}
-.leader-card:hover .leader-photo img{transform:scale(1.04)}
-.leader-mono{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-family:var(--serif);font-size:64px;font-weight:600;color:var(--green)}
-.leader-ring{position:absolute;inset:0;box-shadow:inset 0 -70px 60px -40px rgba(20,50,35,.18);pointer-events:none}
-.leader-body{padding:22px 24px 26px}
-.leader-role{font-family:var(--mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--green)}
-.leader-body h3{font-size:20px;margin:8px 0 10px;line-height:1.2}
-.leader-body p{font-size:13.5px;line-height:1.6;color:var(--sage)}
-/* about accordion */
-section.about{max-width:900px;margin:0 auto;padding:24px 40px 72px}
-.acc{margin-top:32px;display:flex;flex-direction:column;gap:12px}
-.acc-item{background:var(--ink-2);border:1px solid var(--line-soft);border-radius:10px;overflow:hidden;transition:border-color .2s ease}
-.acc-item.open{border-color:var(--green)}
-.acc-head{width:100%;display:flex;align-items:center;justify-content:space-between;gap:16px;background:none;border:none;cursor:pointer;padding:20px 24px;font-family:var(--serif);font-size:18px;font-weight:600;color:var(--cream);text-align:left}
-.acc-ic{position:relative;width:16px;height:16px;flex-shrink:0}
-.acc-ic::before,.acc-ic::after{content:'';position:absolute;background:var(--green);border-radius:2px;transition:transform .3s ease,opacity .3s ease}
-.acc-ic::before{top:7px;left:0;width:16px;height:2px}
-.acc-ic::after{top:0;left:7px;width:2px;height:16px}
-.acc-item.open .acc-ic::after{transform:rotate(90deg);opacity:0}
-.acc-panel{display:grid;grid-template-rows:0fr;transition:grid-template-rows .32s cubic-bezier(.2,.7,.2,1)}
-.acc-item.open .acc-panel{grid-template-rows:1fr}
-.acc-inner{overflow:hidden;color:var(--sage);font-size:14.5px;line-height:1.7;padding:0 24px}
-.acc-item.open .acc-inner{padding:0 24px 22px}
-/* micro-interactions on existing cards */
-.mod-card{transition:background .2s ease,transform .25s cubic-bezier(.2,.7,.2,1),box-shadow .25s ease}
-.mod-card:hover{transform:translateY(-4px);box-shadow:0 20px 40px -28px rgba(20,50,35,.4)}
-.persona{transition:transform .2s ease,border-color .2s ease}.persona:hover{transform:translateY(-3px)}
-.band-fig{transition:color .2s ease}
-.hero-watermark{animation:floaty 9s ease-in-out infinite}
-@keyframes floaty{0%,100%{transform:translateY(0)}50%{transform:translateY(-14px)}}
-@media(prefers-reduced-motion:reduce){.hero-watermark{animation:none}}
-.nav-cta{padding:10px 18px}
-.account{display:flex;align-items:center;gap:14px}
-.acct-btn{display:flex;align-items:center;gap:9px;background:transparent;border:1px solid var(--line-soft);border-radius:40px;padding:5px 14px 5px 5px;cursor:pointer;transition:border-color .16s ease}.acct-btn:hover{border-color:var(--gold)}
-.acct-name{color:var(--cream);font-size:14px;font-weight:600}
-.signout{background:none;border:none;color:var(--sage-dim);font-family:var(--mono);font-size:11px;letter-spacing:.06em;text-transform:uppercase;cursor:pointer}.signout:hover{color:var(--gold-soft)}
-.avatar{display:inline-flex;align-items:center;justify-content:center;border-radius:50%;background:var(--green);color:#fff;font-family:var(--serif);font-weight:600;border:none;flex-shrink:0}.avatar-img{object-fit:cover;padding:0}
-.hero{position:relative;max-width:1200px;margin:0 auto;padding:74px 40px 44px;display:grid;grid-template-columns:1.05fr .95fr;gap:56px;align-items:center}
-.hero-watermark{position:absolute;right:-70px;top:-20px;width:500px;opacity:.08;pointer-events:none;user-select:none}
-.hero-copy{position:relative;z-index:1;animation:rise .7s ease both}
-h1{font-size:clamp(38px,5vw,64px);line-height:1.06;letter-spacing:-.01em;margin-bottom:24px}
-.underline{position:relative;white-space:nowrap}.underline::after{content:'';position:absolute;left:0;bottom:.02em;height:.08em;width:100%;background:var(--gold);transform:scaleX(0);transform-origin:left;animation:draw 1s .5s ease forwards}
-.lead{font-size:17px;line-height:1.68;color:var(--sage);max-width:36em;margin-bottom:30px}
-.hero-cta{display:flex;gap:14px;flex-wrap:wrap;margin-bottom:24px}.hero-foot{font-family:var(--mono);font-size:12px;letter-spacing:.06em;color:var(--sage-dim)}
-.register{position:relative;z-index:1;animation:rise .7s .1s ease both}
-.register-frame{background:linear-gradient(180deg,var(--green-panel),#E6EFE7);border:1px solid var(--gold);border-radius:5px;padding:5px;box-shadow:0 34px 70px -34px rgba(0,0,0,.7)}
-.register-frame::after{content:'';position:absolute;inset:9px;border:1px solid var(--line);border-radius:3px;pointer-events:none}
-.register-head{display:flex;align-items:center;gap:12px;padding:16px 18px;border-bottom:1px solid var(--line)}.reg-seal{height:34px;width:auto}
-.reg-title{font-family:var(--serif);color:var(--cream);font-size:16px;font-weight:600}.reg-sub{font-size:11px;color:var(--sage-dim);margin-top:2px}
-.reg-live{margin-left:auto;font-family:var(--mono);font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--gold);border:1px solid var(--line);padding:4px 9px;border-radius:2px}
-.reg-live::before{content:'';display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--gold);margin-right:6px;vertical-align:middle;animation:pulse 1.8s ease-in-out infinite}
-.register-rows{padding:6px 6px;filter:blur(.4px)}
-.reg-row{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:14px 12px;border-bottom:1px solid var(--line-soft)}.reg-row:last-child{border-bottom:none}.reg-row.is-new{animation:fadeIn .6s ease both}
-.reg-row-main{display:flex;flex-direction:column;gap:3px;min-width:0}.reg-name{color:var(--cream);font-size:14px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:16em}.reg-office{font-size:11px;color:var(--sage-dim)}
-.reg-row-meta{display:flex;flex-direction:column;align-items:flex-end;gap:5px;flex-shrink:0}.reg-id{font-family:var(--mono);font-size:11px;color:var(--gold-soft);letter-spacing:.02em}
-.reg-status{font-size:10px;padding:3px 8px;border-radius:2px;letter-spacing:.03em;white-space:nowrap}
-.s-approved{background:rgba(198,161,91,.16);color:var(--gold-soft)}.s-under{background:rgba(171,193,180,.12);color:var(--sage)}.s-annual{background:rgba(171,193,180,.10);color:var(--sage-dim)}.s-kyc{background:rgba(171,193,180,.10);color:var(--sage-dim)}.s-registration{background:rgba(171,193,180,.12);color:var(--sage)}
-.register-foot{display:flex;justify-content:space-between;align-items:center;padding:13px 18px;border-top:1px solid var(--line);font-size:11px;color:var(--sage-dim)}
-.reg-stamp{font-family:var(--mono);font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--gold);border:1px dashed var(--line);padding:3px 8px;transform:rotate(-1.5deg)}
-.band{max-width:1200px;margin:26px auto 0;padding:28px 40px;display:flex;flex-wrap:wrap;gap:16px 40px;justify-content:space-between;border-top:1px solid var(--line-soft);border-bottom:1px solid var(--line-soft)}
-.band-item{display:flex;flex-direction:column;gap:6px}.band-fig{font-family:var(--serif);color:var(--cream);font-size:26px;font-weight:600}.band-arrow{color:var(--gold)}.band-lab{font-family:var(--mono);font-size:11px;letter-spacing:.08em;color:var(--sage-dim);text-transform:uppercase}
-section.lens,section.modules,section.arc,section.personas,section.quote{max-width:1200px;margin:0 auto;padding:88px 40px}
-.section-head{max-width:44em;margin-bottom:46px}.section-head h2{font-size:clamp(26px,3.4vw,40px);line-height:1.14;letter-spacing:-.01em;margin-top:4px}.section-sub{margin-top:16px;font-size:16px;line-height:1.62;color:var(--sage)}
-.lens-tabs{display:flex;flex-wrap:wrap;gap:10px;margin-bottom:28px}
-.lens-tab{font-family:var(--sans);font-size:13px;font-weight:600;color:var(--sage);background:transparent;border:1px solid var(--line-soft);border-radius:2px;padding:10px 16px;cursor:pointer;transition:all .16s ease}.lens-tab:hover{border-color:var(--gold);color:var(--gold-soft)}.lens-tab.is-on{background:var(--gold);color:#20180A;border-color:var(--gold)}.lens-tab.is-corridor:not(.is-on){border-style:dashed}
-.lens-readout{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:24px;padding:32px 36px;background:linear-gradient(180deg,var(--green-panel),#E6EFE7);border:1px solid var(--line);border-radius:5px}
-.lens-tag{display:flex;align-items:center;gap:12px;flex-wrap:wrap}.corridor-flag{font-family:var(--mono);font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--gold);border:1px solid var(--line);padding:4px 9px;border-radius:2px}
-.lens-tag-text{font-family:var(--serif);color:var(--cream);font-size:20px;font-weight:600}
-.lens-figs{display:flex;gap:44px}.lens-figs>div{display:flex;flex-direction:column;gap:4px}.lf-fig{font-family:var(--serif);color:var(--cream);font-size:28px;font-weight:600}.lf-lab{font-family:var(--mono);font-size:11px;letter-spacing:.07em;color:var(--sage-dim);text-transform:uppercase}
-.mod-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:1px;background:var(--line-soft);border:1px solid var(--line-soft);border-radius:5px;overflow:hidden}
-.mod-card{background:var(--ink-2);padding:36px 30px 30px;display:flex;flex-direction:column;gap:12px;transition:background .2s ease,transform .2s ease}.mod-card:hover{background:#E6EFE7;transform:translateY(-2px)}
-.mod-top{display:flex;align-items:center;justify-content:space-between}.mod-n{font-family:var(--mono);font-size:12px;color:var(--gold);letter-spacing:.1em}.mod-lens{font-family:var(--mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--sage-dim)}
-.mod-card h3{font-size:20px;line-height:1.22}.mod-card p{font-size:14px;line-height:1.62;color:var(--sage)}
-.mod-ai{margin-top:auto;font-family:var(--mono);font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--gold-soft);border-top:1px solid var(--line);padding-top:12px}
-.arc-steps{display:grid;grid-template-columns:1fr auto 1fr auto 1fr;align-items:stretch;gap:18px}
-.arc-step{background:var(--ink-2);border:1px solid var(--line-soft);border-radius:5px;padding:32px 28px;display:flex;flex-direction:column;gap:12px}.arc-step:nth-child(5){border-color:var(--line)}
-.arc-n{font-family:var(--mono);font-size:13px;color:var(--gold);letter-spacing:.1em}.arc-step h4{font-size:19px;line-height:1.2}.arc-step p{font-size:14px;line-height:1.6;color:var(--sage)}.arc-arrow{display:flex;align-items:center;color:var(--gold);font-size:22px}
-.persona-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:1px;background:var(--line-soft);border:1px solid var(--line-soft);border-radius:5px;overflow:hidden}
-.persona{background:var(--ink-2);padding:28px 22px;display:flex;flex-direction:column;gap:10px;min-height:132px}.persona-t{font-family:var(--serif);color:var(--cream);font-size:16px;font-weight:600}.persona-d{font-size:13px;line-height:1.5;color:var(--sage-dim)}
-.quote{text-align:center;position:relative}.quote-seal{width:70px;height:auto;margin:0 auto 26px;opacity:.9}
-.quote blockquote{margin:0;max-width:40em;margin-inline:auto}.quote p{font-family:var(--serif);color:var(--cream);font-size:clamp(22px,2.8vw,32px);line-height:1.42;font-weight:400;font-style:italic}.quote cite{display:block;margin-top:24px;font-family:var(--mono);font-size:12px;letter-spacing:.1em;text-transform:uppercase;color:var(--gold);font-style:normal}
-.flow{flex:1;display:flex;align-items:flex-start;justify-content:center;padding:64px 40px 90px}
-.flow-inner{width:100%;max-width:960px;animation:rise .5s ease both}.flow-inner.narrow{max-width:440px}
-.flow-back{background:none;border:none;color:var(--sage-dim);font-family:var(--mono);font-size:12px;letter-spacing:.06em;cursor:pointer;margin-bottom:26px;padding:0}.flow-back:hover{color:var(--gold-soft)}
-.flow-title{font-size:clamp(30px,4vw,46px);line-height:1.08;margin-bottom:14px}.flow-sub{font-size:16px;line-height:1.6;color:var(--sage);max-width:34em;margin-bottom:36px}
-.role-page-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
-.role-page-card{text-align:left;background:var(--ink-2);border:1px solid var(--line-soft);border-radius:6px;padding:26px 24px;cursor:pointer;display:flex;flex-direction:column;gap:10px;transition:all .18s ease}.role-page-card:hover{border-color:var(--gold);transform:translateY(-3px);background:#E6EFE7}
-.role-ico{color:var(--gold);display:inline-flex;width:46px;height:46px;align-items:center;justify-content:center;border:1px solid var(--line);border-radius:8px;margin-bottom:6px}
-.role-title{font-family:var(--serif);color:var(--cream);font-size:18px;font-weight:600}.role-desc{font-size:13px;line-height:1.5;color:var(--sage-dim)}.role-go{font-family:var(--mono);font-size:11px;letter-spacing:.06em;color:var(--gold);margin-top:6px}
-.demo-chip{font-family:var(--mono);font-size:11px;letter-spacing:.03em;color:var(--gold-soft);background:rgba(198,161,91,.08);border:1px solid var(--line);border-radius:3px;padding:10px 14px;margin-bottom:22px;line-height:1.5}
-.auth-form{display:flex;flex-direction:column;gap:16px}
-.field{display:flex;flex-direction:column;gap:7px}.field span{font-family:var(--mono);font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--sage-dim)}
-.field input,.field select,.field textarea{background:var(--ink-2);border:1px solid var(--line-soft);border-radius:3px;padding:13px 14px;color:var(--cream);font-size:15px;transition:border-color .16s ease;width:100%}
-.field input:focus,.field select:focus,.field textarea:focus{outline:none;border-color:var(--gold)}
-.field input::placeholder,.field textarea::placeholder{color:var(--sage-dim)}
-.field select{appearance:none;cursor:pointer}
-.auth-err{color:var(--err);font-size:13px;line-height:1.5}
-.auth-submit{margin-top:4px;width:100%}.auth-toggle{font-size:13px;color:var(--sage-dim);text-align:center}
-.auth-forgot{background:none;border:none;color:var(--gold-soft);font-size:12.5px;text-align:right;cursor:pointer;padding:0;margin-top:-4px;align-self:flex-end}
-.auth-forgot:hover{text-decoration:underline}
-.bulk-bar{display:flex;align-items:center;gap:12px;flex-wrap:wrap;background:var(--green-panel);border:1px solid var(--green);border-radius:8px;padding:9px 14px;margin-bottom:12px}
-.bulk-bar span{font-size:13px;font-weight:600;color:var(--green)}
-.th-check{width:34px;text-align:center}
-.th-check input{cursor:pointer}
-.rtable tr.row-sel{background:rgba(28,138,79,.06)}
-.auth-toggle button{background:none;border:none;color:var(--gold-soft);cursor:pointer;font-size:13px;font-weight:600;padding:0}.auth-toggle button:hover{text-decoration:underline}
-.dash{flex:1;padding:52px 40px 90px}.dash-inner{max-width:1080px;margin:0 auto;animation:rise .5s ease both}
-.shell{flex:1;display:flex;width:100%;align-items:stretch}
-.side{width:250px;flex-shrink:0;background:var(--ink-2);border-right:1px solid var(--line-soft);padding:22px 14px;display:flex;flex-direction:column;gap:16px;position:sticky;top:0;height:100vh;overflow:hidden}
-.side-scroll{flex:1;min-height:0;overflow-y:auto;display:flex;flex-direction:column;gap:16px}
-.side-brand{display:flex;align-items:center;gap:10px;background:none;border:none;cursor:pointer;padding:6px 8px}
-.side-brand-name{font-family:var(--serif);color:var(--cream);font-size:18px;font-weight:600}.side-brand-name em{color:var(--gold-soft);font-style:italic;font-weight:500}
-.side-nav{display:flex;flex-direction:column;gap:4px}
-.side-item{display:flex;align-items:center;gap:12px;padding:11px 12px;border-radius:8px;border:none;background:none;cursor:pointer;color:var(--sage);font-family:var(--sans);font-size:14px;font-weight:600;text-align:left;transition:background .18s ease,color .18s ease}
-.side-item:hover{background:rgba(20,50,35,.05);color:var(--cream)}
-.side-item.on{background:rgba(28,138,79,.1);color:var(--green)}
-.side-item svg{flex-shrink:0}
-.side-dot{width:6px;height:6px;border-radius:50%;background:currentColor;opacity:.45;flex-shrink:0;margin:0 6px}
-.side-item.on .side-dot{opacity:1}
-.side-sep{height:1px;background:var(--line-soft);margin:4px 6px}
-.side-badge{margin-left:auto;min-width:20px;height:20px;padding:0 6px;border-radius:10px;background:var(--green);color:#fff;font-family:var(--mono);font-size:11px;font-weight:600;display:inline-flex;align-items:center;justify-content:center}
-.notif-list{display:flex;flex-direction:column;margin-top:16px}
-.notif{display:flex;gap:12px;align-items:flex-start;padding:14px 4px;border-bottom:1px solid var(--line-soft);cursor:pointer;transition:background .15s ease}
-.notif:hover{background:rgba(20,50,35,.03)}
-.notif-dot{width:8px;height:8px;border-radius:50%;background:var(--line);flex-shrink:0;margin-top:6px}
-.notif.unread .notif-dot{background:var(--green)}
-.notif-body{display:flex;flex-direction:column;gap:2px}
-.notif-body strong{font-size:14px;color:var(--cream);font-weight:600}
-.notif.unread .notif-body strong{color:var(--cream)}
-.notif-body p{font-size:13px;color:var(--sage);line-height:1.5}
-.notif-at{font-family:var(--mono);font-size:11px;color:var(--sage-dim);margin-top:2px}
-.reports-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:16px}
-.report-card{background:var(--ink-2);border:1px solid var(--line-soft);border-radius:10px;padding:20px;display:flex;flex-direction:column;gap:8px}
-.report-card h4{font-size:15px}
-.report-card p{font-size:13px;color:var(--sage);line-height:1.5;flex:1}
-.report-card button{align-self:flex-start;margin-top:4px}
-.report-boardpack{display:flex;align-items:center;justify-content:space-between;gap:20px;flex-wrap:wrap;background:var(--green-panel);border:1px solid var(--line);border-radius:10px;padding:18px 20px;margin-top:16px}
-.report-boardpack h4{font-size:15px;margin-bottom:4px}
-@media(max-width:700px){.reports-grid{grid-template-columns:1fr}}
-.nav-verify{background:none;border:1px solid var(--line);border-radius:6px;padding:7px 14px;color:var(--sage);font-family:var(--sans);font-size:13px;font-weight:600;cursor:pointer;transition:border-color .18s ease,color .18s ease}
-.nav-verify:hover{border-color:var(--green);color:var(--green)}
-.lang-select{border:1px solid var(--line);border-radius:6px;padding:7px 10px;background:var(--ink-2);color:var(--sage);font-family:var(--sans);font-size:13px;font-weight:600;cursor:pointer}
-.lang-select:focus{outline:none;border-color:var(--green)}
-.nav-page{background:none;border:none;padding:6px 2px;font-family:var(--sans);font-size:14px;font-weight:500;color:var(--sage);cursor:pointer;border-bottom:2px solid transparent;transition:color .18s ease,border-color .18s ease}
-.nav-page:hover{color:var(--green)}
-.nav-page.on{color:var(--green);border-bottom-color:var(--green)}
-.landing-sub{min-height:70vh}
-.landing-sub .page{padding-top:56px;padding-bottom:72px;animation:rise .5s ease both}
-@media(max-width:860px){.landing-sub .page{padding-top:32px}}
-.explore{padding:64px 40px}
-.explore-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:16px}
-.explore-card{position:relative;text-align:left;background:var(--ink-2);border:1px solid var(--line-soft);border-radius:12px;padding:22px 22px 44px;cursor:pointer;transition:border-color .18s ease,transform .18s ease,box-shadow .18s ease;display:flex;flex-direction:column;gap:7px}
-.explore-card:hover{border-color:var(--green);transform:translateY(-2px);box-shadow:0 10px 26px rgba(20,50,32,.08)}
-.explore-title{font-family:var(--serif);font-size:18px;color:var(--cream)}
-.explore-desc{font-size:13px;color:var(--sage);line-height:1.5}
-.explore-arrow{position:absolute;left:22px;bottom:18px;color:var(--green);font-size:18px;transition:transform .18s ease}
-.explore-card:hover .explore-arrow{transform:translateX(4px)}
-@media(max-width:680px){.explore{padding:48px 18px}}
-.lang-note{font-size:12px;color:var(--gold-soft);margin-top:14px;max-width:520px;font-style:italic}
-.verify-page{flex:1;padding:60px 40px 100px;animation:rise .5s ease both}
-.verify-inner{max-width:760px;margin:0 auto}
-.verify-h{font-family:var(--serif);font-size:36px;color:var(--cream);margin:10px 0 12px}
-.verify-sub{color:var(--sage);font-size:16px;line-height:1.6;max-width:620px}
-.verify-search{display:flex;gap:10px;margin:26px 0;flex-wrap:wrap}
-.verify-search input{flex:1;min-width:240px;padding:14px 16px;border:1px solid var(--line);border-radius:8px;background:var(--ink-2);color:var(--cream);font-size:15px}
-.verify-search input:focus{outline:none;border-color:var(--green)}
-.verify-results{display:flex;flex-direction:column;gap:14px;margin-top:8px}
-.verify-card{background:var(--ink-2);border:1px solid var(--line-soft);border-radius:12px;padding:22px}
-.verify-card-top{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;margin-bottom:16px}
-.verify-card-top h3{font-family:var(--serif);font-size:19px;color:var(--cream)}
-.verify-facts{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;border-top:1px solid var(--line-soft);padding-top:16px}
-.verify-facts>div{display:flex;flex-direction:column;gap:3px}
-.verify-facts span{font-size:11px;color:var(--sage-dim);text-transform:uppercase;letter-spacing:.05em}
-.verify-facts strong{font-size:14px;color:var(--cream)}
-.verify-empty{background:var(--ink-2);border:1px dashed var(--line);border-radius:12px;padding:26px;color:var(--sage);text-align:center}
-.verify-page .link-back{display:inline-block;margin:24px 0 8px}
-.calc-row{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px}
-.risk-list{display:flex;flex-direction:column;gap:10px;margin-top:16px}
-.risk-item{display:flex;gap:12px;align-items:flex-start;background:var(--ink-2);border:1px solid var(--line-soft);border-radius:10px;padding:14px 16px}
-.risk-item .chip{flex-shrink:0;text-transform:capitalize}
-.risk-body strong{font-size:14px;color:var(--cream)}
-.risk-body p{font-size:12.5px;color:var(--sage);margin-top:2px;line-height:1.5}
-.sla-figs{display:flex;gap:24px;margin-top:6px}
-.sla-figs>div{display:flex;flex-direction:column;gap:3px}
-.sla-fig{font-family:var(--serif);font-size:26px;color:var(--cream);font-weight:600}
-.sla-lab{font-family:var(--mono);font-size:10px;letter-spacing:.05em;text-transform:uppercase;color:var(--sage-dim)}
-.side-return{margin:0 12px 10px;padding:9px 12px;background:var(--green-panel);border:1px solid var(--green);border-radius:8px;color:var(--green);font-family:var(--sans);font-size:13px;font-weight:600;cursor:pointer;text-align:left;transition:background .18s ease}
-.side-return:hover{background:#e0eee4}
-.rtable th{white-space:nowrap}
-.kyc-check{display:flex;flex-direction:column;gap:7px;margin:14px 0}
-.kyc-item{display:flex;align-items:flex-start;gap:9px;font-size:13.5px;color:var(--sage)}
-.kyc-item.ok{color:var(--cream)}
-.kyc-mark{flex-shrink:0;width:18px;height:18px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:11px;background:var(--line-soft);color:var(--sage-dim)}
-.kyc-item.ok .kyc-mark{background:var(--green);color:#fff}
-.kyc-status{margin:10px 0 4px;padding:10px 14px;border-radius:8px;font-size:13px;font-weight:600}
-.kyc-status.ok{background:var(--green-panel);color:var(--green);border:1px solid var(--green)}
-.kyc-status.pending{background:#fbf3e6;color:var(--gold-soft);border:1px solid var(--gold-soft)}
-.revenue-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px;margin-top:16px}
-.revenue-card{background:var(--ink-2);border:1px solid var(--line-soft);border-radius:12px;padding:20px;display:flex;flex-direction:column;gap:6px}
-.revenue-top{display:flex;justify-content:space-between;align-items:baseline;gap:10px}
-.revenue-top h4{font-size:15px}
-.revenue-price{font-family:var(--mono);font-size:13px;color:var(--green);white-space:nowrap}
-.revenue-price em{color:var(--sage-dim);font-style:normal;font-size:11px}
-.revenue-who{font-size:12px;color:var(--sage-dim);text-transform:uppercase;letter-spacing:.04em}
-.revenue-body{font-size:13px;color:var(--sage);line-height:1.5;flex:1}
-.revenue-accrued{font-size:12.5px;color:var(--cream);font-weight:600}
-.sec-item{background:none;border:none;text-align:left;width:100%;padding:0;font:inherit;color:inherit;cursor:default}
-.sec-item.clickable{cursor:pointer}
-.sec-item.clickable:hover .kyc-mark{border:1px solid var(--green)}
-.coop-hero{display:flex;align-items:center;gap:18px;background:var(--ink-2);border:1px solid var(--line-soft);border-radius:14px;padding:16px 20px;margin-bottom:18px}
-.coop-hero-art{width:120px;height:80px;flex-shrink:0;border-radius:10px}
-.coop-hero-text h3{font-size:18px;margin:0 0 4px}
-.coop-hero-text p{font-size:13px;color:var(--sage);margin:0}
-.chart-note{font-size:11.5px;color:var(--sage-dim);margin:8px 0 0;font-style:italic}
-.doc-guide{background:var(--green-panel);border:1px solid var(--line-soft);border-radius:10px;padding:14px 16px;margin:14px 0}
-.doc-guide h5{font-size:13px;margin:0 0 8px;color:var(--cream)}
-.doc-guide ul{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:1fr 1fr;gap:4px 16px}
-.doc-guide li{font-size:12.5px;color:var(--sage);display:flex;gap:7px;align-items:baseline}
-.doc-guide li.done{color:var(--green)}
-.doc-guide li span{flex-shrink:0;font-weight:700}
-.table-filter{display:flex;gap:10px;align-items:center;margin:0 0 14px;flex-wrap:wrap}
-.table-search{flex:1;min-width:200px;padding:9px 13px;border:1px solid var(--line);border-radius:8px;background:var(--ink-2);color:var(--cream);font-size:13.5px}
-.table-search:focus{outline:none;border-color:var(--green)}
-.table-filter select{padding:9px 13px;border:1px solid var(--line);border-radius:8px;background:var(--ink-2);color:var(--cream);font-size:13.5px}
-.table-count{font-family:var(--mono);font-size:11px;color:var(--sage-dim);white-space:nowrap}
-.action-queue{background:var(--green-panel);border:1px solid var(--green);border-radius:12px;padding:16px 20px;margin-bottom:18px}
-.action-queue h4{font-size:13px;margin:0 0 12px;color:var(--green);text-transform:uppercase;letter-spacing:.05em;font-family:var(--mono)}
-.aq-row{display:flex;flex-wrap:wrap;gap:22px}
-.aq-item{display:flex;align-items:baseline;gap:8px;min-width:0}
-.aq-n{font-family:var(--serif);font-size:26px;font-weight:600;color:var(--cream);line-height:1}
-.aq-lab{font-size:13px;color:var(--sage)}
-.review-banner{display:flex;flex-direction:column;gap:4px;background:#fbf3e6;border:1px solid var(--gold-soft);border-left:4px solid var(--gold-soft);border-radius:10px;padding:13px 16px;margin-bottom:16px}
-.review-banner strong{font-size:12px;font-family:var(--mono);letter-spacing:.06em;text-transform:uppercase;color:var(--gold-soft)}
-.review-banner span{font-size:13px;color:var(--sage);line-height:1.5}
-.demo-badge{align-self:flex-start;background:#fbf3e6;border:1px solid var(--gold-soft);color:var(--gold-soft);font-family:var(--mono);font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;padding:3px 8px;border-radius:5px}
-.chain-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(270px,1fr));gap:16px;margin-top:16px}
-.chain-card{text-align:left;background:var(--ink-2);border:1px solid var(--line-soft);border-radius:12px;padding:18px;cursor:pointer;display:flex;flex-direction:column;gap:6px;transition:border-color .18s ease,transform .18s ease;font:inherit}
-.chain-card:hover{border-color:var(--green);transform:translateY(-2px)}
-.chain-card-top{display:flex;justify-content:space-between;align-items:flex-start;gap:10px}
-.chain-card-top h4{font-size:15px;margin:0}
-.chain-card-sec{font-family:var(--mono);font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:var(--sage-dim);margin:0}
-.chain-card-figs{display:flex;gap:14px;flex-wrap:wrap;margin-top:6px}
-.chain-card-figs span{font-size:12.5px;color:var(--sage)}
-.chain-card-figs strong{color:var(--cream);font-family:var(--serif);font-size:15px}
-.chain-card-turn{font-size:12.5px;color:var(--green);font-weight:600;margin:4px 0 0;white-space:nowrap}
-.chain-stages{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:14px;margin:18px 0}
-.chain-stage{background:var(--ink-2);border:1px solid var(--line-soft);border-radius:10px;padding:14px}
-.chain-stage h4{font-size:12px;font-family:var(--mono);letter-spacing:.05em;text-transform:uppercase;color:var(--sage-dim);margin:0 0 10px;display:flex;justify-content:space-between;align-items:center;gap:8px}
-.chain-count{background:var(--green-panel);color:var(--green);border-radius:10px;padding:1px 7px;font-size:11px}
-.chain-node{display:flex;justify-content:space-between;align-items:flex-start;gap:8px;padding:8px 0;border-top:1px solid var(--line-soft)}
-.chain-node:first-of-type{border-top:none}
-.chain-node strong{display:block;font-size:13px;color:var(--cream)}
-.chain-node span{font-size:11.5px;color:var(--sage-dim)}
-.chain-node.firm strong{color:var(--gold-soft)}
-.btn-disabled{background:var(--line);color:var(--sage-dim);cursor:not-allowed;border:1px solid var(--line)}
-.gate-note{font-size:12.5px;color:var(--err);margin:8px 0 0;line-height:1.5}
-.guarantee-status{margin-top:14px;border-top:1px solid var(--line-soft);padding-top:14px}
-.gs-line{display:flex;justify-content:space-between;align-items:baseline;gap:12px}
-.gs-line strong{color:var(--green);font-family:var(--serif);font-size:16px;white-space:nowrap}
-.gs-request h5,.gs-approved p,.gs-pending p{margin:8px 0}
-.gs-approved{background:var(--green-panel);border-radius:8px;padding:12px 14px;margin-top:10px}
-.gs-pending{background:#fbf3e6;border-radius:8px;padding:12px 14px;margin-top:10px}
-.gs-approved p,.gs-pending p{font-size:13px;color:var(--ink);line-height:1.5}
-.req-tag.ok{background:var(--green)}
-.gr-item{border-top:1px solid var(--line-soft);padding:12px 0}
-.gr-item:first-of-type{border-top:none}
-.gr-head{display:flex;justify-content:space-between;align-items:baseline;gap:10px}
-.gr-head strong{font-size:14px;color:var(--cream)}
-.gr-head span{font-size:12.5px;color:var(--sage-dim)}
-.gr-sub{display:block;font-size:12px;color:var(--sage-dim);margin-top:4px}
-.ai-assess{border:1px solid var(--line-soft);background:var(--ink-2);border-radius:9px;padding:12px;margin:10px 0}
-.ai-assess-head{display:flex;justify-content:space-between;align-items:center;gap:10px}
-.ai-tag{font-family:var(--mono);font-size:9.5px;letter-spacing:.07em;text-transform:uppercase;color:var(--plum,#7a5b8a);background:#f0eaf4;border-radius:5px;padding:3px 8px}
-.ai-assess-body p{font-size:13px;color:var(--ink);line-height:1.6;margin:10px 0 4px;white-space:pre-wrap}
-.ai-note{font-size:11px;color:var(--sage-dim);font-style:italic;margin:6px 0 0}
-.spark-axis{display:flex;justify-content:space-between;margin-top:4px}
-.spark-axis span{font-size:10.5px;color:var(--sage-dim);font-family:var(--mono)}
-.accel-rating{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:6px}
-.stars{letter-spacing:1px}
-.star{color:var(--line);font-size:14px}
-.star.on{color:var(--gold-soft)}
-.accel-grade{font-size:12.5px;font-weight:600;color:var(--cream)}
-.accel-sub{font-size:11.5px;color:var(--sage-dim)}
-.clearance-box{border:1px solid var(--line);border-radius:10px;padding:14px 16px;margin:14px 0}
-.clearance-box.req{border-color:var(--err);background:rgba(192,83,58,.05)}
-.clearance-box.wait{border-color:var(--gold-soft);background:#fbf3e6}
-.clearance-box.ok{border-color:var(--green);background:var(--green-panel)}
-.clearance-box h5{font-size:13px;margin:0 0 6px;display:flex;align-items:center;gap:8px}
-.clearance-box p{font-size:13px;color:var(--sage);line-height:1.5;margin:0 0 10px}
-.req-tag{font-family:var(--mono);font-size:9px;letter-spacing:.06em;text-transform:uppercase;background:var(--err);color:#fff;border-radius:4px;padding:2px 7px}
-.chain-card.static{cursor:default}
-.chain-card.static:hover{border-color:var(--line-soft);transform:none}
-.pub-chains{margin:44px 0 10px;text-align:left}
-.pub-chains-h{font-family:var(--serif);font-size:24px;color:var(--cream);margin:0 0 8px}
-.pub-chains-sub{font-size:14px;color:var(--sage);line-height:1.6;margin:0 0 6px;max-width:70ch}
-.pub-stages{font-size:11.5px;color:var(--sage-dim);line-height:1.5;margin:4px 0}
-.node-src{display:inline-block;margin-top:3px;font-family:var(--mono);font-size:9px;letter-spacing:.05em;text-transform:uppercase;color:var(--sage-dim);background:var(--line-soft);border-radius:4px;padding:2px 6px}
-.node-src.accel{background:var(--green-panel);color:var(--green)}
-.node-acts{display:flex;flex-direction:column;align-items:flex-end;gap:5px;flex-shrink:0}
-.node-acts select{font-size:11px;padding:3px 6px;border:1px solid var(--line);border-radius:5px;background:var(--ink);color:var(--cream);max-width:130px}
-.opp-list{display:flex;flex-direction:column;gap:8px;margin-top:14px}
-.opp-row{display:flex;align-items:center;gap:12px;background:var(--ink-2);border:1px solid var(--line-soft);border-radius:9px;padding:12px 14px;cursor:pointer;text-align:left;font:inherit;transition:border-color .18s ease}
-.opp-row:hover{border-color:var(--green)}
-.opp-tag{flex-shrink:0;font-family:var(--mono);font-size:9.5px;letter-spacing:.05em;text-transform:uppercase;background:var(--green-panel);color:var(--green);border-radius:5px;padding:3px 7px}
-.opp-tag.offtake{background:#fbf3e6;color:var(--gold-soft)}
-.opp-tag.pool{background:#e8f0f4;color:var(--teal-ink,#3d7a78)}
-.opp-body{flex:1;min-width:0}
-.opp-body strong{display:block;font-size:13.5px;color:var(--cream);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.opp-body span{font-size:11.5px;color:var(--sage-dim)}
-.opp-detail{font-size:13.5px;color:var(--sage);line-height:1.55;margin:8px 0}
-.opp-meta{display:flex;gap:18px;flex-wrap:wrap;margin:10px 0}
-.opp-meta span{font-size:12.5px;color:var(--sage-dim)}
-.opp-meta strong{color:var(--cream)}
-.opp-reply{border-top:1px solid var(--line-soft);padding:10px 0}
-.opp-reply div{display:flex;justify-content:space-between;gap:10px;align-items:baseline}
-.opp-reply strong{font-size:13px;color:var(--cream)}
-.opp-reply span{font-size:11.5px;color:var(--sage-dim)}
-.opp-reply p{font-size:13px;color:var(--sage);margin:4px 0 0;line-height:1.5}
-.toast-host{position:fixed;right:20px;bottom:20px;z-index:60;display:flex;flex-direction:column;gap:10px;max-width:min(380px,calc(100vw - 40px))}
-.toast{display:flex;align-items:flex-start;gap:10px;background:var(--ink-2);border:1px solid var(--line);border-left:4px solid var(--green);border-radius:10px;padding:13px 14px;box-shadow:0 8px 24px rgba(20,40,30,.16);cursor:pointer;animation:toastin .22s ease}
-.toast span{flex:1;font-size:13.5px;color:var(--cream);line-height:1.45}
-.toast-error{border-left-color:var(--err)}
-.toast-success{border-left-color:var(--green)}
-.toast-x{background:none;border:none;color:var(--sage-dim);font-size:18px;line-height:1;cursor:pointer;padding:0 2px}
-.toast-x:hover{color:var(--cream)}
-@keyframes toastin{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
-.modal-overlay{position:fixed;inset:0;z-index:70;background:rgba(20,35,28,.5);display:flex;align-items:center;justify-content:center;padding:20px;animation:toastin .18s ease}
-.modal{background:var(--ink-2);border:1px solid var(--line);border-radius:14px;padding:24px;max-width:420px;width:100%;box-shadow:0 20px 60px rgba(20,40,30,.28)}
-.modal-msg{font-size:14.5px;color:var(--cream);line-height:1.5;margin:0 0 20px}
-.modal-actions{display:flex;justify-content:flex-end;gap:10px}
-.btn-danger{background:var(--err);color:#fff;border:1px solid var(--err)}.btn-danger:hover{filter:brightness(1.05)}
-.preview{background:var(--ink-2);border:1px solid var(--line);border-radius:14px;width:min(900px,96vw);height:min(86vh,900px);display:flex;flex-direction:column;overflow:hidden;box-shadow:0 20px 60px rgba(20,40,30,.3)}
-.preview-bar{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:12px 16px;border-bottom:1px solid var(--line-soft)}
-.preview-bar strong{font-size:14px;color:var(--cream);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.preview-acts{display:flex;align-items:center;gap:14px;flex-shrink:0}
-.preview-x{background:none;border:none;color:var(--sage);font-size:22px;line-height:1;cursor:pointer}
-.preview-x:hover{color:var(--cream)}
-.preview-body{flex:1;min-height:0;background:var(--ink);display:flex;align-items:center;justify-content:center}
-.preview-body iframe{width:100%;height:100%;border:none;background:#fff}
-.preview-body img{max-width:100%;max-height:100%;object-fit:contain}
-.preview-fallback{text-align:center;padding:30px;display:flex;flex-direction:column;gap:14px;align-items:center}
-.preview-fallback p{color:var(--sage);font-size:14px}
-a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible,[tabindex]:focus-visible{outline:2px solid var(--green);outline-offset:2px;border-radius:4px}
-@media(max-width:640px){.doc-guide ul{grid-template-columns:1fr}}
-@media(max-width:560px){.coop-hero{flex-direction:column;text-align:center}}
-.revenue-pay{display:flex;gap:8px;margin-top:6px}
-.revenue-pay input{flex:1;min-width:0;padding:9px 12px;border:1px solid var(--line);border-radius:8px;background:var(--ink);color:var(--cream);font-size:13px}
-.revenue-pay input:focus{outline:none;border-color:var(--green)}
-.bulk-type{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden;margin-bottom:12px}
-.bulk-type .seg{background:none;border:none;padding:8px 16px;font-family:var(--sans);font-size:13px;font-weight:600;color:var(--sage);cursor:pointer}
-.bulk-type .seg.on{background:var(--green);color:#fff}
-.bulk-actions{display:flex;align-items:center;gap:14px;margin-bottom:10px;flex-wrap:wrap}
-.bulk-text{width:100%;padding:12px 14px;border:1px solid var(--line);border-radius:8px;background:var(--ink-2);color:var(--cream);font-family:var(--mono);font-size:12.5px;line-height:1.5;resize:vertical}
-.bulk-text:focus{outline:none;border-color:var(--green)}
-.docs-upload{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:12px}
-.docs-upload select{padding:9px 12px;border:1px solid var(--line);border-radius:8px;background:var(--ink-2);color:var(--cream);font-size:13px}
-.docs-list{display:flex;flex-direction:column;gap:8px}
-.doc-row{display:flex;justify-content:space-between;align-items:center;gap:14px;padding:11px 14px;background:var(--ink-2);border:1px solid var(--line-soft);border-radius:8px}
-.doc-meta{display:flex;flex-direction:column;gap:2px;min-width:0}
-.doc-meta strong{font-size:13.5px;color:var(--cream);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.doc-meta span{font-size:11.5px;color:var(--sage-dim);display:flex;align-items:center;gap:6px}
-.doc-actions{display:flex;align-items:center;gap:12px;flex-shrink:0}
-.link-inline.danger{color:var(--err)}
-.muted-line.sm{font-size:11px}
-.sector-pick{display:flex;flex-wrap:wrap;gap:10px;margin:16px 0}
-.sector-chip{background:var(--ink-2);border:1px solid var(--line);border-radius:20px;padding:9px 16px;font-size:13px;font-weight:600;color:var(--sage);cursor:pointer;transition:all .15s ease}
-.sector-chip:hover{border-color:var(--green)}
-.sector-chip.on{background:var(--green);color:#fff;border-color:var(--green)}
-.accel-sectors{display:flex;justify-content:space-between;align-items:center;gap:14px;flex-wrap:wrap;background:var(--green-panel);border:1px solid var(--line);border-radius:10px;padding:12px 16px;margin-bottom:18px;font-size:13.5px;color:var(--cream-ink)}
-@media(max-width:640px){.verify-facts{grid-template-columns:1fr}.verify-h{font-size:28px}.verify-page{padding:40px 18px 70px}}
-.side-foot{flex-shrink:0;display:flex;flex-direction:column;gap:12px;border-top:1px solid var(--line-soft);padding-top:16px;margin-top:4px}
-.side-user{display:flex;align-items:center;gap:10px;min-width:0}
-.side-user-text{display:flex;flex-direction:column;min-width:0}
-.side-name{font-size:13.5px;font-weight:600;color:var(--cream);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.side-role{font-family:var(--mono);font-size:10px;letter-spacing:.05em;text-transform:uppercase;color:var(--sage-dim)}
-.side-signout{background:none;border:1px solid var(--line);border-radius:6px;padding:9px 12px;color:var(--sage);font-family:var(--mono);font-size:11px;letter-spacing:.06em;text-transform:uppercase;cursor:pointer;transition:border-color .18s ease,color .18s ease}
-.side-signout:hover{border-color:var(--err);color:var(--err)}
-.shell-main{flex:1;min-width:0;padding:44px 40px 80px}
-.shell-main .dash-inner{margin:0;max-width:1560px}
-@media(max-width:860px){.shell{flex-direction:column}.side{width:100%;height:auto;position:sticky;top:0;z-index:30;flex-direction:row;align-items:center;gap:8px;padding:10px 14px;border-right:none;border-bottom:1px solid var(--line-soft);overflow:visible}.side-brand{display:none}.side-scroll{flex-direction:row;flex:1;min-width:0;overflow-x:auto;overflow-y:visible;gap:6px;align-items:center}.side-nav{flex-direction:row;flex:0 0 auto;gap:4px}.side-sep{display:none}.side-item{white-space:nowrap;padding:9px 12px}.side-foot{flex-direction:row;border-top:none;padding-top:0;margin-top:0;gap:8px;flex-shrink:0}.side-user{display:none}.shell-main{padding:26px 18px 70px}}
-.dash-hero{display:flex;align-items:center;gap:20px;padding-bottom:30px;margin-bottom:30px;border-bottom:1px solid var(--line-soft)}
-.dash-hero-text{flex:1;min-width:0}.dash-hero-text .eyebrow{margin-bottom:8px}.dash-name{font-size:clamp(26px,3.4vw,38px);line-height:1.1}.dash-meta{font-size:14px;color:var(--sage-dim);margin-top:6px}
-.dash-rolebadge{font-family:var(--mono);font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--gold);border:1px solid var(--gold);border-radius:3px;padding:8px 14px;white-space:nowrap}
-.dash-grid{display:grid;grid-template-columns:1.6fr 1fr;gap:20px;align-items:start}
-.dash-card{background:var(--ink-2);border:1px solid var(--line-soft);border-radius:6px;padding:28px}.dash-card h3{font-size:18px;margin-bottom:6px}.dash-card-sub{font-size:13px;color:var(--sage-dim);line-height:1.55;margin-bottom:20px}
-.caps{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:2px}.caps li{display:flex;align-items:center;gap:12px;padding:14px 0;border-bottom:1px solid var(--line-soft);color:var(--cream);font-size:15px}.caps li:last-child{border-bottom:none}.cap-tick{color:var(--gold);font-size:11px}.cap-soon{margin-left:auto;font-family:var(--mono);font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--sage-dim);border:1px solid var(--line-soft);padding:3px 8px;border-radius:2px}
-.status-row{display:flex;align-items:center;justify-content:space-between;padding:11px 0;border-bottom:1px solid var(--line-soft);font-size:14px;color:var(--sage)}.status-row:last-child{border-bottom:none}
-.pill{font-family:var(--mono);font-size:10px;letter-spacing:.06em;text-transform:uppercase;padding:4px 9px;border-radius:2px}.pill.ok{background:rgba(28,138,79,.14);color:var(--green)}.pill.muted{background:rgba(72,82,75,.10);color:var(--sage-dim)}
-.dash-foot{margin-top:26px;font-size:13px;color:var(--sage-dim);line-height:1.6}
-/* Stage 3 */
-.ws{display:flex;flex-direction:column;gap:24px}.ws-h{font-size:18px}
-.ws > .muted-line,.ws > .panel-note,.returns-box > .muted-line,.returns-box > .panel-note,.trail-box > .panel-note{max-width:95ch}
-.muted-line{color:var(--sage-dim);font-size:14px;padding:8px 0}
-.statgrid{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}
-.stat{background:var(--ink-2);border:1px solid var(--line-soft);border-radius:6px;padding:20px 18px;display:flex;flex-direction:column;gap:8px;min-width:0}
-.stat-fig{font-family:var(--serif);color:var(--cream);font-size:clamp(17px,1.75vw,26px);font-weight:600;line-height:1.1;white-space:nowrap}.stat-lab{font-family:var(--mono);font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--sage-dim)}
-.tabs{display:flex;gap:8px;flex-wrap:wrap;border-bottom:1px solid var(--line-soft);padding-bottom:0}
-.tab{background:none;border:none;border-bottom:2px solid transparent;color:var(--sage);font-family:var(--sans);font-size:14px;font-weight:600;padding:10px 4px;margin-right:14px;cursor:pointer}
-.tab:hover{color:var(--gold-soft)}.tab.on{color:var(--cream);border-bottom-color:var(--green)}
-.rtable-wrap{overflow-x:auto;border:1px solid var(--line-soft);border-radius:6px}
-.rtable{width:100%;border-collapse:collapse;min-width:640px}
-.rtable th{text-align:left;font-family:var(--mono);font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--sage-dim);padding:14px 16px;border-bottom:1px solid var(--line-soft);font-weight:500;background:rgba(0,0,0,.14)}
-.rtable td{padding:15px 16px;border-bottom:1px solid var(--line-soft);font-size:14px;color:var(--sage);vertical-align:middle}
-.rtable tr:last-child td{border-bottom:none}.rtable tr:hover td{background:rgba(198,161,91,.04)}
-.td-name{color:var(--cream);font-weight:500;max-width:22em}.mono{font-family:var(--mono);font-size:12px;color:var(--gold-soft)}
-.btn-open{background:transparent;border:1px solid var(--line);color:var(--gold-soft);font-family:var(--mono);font-size:11px;letter-spacing:.06em;text-transform:uppercase;padding:6px 12px;border-radius:2px;cursor:pointer}.btn-open:hover{border-color:var(--gold);background:rgba(198,161,91,.08)}
-.chip{font-family:var(--mono);font-size:10px;letter-spacing:.05em;padding:4px 9px;border-radius:2px;white-space:nowrap;display:inline-block}
-.st-filed{background:rgba(72,82,75,.10);color:var(--sage)}.st-review{background:rgba(176,132,47,.14);color:var(--gold)}.st-approved{background:rgba(28,138,79,.14);color:var(--green)}.st-returned{background:rgba(192,83,58,.14);color:var(--err)}
-.panel,.detail,.empty,.society-card,.action-box,.returns-box,.trail-box{background:var(--ink-2);border:1px solid var(--line-soft);border-radius:8px}
-.panel{padding:30px;max-width:760px}
-.panel-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:20px}.panel-head h3{font-size:20px}
-.panel-sub{color:var(--sage-dim);font-size:13px;margin:-10px 0 18px}
-.link-back{background:none;border:none;color:var(--sage-dim);font-family:var(--mono);font-size:12px;letter-spacing:.05em;cursor:pointer}.link-back:hover{color:var(--gold-soft)}
-.form-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}.form-grid .span2{grid-column:1 / -1}
-.field textarea{resize:vertical;line-height:1.5}
-.computed{background:rgba(198,161,91,.06);border:1px dashed var(--line);border-radius:4px;padding:12px 14px}.computed strong{font-family:var(--serif);color:var(--cream);font-size:20px}.computed strong.neg,.neg{color:var(--err)}
-.panel-actions{margin-top:22px}.panel-note{margin-top:16px;font-size:12px;color:var(--sage-dim);line-height:1.55}
-.success-panel{text-align:center;max-width:520px;margin:0 auto;padding:40px}
-.success-mark{color:var(--gold);font-size:22px;display:block;margin-bottom:14px}
-.success-panel h3{font-size:24px;margin-bottom:10px}.success-panel p{font-size:15px;color:var(--sage);line-height:1.6}
-.tracking{display:flex;flex-direction:column;gap:6px;align-items:center;margin:22px 0;padding:18px;border:1px solid var(--line);border-radius:6px;background:rgba(198,161,91,.06)}
-.tracking span{font-family:var(--mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--sage-dim)}.tracking strong{font-family:var(--mono);font-size:20px;color:var(--gold-soft);letter-spacing:.04em}
-.empty{text-align:center;padding:56px 40px;max-width:560px;margin:0 auto}.empty-mark{color:var(--gold);font-size:24px;display:block;margin-bottom:16px}.empty h3{font-size:24px;margin-bottom:12px}.empty p{font-size:15px;color:var(--sage);line-height:1.65;margin-bottom:26px;max-width:40em;margin-inline:auto}
-.detail{padding:30px}
-.detail-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:16px}.detail-head h3{font-size:22px}.detail-sub{font-family:var(--mono);font-size:12px;color:var(--sage-dim);margin-top:6px}
-.detail-chips{display:flex;gap:8px;flex-wrap:wrap}
-.detail-grid{display:grid;grid-template-columns:1fr 1fr;gap:18px;margin:24px 0;padding:22px 0;border-top:1px solid var(--line-soft);border-bottom:1px solid var(--line-soft)}
-.field-ro{display:flex;flex-direction:column;gap:5px}.field-ro.span2{grid-column:1 / -1}.field-ro span{font-family:var(--mono);font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--sage-dim)}.field-ro strong{color:var(--cream);font-size:15px;font-weight:500}.field-ro strong.normal{font-weight:400;line-height:1.55;color:var(--sage)}
-.returns-box{padding:24px;margin-bottom:22px}.returns-box h4{font-size:16px;margin-bottom:16px}
-.returns-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:16px}
-.returns-grid>div{display:flex;flex-direction:column;gap:4px}.returns-grid span{font-family:var(--mono);font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:var(--sage-dim)}.returns-grid strong{color:var(--cream);font-size:16px;font-family:var(--serif)}
-.returns-notes{margin-top:16px;font-size:13px;color:var(--sage);line-height:1.55}
-.action-box{padding:24px;margin-bottom:22px}
-.action-row{display:flex;gap:12px;flex-wrap:wrap;margin-top:14px}
-.trail-box{padding:24px}.trail-box h4{font-size:16px;margin-bottom:18px}
-.timeline{list-style:none;margin:0;padding:0;display:flex;flex-direction:column}
-.tl-item{position:relative;padding:0 0 22px 26px;border-left:1px solid var(--line-soft)}
-.tl-item:last-child{border-left-color:transparent;padding-bottom:0}
-.tl-dot{position:absolute;left:-5px;top:3px;width:9px;height:9px;border-radius:50%;background:var(--gold)}
-.tl-body{display:flex;flex-direction:column;gap:3px}
-.tl-top{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap}.tl-action{color:var(--cream);font-size:14px;font-weight:600}.tl-time{font-family:var(--mono);font-size:11px;color:var(--sage-dim)}
-.tl-by{font-size:12px;color:var(--sage-dim)}.tl-note{font-size:13px;color:var(--sage);font-style:italic;margin-top:2px}
-.society-card{padding:28px}
-.society-top{display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap;align-items:flex-start;margin-bottom:22px}.society-top h3{font-size:22px}
-.society-figs{display:flex;gap:40px;flex-wrap:wrap;padding:20px 0;border-top:1px solid var(--line-soft);border-bottom:1px solid var(--line-soft);margin-bottom:20px}
-.society-figs>div{display:flex;flex-direction:column;gap:6px}.society-fig{font-family:var(--serif);color:var(--cream);font-size:24px;font-weight:600}.society-fig.sm{font-size:16px}
-.society-actions{display:flex;align-items:center;gap:16px;flex-wrap:wrap}
-.returned-flag{color:var(--err);font-size:13px}
-.fee-banner{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;background:rgba(198,161,91,.08);border:1px solid var(--line);border-radius:6px;padding:14px 18px;font-size:14px;color:var(--sage)}
-.fee-banner strong{color:var(--cream)}
-.qoop-profile{margin-top:16px;border-top:1px solid var(--line-soft);padding-top:14px}
-.qoop-profile-lab{font-family:var(--mono);font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--green)}
-.qoop-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px 16px;margin-top:12px}
-.qoop-grid>div{display:flex;flex-direction:column;gap:2px}
-.qoop-grid span{font-size:11px;color:var(--sage-dim)}
-.qoop-grid strong{font-family:var(--mono);font-size:13px;color:var(--cream)}
-.wallet{display:flex;flex-direction:column;gap:16px}
-.wallet-top{display:flex;align-items:flex-start;justify-content:space-between;gap:16px}
-.wallet-lab{display:block;font-family:var(--mono);font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--sage-dim)}
-.wallet-bal{display:block;font-family:var(--serif);font-size:34px;font-weight:600;color:var(--cream);margin-top:4px}
-.wallet-chip{font-family:var(--mono);font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:var(--green);background:rgba(28,138,79,.12);padding:4px 8px;border-radius:2px;white-space:nowrap;height:fit-content}
-.wallet-actions{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
-.wallet-actions input{background:var(--ink);border:1px solid var(--line);border-radius:5px;padding:10px 12px;color:var(--cream);font-size:14px;max-width:170px}
-.wallet-actions input:focus{outline:none;border-color:var(--green)}
-.wallet-h{font-size:13px;margin-top:2px}
-.txns{display:flex;flex-direction:column}
-.txn{display:grid;grid-template-columns:120px 1fr auto;gap:12px;align-items:center;padding:10px 0;border-bottom:1px solid var(--line-soft);font-size:13px}
-.txn:last-child{border-bottom:none}
-.txn-dir{font-family:var(--mono);font-weight:600}.txn-dir.in{color:var(--green)}.txn-dir.out{color:var(--err)}
-.txn-mid{color:var(--sage)}.txn-mid strong{color:var(--cream);font-weight:600}
-.txn-at{font-family:var(--mono);font-size:11px;color:var(--sage-dim);white-space:nowrap}
-.esusu-next{display:flex;align-items:center;gap:14px;flex-wrap:wrap;background:var(--ink);border:1px solid var(--line-soft);border-radius:8px;padding:14px 16px}
-.esusu-next>span{font-size:13px;color:var(--sage-dim)}.esusu-next strong{color:var(--cream);font-family:var(--serif);font-size:16px;margin-right:auto}
-.dash-hero-right{display:flex;align-items:center;gap:14px;margin-left:auto}
-.help-btn{background:var(--ink-2);border:1px solid var(--line);border-radius:6px;padding:9px 15px;font-family:var(--sans);font-size:13px;font-weight:600;color:var(--green);cursor:pointer;transition:border-color .2s ease,background .2s ease}
-.help-btn:hover,.help-btn.on{border-color:var(--green);background:rgba(28,138,79,.06)}
-.concierge{background:var(--ink-2);border:1px solid var(--line-soft);border-radius:10px;padding:20px}
-.concierge-row{display:flex;gap:10px;flex-wrap:wrap}
-.concierge-row input{flex:1;min-width:240px;background:var(--ink);border:1px solid var(--line);border-radius:6px;padding:12px 14px;color:var(--cream);font-size:14px}
-.concierge-row input:focus{outline:none;border-color:var(--green)}
-.concierge-ans{margin-top:14px;padding:14px 16px;background:rgba(28,138,79,.06);border:1px solid var(--line-soft);border-radius:8px;font-size:14px;line-height:1.6;color:var(--sage)}
-.support-cta{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;background:var(--ink-2);border:1px solid var(--line-soft);border-radius:8px;padding:16px 18px;font-size:14px;color:var(--sage)}
-.thread{display:flex;flex-direction:column;gap:12px;margin:20px 0}
-.msg{background:var(--ink-2);border:1px solid var(--line-soft);border-radius:10px;padding:14px 16px;max-width:80%}
-.msg.staff{align-self:flex-end;background:rgba(28,138,79,.06);border-color:rgba(28,138,79,.2)}
-.msg-head{display:flex;align-items:baseline;gap:10px;margin-bottom:6px}.msg-head strong{font-size:13.5px;color:var(--cream)}.msg-head span{font-family:var(--mono);font-size:10px;color:var(--sage-dim)}
-.msg p{font-size:14px;line-height:1.6;color:var(--sage)}
-.src-badge{font-family:var(--mono);font-size:9px;letter-spacing:.08em;padding:2px 6px;border-radius:2px;margin-left:8px;vertical-align:middle;text-transform:uppercase}
-.src-sekat{background:rgba(90,140,200,.16);color:#2E5C88}.src-mccti{background:rgba(198,161,91,.14);color:var(--gold-soft)}
-.ro-note{background:rgba(90,140,200,.08);border:1px solid rgba(90,140,200,.28);color:#2E5C88;border-radius:6px;padding:16px 18px;font-size:13px;line-height:1.55;margin-bottom:22px}
-.sekat{background:var(--ink-2);border:1px solid var(--line-soft);border-radius:8px;padding:28px;display:flex;flex-direction:column;gap:20px;max-width:660px}
-.sekat-flow{display:flex;align-items:center;gap:16px;flex-wrap:wrap}
-.node{flex:1;min-width:150px;background:var(--ink);border:1px solid var(--line-soft);border-radius:6px;padding:18px;display:flex;flex-direction:column;gap:6px;font-family:var(--serif);font-weight:600;font-size:16px;color:var(--cream)}
-.node span{font-family:var(--sans);font-weight:400;font-size:12px;color:var(--sage-dim)}
-.node.src{border-color:rgba(90,140,200,.4)}.node.dst{border-color:var(--line)}
-.flow-arrow{display:flex;flex-direction:column;align-items:center;color:var(--gold);font-size:22px}.flow-arrow span{font-family:var(--mono);font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:var(--sage-dim)}
-.sekat-status{border-top:1px solid var(--line-soft);border-bottom:1px solid var(--line-soft);padding:6px 0}
-.comp-analysis{margin-top:16px;display:flex;flex-direction:column;gap:8px}.ca-lab{font-family:var(--mono);font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:var(--sage-dim)}
-.ca-rows{display:flex;gap:18px;flex-wrap:wrap}.ca-row{font-size:13px;color:var(--sage)}.ca-row strong{color:var(--cream);font-family:var(--serif)}
-.foot{border-top:1px solid var(--line-soft);background:var(--ink-2)}
-.foot-top{max-width:1200px;margin:0 auto;padding:34px 40px;display:flex;align-items:center;justify-content:space-between;gap:24px;border-bottom:1px solid var(--line-soft);flex-wrap:wrap}
-.foot-lockup{display:flex;align-items:center;gap:14px}.foot-lockup img{height:44px;width:auto}.foot-mccti{height:40px !important}
-.foot-lockup-text{display:flex;flex-direction:column;line-height:1.3}.foot-lockup-text .lh-gov{color:var(--cream)}.foot-lockup-text .lh-min{color:var(--sage-dim)}
-.foot-grid{max-width:1200px;margin:0 auto;padding:28px 40px 46px;display:grid;grid-template-columns:1.4fr 1fr;gap:30px}.foot-grid p{font-size:13px;line-height:1.6;color:var(--sage-dim)}.foot-conf{font-family:var(--mono);font-size:11px;letter-spacing:.04em}
-.link-inline{background:none;border:none;color:var(--gold-soft);cursor:pointer;font-size:inherit;font-family:inherit;padding:0;text-decoration:underline}
-.link-inline:hover{color:var(--gold)}
-.node.qoop.src{border-color:rgba(230,120,60,.45)}
-.consent-check{display:flex;gap:10px;align-items:flex-start;font-size:12.5px;color:var(--sage);line-height:1.5;margin-top:4px}
-.consent-check input{margin-top:2px;accent-color:var(--gold);width:16px;height:16px;flex-shrink:0}
-.consent{position:fixed;left:0;right:0;bottom:0;z-index:50;background:var(--ink-2);border-top:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;gap:20px;padding:16px 40px;flex-wrap:wrap}
-.consent p{font-size:13px;color:var(--sage);line-height:1.5;max-width:64em}
-.consent-actions{display:flex;align-items:center;gap:16px}
-.privacy{display:flex;flex-direction:column;gap:20px;max-width:44em}
-.privacy-row{border-left:2px solid var(--line);padding-left:18px}
-.privacy-row h4{font-size:16px;margin-bottom:6px}.privacy-row p{font-size:14px;line-height:1.6;color:var(--sage)}
-.data-controls .dc-actions{display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin-bottom:14px}
-.dc-confirm{display:flex;align-items:center;gap:12px;font-size:13px;color:var(--err);flex-wrap:wrap}
-.viewas-banner{display:flex;align-items:center;justify-content:space-between;gap:16px;background:rgba(90,140,200,.1);border:1px solid rgba(90,140,200,.3);color:#2E5C88;border-radius:6px;padding:12px 18px;margin-bottom:22px;font-size:14px}
-.score-card{display:flex;flex-direction:column;gap:20px}
-.score-head{display:flex;align-items:center;justify-content:space-between;gap:20px;flex-wrap:wrap}
-.score-num{display:flex;align-items:baseline;gap:8px}
-.score-val{font-family:var(--serif);color:var(--cream);font-size:56px;font-weight:600;line-height:1}
-.score-scale{font-family:var(--mono);font-size:13px;color:var(--sage-dim)}
-.score-meta{display:flex;flex-direction:column;gap:8px;align-items:flex-end}
-.score-cap{font-size:13px;color:var(--sage)}.score-cap strong{color:var(--cream)}
-.score-factors{display:flex;flex-direction:column;gap:12px}
-.sf{display:flex;flex-direction:column;gap:6px}
-.sf-top{display:flex;justify-content:space-between;font-size:13px;color:var(--sage)}.sf-val{color:var(--cream);font-family:var(--mono);font-size:12px}
-.sf-bar{height:6px;background:var(--line-soft);border-radius:3px;overflow:hidden}.sf-bar span{display:block;height:100%;background:var(--gold);border-radius:3px}
-.band-dist{display:flex;gap:12px;flex-wrap:wrap}
-.bd{display:flex;align-items:center;gap:8px;background:var(--ink-2);border:1px solid var(--line-soft);border-radius:6px;padding:12px 16px}.bd-n{font-family:var(--serif);color:var(--cream);font-size:18px;font-weight:600}
-.viewas{display:flex;flex-direction:column;gap:20px}
-.viewas-search{background:var(--ink-2);border:1px solid var(--line-soft);border-radius:4px;padding:12px 14px;color:var(--cream);font-size:14px;max-width:420px}
-.viewas-search:focus{outline:none;border-color:var(--gold)}
-.viewas-cols{display:grid;grid-template-columns:1fr 1fr;gap:24px}
-.viewas-list{display:flex;flex-direction:column;gap:8px}
-.viewas-item{display:flex;align-items:center;justify-content:space-between;gap:12px;background:var(--ink-2);border:1px solid var(--line-soft);border-radius:5px;padding:14px 16px;cursor:pointer;color:var(--cream);font-size:14px;text-align:left;transition:border-color .15s ease}
-.viewas-item:hover{border-color:var(--gold)}.va-go{font-family:var(--mono);font-size:11px;color:var(--gold);letter-spacing:.04em;white-space:nowrap}
-@keyframes rise{from{opacity:0;transform:translateY(16px)}to{opacity:1;transform:none}}
-.analytics{display:flex;flex-direction:column;gap:22px}
-.switcher{display:flex;align-items:center;gap:14px;flex-wrap:wrap;background:var(--ink-2);border:1px solid var(--line);border-radius:8px;padding:14px 18px}
-.switcher-lab{font-family:var(--mono);font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--sage-dim)}
-.switcher-sel{flex:1;min-width:240px;background:var(--ink);border:1px solid var(--line);border-radius:5px;padding:11px 12px;color:var(--cream);font-size:14px;font-family:var(--sans);cursor:pointer}
-.switcher-sel:focus{outline:none;border-color:var(--green)}
-.kpi-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(185px,1fr));gap:14px}
-.kpi{background:var(--ink-2);border:1px solid var(--line-soft);border-radius:8px;padding:20px;min-width:0}
-.kpi-fig{display:block;font-family:var(--serif);color:var(--cream);font-size:clamp(15px,1.4vw,20px);font-weight:600;line-height:1.15;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.kpi-lab{display:block;margin-top:6px;font-family:var(--mono);font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--sage-dim)}
-.chart-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
-.chart-card{background:var(--ink-2);border:1px solid var(--line-soft);border-radius:8px;padding:20px 22px;display:flex;flex-direction:column;gap:16px;min-width:0}
-.chart-card.wide{grid-column:span 2}
-.chart-card h4{font-size:14px;color:var(--cream)}
-.donut-wrap{display:flex;align-items:center;gap:20px;flex-wrap:wrap}
-.donut{flex-shrink:0}
-.donut-c1{fill:var(--cream);font-family:var(--serif);font-size:26px;font-weight:600}
-.donut-c2{fill:var(--sage-dim);font-family:var(--mono);font-size:9px;letter-spacing:.08em;text-transform:uppercase}
-.legend{display:flex;flex-direction:column;gap:7px;min-width:0}
-.lg{display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--sage)}
-.lg-dot{width:9px;height:9px;border-radius:2px;flex-shrink:0}
-.lg b{margin-left:auto;color:var(--cream);font-family:var(--mono);font-size:12px;padding-left:14px}
-.bars{display:flex;flex-direction:column;gap:11px}
-.bar-row{display:grid;grid-template-columns:130px 1fr auto;align-items:center;gap:12px}
-.bar-lab{font-size:12.5px;color:var(--sage);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.bar-track{height:9px;background:var(--line-soft);border-radius:5px;overflow:hidden}
-.bar-fill{display:block;height:100%;border-radius:5px}
-.bar-val{font-family:var(--mono);font-size:12px;color:var(--cream);white-space:nowrap}
-.miniarea{width:100%;height:90px;display:block}
-.trend-x{display:flex;justify-content:space-between;font-family:var(--mono);font-size:10px;color:var(--sage-dim);margin-top:2px}@keyframes draw{to{transform:scaleX(1)}}@keyframes fadeIn{from{opacity:0}to{opacity:1}}@keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
-@media(max-width:960px){.hero{grid-template-columns:1fr;padding-top:52px}.hero-watermark{display:none}.mod-grid{grid-template-columns:1fr 1fr}.persona-grid{grid-template-columns:1fr 1fr}.arc-steps{grid-template-columns:1fr}.arc-arrow{transform:rotate(90deg);justify-content:center;padding:2px 0}.foot-grid{grid-template-columns:1fr}.role-page-grid{grid-template-columns:1fr 1fr}.dash-grid{grid-template-columns:1fr}.statgrid{grid-template-columns:1fr 1fr}.viewas-cols{grid-template-columns:1fr}.kpi-row{grid-template-columns:1fr 1fr}.chart-grid{grid-template-columns:1fr}.chart-card.wide{grid-column:span 1}.bar-row{grid-template-columns:96px 1fr auto}}
-@media(max-width:680px){.letterhead{padding:9px 18px;gap:12px}.lh-min{display:none}.lh-seal{height:34px}.lh-mccti{height:32px}.nav{padding:11px 18px;flex-wrap:wrap}.nav-links{display:flex;order:3;width:100%;overflow-x:auto;white-space:nowrap;gap:20px;padding:8px 0 2px;margin-top:6px;border-top:1px solid var(--line-soft);-webkit-overflow-scrolling:touch}.nav-page,.nav-verify,.lang-select{flex:0 0 auto}.hero{padding:40px 18px 30px}section.lens,section.modules,section.arc,section.personas,section.quote,section.leaders,section.about,section.pricing{padding:56px 18px}.band{padding:22px 18px;gap:18px 26px}.mod-grid,.persona-grid,.leader-grid,.price-grid{grid-template-columns:1fr}.lens-figs{gap:26px}.flow{padding:40px 18px 70px}.role-page-grid{grid-template-columns:1fr}.dash{padding:36px 18px 70px}.dash-hero{flex-wrap:wrap}.foot-top,.foot-grid{padding-left:18px;padding-right:18px}.acct-name{display:none}.form-grid{grid-template-columns:1fr}.detail-grid{grid-template-columns:1fr}.consent{padding:14px 18px}}
-@media(prefers-reduced-motion:reduce){*{animation:none !important;transition:none !important}.underline::after{transform:scaleX(1)}}
+function ServicesPage({ go }) {
+  return (<div className="page"><SectionHead eyebrow="What we do" title="Our services" />
+    <p className="page-lede anim">End-to-end healthcare consulting: we advise, build and operate across the health system.</p>
+    <div className="pillars">{SERVICES.map((p, i) => {
+      const clickable = p.to || p.href
+      return (<article className={'pillar photo anim' + (clickable ? ' clickable' : '')} key={p.t} style={{ animationDelay: (i * 60) + 'ms' }}
+        onClick={() => p.to ? go(p.to) : p.href ? window.open(p.href, '_blank') : null}>
+        <div className="pillar-img"><img src={p.img} alt="" /></div>
+        <span className="pillar-rule" aria-hidden="true" /><h3>{p.t}</h3><p>{p.d}</p>
+        {p.to && <span className="svc-more">See the programme &rarr;</span>}
+        {p.href && <span className="svc-more">Visit Genesys &#8599;</span>}
+      </article>)
+    })}</div>
+    <div className="cta-band anim"><h2>Have a brief in mind?</h2><button className="btn primary" onClick={() => go('contact')}>Book a consultation</button></div>
+  </div>)
+}
+
+function MonitoringPage({ onSignIn, go }) {
+  return (<div className="page"><SectionHead eyebrow="Licensed HEFAMAA monitoring operator" title="Facility Monitoring & Accreditation" />
+    <div className="mon-lead anim">
+      <div className="mon-lead-copy">
+        <p>As a licensed operator for the Health Facility Monitoring and Accreditation Agency (HEFAMAA), RHSC carries out routine, evidence-based monitoring of public and private health facilities across Lagos State, holding every provider to the standards that protect the people they serve.</p>
+        <p>Our field teams plan efficient routes, engage facilities with courtesy and official identification, assess against the approved HEFAMAA checklist, and debrief proprietors with clear corrective actions and timelines. Findings flow to a live oversight dashboard for the Agency and RHSC leadership.</p>
+        <div className="cta-row"><button className="btn primary" onClick={onSignIn}>Staff sign-in</button><button className="btn ghost" onClick={() => go('contact')}>Partner with us</button></div>
+      </div>
+      <div className="mon-lead-art"><img src="/photos/team.jpg" alt="RHSC monitoring team" /></div>
+    </div>
+    <div className="wave-wrap"><svg className="wave" viewBox="0 0 1000 90" preserveAspectRatio="none" aria-hidden="true"><path d="M0 55 C110 22, 200 78, 320 52 S540 20, 660 52 S870 82, 1000 46" fill="none" stroke="#A98FC4" strokeWidth="2.5" /></svg>
+      <ol className="stages">{STAGES.map((s, i) => (<li className="stage anim" key={s.n} style={{ animationDelay: (i * 80) + 'ms' }}><span className="stage-n">{s.n}</span><span className="dot" aria-hidden="true" /><h3>{s.t}</h3><p>{s.d}</p></li>))}</ol>
+    </div>
+    <div className="pillars">{PILLARS.map((p, i) => (<article className="pillar anim" key={p.t} style={{ animationDelay: (i * 70) + 'ms' }}><span className="pillar-rule" aria-hidden="true" /><h3>{p.t}</h3><p>{p.d}</p></article>))}</div>
+  </div>)
+}
+
+function AboutPage() {
+  return (<div className="page"><SectionHead eyebrow="Who we are" title="A full-service healthcare consulting firm" />
+    <div className="about-lead anim"><img src="/photos/g-building.jpg" alt="Healthcare" /></div>
+    <div className="mandate-grid">
+      <p className="anim">REALMS Healthcare Services Consulting Limited (RHSC) is a healthcare consulting firm working across strategy, quality and accreditation, training, health financing, digital health and regulatory monitoring. We serve government and regulators, private providers, investors and development partners.</p>
+      <p className="anim" style={{ animationDelay: '90ms' }}>We combine boardroom advisory with on-the-ground delivery. That range, from shaping strategy to operating monitoring at scale as a licensed HEFAMAA operator, lets us turn recommendations into measurable results and raise the standard of care.</p>
+    </div>
+    <div className="principles">{PRINCIPLES.map((p, i) => (<div className="principle anim" key={p.t} style={{ animationDelay: (i * 70) + 'ms' }}><h3>{p.t}</h3><p>{p.d}</p></div>))}</div>
+  </div>)
+}
+
+function LeaderCard({ l }) {
+  const [imgOk, setImgOk] = useState(true)
+  const initials = (l.name.replace(/[^A-Za-z ]/g, '').split(' ').filter(Boolean).map(w => w[0]).slice(0, 2).join('') || 'R').toUpperCase()
+  return (<article className="staff lead">
+    <div className="staff-top">
+      <div className="staff-photo">{imgOk ? <img src={l.photo} alt={l.name} onError={() => setImgOk(false)} /> : <span>{initials}</span>}</div>
+      <div className="staff-id"><h3>{l.name}</h3><p className="staff-role">{l.role}</p></div>
+    </div>
+    <p className="staff-purpose">{l.bio}</p>
+  </article>)
+}
+function StaffCard({ s }) {
+  const [open, setOpen] = useState(false)
+  const initials = (s.name.replace(/[^A-Za-z ]/g, '').split(' ').filter(Boolean).map(w => w[0]).slice(0, 2).join('') || 'R').toUpperCase()
+  return (<article className="staff">
+    <div className="staff-top">
+      <div className="staff-photo" aria-hidden="true"><span>{initials}</span></div>
+      <div className="staff-id"><h3>{s.name}</h3><p className="staff-role">{s.role}</p><p className="staff-unit">{s.unit}</p></div>
+    </div>
+    <p className="staff-purpose">{s.purpose}</p>
+    <button className="linkbtn" onClick={() => setOpen(o => !o)}>{open ? 'Hide role profile' : 'View role profile'}</button>
+    {open && <ul className="staff-duties">{s.duties.map((d, i) => <li key={i}>{d}</li>)}</ul>}
+  </article>)
+}
+function LeadershipPage({ go }) {
+  return (<div className="page"><SectionHead eyebrow="Our people" title="Leadership & staff" />
+    <p className="page-lede">The leadership and field team behind RHSC, a licensed HEFAMAA monitoring operator across Lagos State.</p>
+    <div className="staff-grid lead-grid anim">{LEADERS.map((l, i) => <LeaderCard key={i} l={l} />)}</div>
+    <SectionHead eyebrow="Our team" title="Monitoring officers & specialists" />
+    <div className="staff-grid anim">{STAFF.map((s, i) => <StaffCard key={i} s={s} />)}</div>
+    <div className="cta-band anim"><h2>Join our team</h2><p>We are always interested in talented people who care about better healthcare.</p><button className="btn primary" onClick={() => go('contact')}>See careers</button></div>
+  </div>)
+}
+
+function InsightsPage() {
+  return (<div className="page"><SectionHead eyebrow="Insights" title="Thinking, news & reports" />
+    <p className="page-lede anim">Perspectives from our team, company updates, and research on healthcare in Nigeria and beyond.</p>
+    <div className="insights">{INSIGHTS.map((p, i) => (
+      <article className="insight anim" key={i} style={{ animationDelay: (i * 70) + 'ms' }}>
+        <span className="insight-tag">{p.tag}</span><span className="insight-date">{p.date}</span>
+        <h3>{p.title}</h3><p>{p.blurb}</p><span className="svc-more">Read &rarr;</span>
+      </article>
+    ))}</div>
+    <p className="hintline center">More insights coming soon.</p>
+  </div>)
+}
+
+function ContactPage() {
+  const [f, setF] = useState({ name: '', org: '', email: '', phone: '', interest: 'Book a consultation', message: '' })
+  const [sent, setSent] = useState(false)
+  const set = (k, v) => setF(s => ({ ...s, [k]: v }))
+  const valid = f.name.trim() && f.email.trim() && f.message.trim()
+  const to = isPlaceholder(CONTACT.email) ? '' : CONTACT.email
+  function submit() {
+    if (!valid) { toast('Add your name, email and a short message.', 'warn'); return }
+    const subject = 'RHSC enquiry: ' + f.interest
+    const body = ['Name: ' + f.name, f.org ? 'Organisation: ' + f.org : '', 'Email: ' + f.email, f.phone ? 'Phone: ' + f.phone : '', 'Interest: ' + f.interest, '', f.message].filter(Boolean).join('\n')
+    window.location.href = mailtoLink(subject, body, to)
+    setSent(true)
+  }
+  const waHref = CONTACT.whatsapp ? waLink(CONTACT.whatsapp, 'Hello RHSC, I would like to enquire about your services.') : ''
+  return (<div className="page contact-page">
+    <div className="contact-hero anim">
+      <p className="eyebrow">Get in touch</p>
+      <h1>Let&rsquo;s raise the standard, together.</h1>
+      <p className="contact-lede">Tell us what you are working on. Whether it is strategy, quality, monitoring or digital health, we will point you to the right team.</p>
+    </div>
+    <div className="contact-split">
+      <aside className="contact-panel anim">
+        <div className="panel-glow" aria-hidden="true" />
+        <h2>Reach RHSC</h2>
+        <ul className="reach">
+          <li><span className="reach-ic"><Ico name="mail" /></span><div><span className="reach-k">Email</span><em>{CONTACT.email}</em></div></li>
+          <li><span className="reach-ic"><Ico name="phone" /></span><div><span className="reach-k">Phone</span><em>{CONTACT.phone}</em></div></li>
+          <li><span className="reach-ic"><Ico name="chat" /></span><div><span className="reach-k">WhatsApp</span><em>{CONTACT.whatsapp || '[Imade Forte WhatsApp]'}</em></div></li>
+          <li><span className="reach-ic"><Ico name="pin" /></span><div><span className="reach-k">Office</span><em>{CONTACT.address}</em></div></li>
+          <li><span className="reach-ic"><Ico name="clock" /></span><div><span className="reach-k">Hours</span><em>{CONTACT.hours}</em></div></li>
+        </ul>
+        <div className="panel-cta">
+          {waHref ? <a className="btn light" href={waHref} target="_blank" rel="noreferrer">Message on WhatsApp</a> : <button className="btn light" onClick={() => toast('Add your WhatsApp number in the contact settings.', 'warn')}>Message on WhatsApp</button>}
+          {!isPlaceholder(CONTACT.phone) && <a className="btn ghost onlight" href={'tel:' + CONTACT.phone.replace(/[^0-9+]/g, '')}>Call us</a>}
+        </div>
+      </aside>
+
+      {sent ? (
+        <div className="enquiry sent anim">
+          <div className="sent-badge" aria-hidden="true"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6L9 17l-5-5" /></svg></div>
+          <h2>Your enquiry is ready to send</h2>
+          <p>We have opened your email app with the details filled in. Send it and our team will respond, usually within a working day.</p>
+          <button className="btn primary" onClick={() => { setSent(false); setF({ name: '', org: '', email: '', phone: '', interest: 'Book a consultation', message: '' }) }}>Start a new enquiry</button>
+        </div>
+      ) : (
+        <div className="enquiry anim">
+          <h2>Send an enquiry</h2>
+          <div className="fgrid two">
+            <label className="field sm"><span>Name</span><input value={f.name} onChange={e => set('name', e.target.value)} placeholder="Your name" /></label>
+            <label className="field sm"><span>Organisation</span><input value={f.org} onChange={e => set('org', e.target.value)} placeholder="Optional" /></label>
+            <label className="field sm"><span>Email</span><input type="email" value={f.email} onChange={e => set('email', e.target.value)} placeholder="you@example.com" /></label>
+            <label className="field sm"><span>Phone</span><input value={f.phone} onChange={e => set('phone', e.target.value)} placeholder="Optional" /></label>
+          </div>
+          <label className="field sm"><span>How can we help?</span>
+            <select value={f.interest} onChange={e => set('interest', e.target.value)}>{['Book a consultation', 'Request a proposal', 'Facility monitoring & accreditation', 'Quality & accreditation', 'Training', 'Health financing', 'Digital health (Genesys)', 'Other'].map(o => <option key={o}>{o}</option>)}</select>
+          </label>
+          <label className="field sm"><span>Message</span><textarea rows="4" value={f.message} onChange={e => set('message', e.target.value)} placeholder="A sentence or two about what you need." /></label>
+          <div className="cta-row">
+            <button className="btn primary" onClick={submit}>Send enquiry</button>
+            <AIButton className="btn ghost" label="Help me write this" build={() => ({ system: 'You help a website visitor draft a short, polite enquiry to RHSC, a Lagos healthcare consulting and HEFAMAA facility-monitoring firm. Write 2 to 4 sentences in the first person, ready to send. Output only the message.', prompt: 'Name: ' + (f.name || '(unspecified)') + '. Organisation: ' + (f.org || 'n/a') + '. Interest: ' + f.interest + '. Rough note: ' + (f.message || '(none)') + '.', max_tokens: 260 })} onText={txt => set('message', txt)} />
+          </div>
+          <p className="hintline">Prefer to write directly? Use the details on the left.</p>
+        </div>
+      )}
+    </div>
+  </div>)
+}
+
+/* ---------- auth ---------- */
+function AuthPanel({ onDone, onCancel }) {
+  const [mode, setMode] = useState('signin'); const [email, setEmail] = useState(''); const [password, setPassword] = useState(''); const [name, setName] = useState('')
+  const [busy, setBusy] = useState(false); const [msg, setMsg] = useState('')
+  async function submit() {
+    setMsg(''); setBusy(true)
+    try {
+      if (MODE === 'supabase') {
+        if (mode === 'signup') { const { error } = await supabase.auth.signUp({ email, password, options: { data: { full_name: name.trim() } } }); if (error) throw error; setMsg('Account created. If confirmation is required, check your email, then sign in.'); setMode('signin') }
+        else { const { error } = await supabase.auth.signInWithPassword({ email, password }); if (error) throw error; if (name.trim()) { try { await supabase.auth.updateUser({ data: { full_name: name.trim() } }) } catch (e) {} } }
+      } else { if (!email) throw new Error('Enter an email to continue.'); const u = { email, name: name.trim() }; localStorage.setItem('realms_demo_user', JSON.stringify(u)); onDone(u) }
+    } catch (e) { setMsg(e.message || 'Something went wrong. Please try again.') } finally { setBusy(false) }
+  }
+  const showName = mode === 'signup' || MODE === 'demo'
+  return (<div className="auth-shell"><div className="auth-card anim">
+    <img className="auth-mark" src="/rhsc-mark.png" alt="RHSC" />
+    <h2>{mode === 'signup' ? 'Create your Realms Field account' : 'Sign in to Realms Field'}</h2>
+    <p className="auth-sub">For RHSC staff and authorised HEFAMAA reviewers.</p>
+    {showName && <label className="field"><span>Your name</span><input type="text" value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Olamide Okulaja" /></label>}
+    <label className="field"><span>Email</span><input type="email" value={email} autoComplete="email" onChange={e => setEmail(e.target.value)} placeholder="you@realms.ng" /></label>
+    <label className="field"><span>Password</span><input type="password" value={password} autoComplete="current-password" onChange={e => setPassword(e.target.value)} placeholder={MODE === 'demo' ? 'Not required in demo' : 'Your password'} /></label>
+    {msg && <p className="auth-msg">{msg}</p>}
+    <button className="btn primary wide" onClick={submit} disabled={busy}>{busy ? 'Please wait\u2026' : (mode === 'signup' ? 'Create account' : 'Sign in')}</button>
+    <button className="linkbtn" onClick={() => setMode(mode === 'signup' ? 'signin' : 'signup')}>{mode === 'signup' ? 'Already have an account? Sign in' : 'Need an account? Create one'}</button>
+    <button className="linkbtn subtle" onClick={onCancel}>Back to site</button>
+    {MODE === 'demo' && <p className="demo-note">Running in DEMO mode. Supabase keys were NOT detected when this version was built. Real accounts and your live data need the two keys present at build time, then a fresh deploy.</p>}
+    <p className="hintline" style={{ marginTop: 10, fontSize: 11, opacity: 0.65 }}>build {BUILD} &middot; {MODE === 'supabase' ? 'connected to database' : 'demo mode (not connected)'}</p>
+  </div></div>)
+}
+
+/* ---------- role picker ---------- */
+function RolePicker({ identity, onPick, onSignOut }) {
+  return (<div className="page role-page">
+    <div className="section-head anim"><p className="eyebrow">Welcome, {identity.first}</p><h2>Which best describes you?</h2></div>
+    <div className="role-grid">{ROLES.map((r, i) => { const Icon = r.icon; return (
+      <button className="role-card anim" key={r.id} style={{ animationDelay: (i * 60) + 'ms' }} onClick={() => onPick(r.id)}>
+        <span className="role-icon"><Icon /></span><span className="role-label">{r.label}</span><span className="role-blurb">{r.blurb}</span>
+      </button>) })}</div>
+    <button className="linkbtn subtle center" onClick={onSignOut}>Sign out</button>
+  </div>)
+}
+
+/* ---------- dashboard ---------- */
+function Dashboard({ identity, role, onOpen, facilities, onSeed, onClear, dbError }) {
+  const r = roleById(role); const Icon = r ? r.icon : IconMonitor
+  const areas = Array.from(new Set((facilities || []).map(f => f.area || 'Unassigned')))
+  const quick = [{ v: (facilities || []).length, l: 'Facilities' }, { v: areas.length, l: 'Areas' }, { v: (r ? r.tools.filter(t => t[2]).length : 0), l: 'Live tools' }]
+  const hasData = (facilities || []).length > 0
+  const showAnalytics = ['rhsc_hq', 'team_leader', 'hefamaa_reviewer'].includes(role)
+  return (<div className="page dash">
+    <div className="dash-banner anim">
+      <img src="/photos/team.jpg" alt="RHSC field team" />
+      <div className="dash-banner-in">
+        <span className="dash-icon"><Icon /></span>
+        <div><p className="eyebrow light">{r ? r.label : 'Realms Field'}</p><h2>Welcome, {identity.first}</h2><p className="dash-sub">Professional. Educational. Enforcement-driven.</p></div>
+      </div>
+    </div>
+    {dbError ? (<div className="db-error anim">
+      <strong>The facilities could not load.</strong>
+      <span className="db-msg">{dbError}</span>
+      <span>If you just updated the app, make sure the new version finished deploying, then tap Try again. Running build: {BUILD}.</span>
+      <button className="btn small primary" onClick={onSeed}>Try again</button>
+    </div>) : (!hasData && onSeed && (<div className="seed-card anim"><div><strong>No facilities yet.</strong><span>Load the live facility register (Alimosho &amp; Ifako-Ijaiye) to begin.</span></div><button className="btn small primary" onClick={onSeed}>Load live facilities</button></div>))}
+
+    {showAnalytics
+      ? (<div className="dash-analytics anim"><AnalyticsBody facilities={facilities} onOpen={onOpen} role={role} /></div>)
+      : (<div className="dash-quick anim">{quick.map(q => (<div className="dq" key={q.l}><span className="dq-v">{q.v}</span><span className="dq-l">{q.l}</span></div>))}</div>)}
+    <p className="dash-intro anim">Your tools are on the left. The ones marked ready are live now; the rest unlock as the build grows.</p>
+    <div className="tool-grid">{(r ? r.tools : []).map(([name, stage, tab], i) => {
+      const live = !!tab
+      return (<button className={'tool-card' + (live ? ' live' : '')} key={name} style={{ animationDelay: (i * 60) + 'ms' }} disabled={!live} onClick={() => live && onOpen(tab)}>
+        <span className="tool-name">{name}</span><span className={'tool-stage' + (live ? ' ready' : '')}>{live ? 'Open' : stage}</span>
+      </button>)
+    })}</div>
+  </div>)
+}
+
+/* ---------- facilities ---------- */
+function localityOf(f) {
+  const a = String(f.address || '').trim()
+  if (!a) return f.area || ''
+  let parts = a.split(',').map(x => x.trim()).filter(Boolean)
+  parts = parts.filter(p => !/^lagos( state)?$/i.test(p) && !/^nigeria$/i.test(p))
+  if (!parts.length) return f.area || ''
+  let loc = parts[parts.length - 1].replace(/^\d+[a-z]?[\s,]+/i, '').trim()
+  if (loc.length < 3 && parts.length > 1) loc = parts[parts.length - 2]
+  // Free-text address with no commas: the neighbourhood is almost always the last words.
+  let w = loc.split(/\s+/).filter(x => x && !/^(lagos|nigeria|state)$/i.test(x))
+  if (w.length > 3) w = w.slice(-2)
+  loc = w.join(' ').replace(/[^A-Za-z\s-]/g, '').replace(/-/g, ' ').replace(/\s+/g, ' ').trim()
+  if (!loc) return f.area || ''
+  return loc.replace(/\b\w/g, c => c.toUpperCase())
+}
+async function geocodeCall(body) {
+  const r = await fetch('/api/geocode', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
+  return await r.json().catch(() => ({ ok: false, reason: 'bad_response' }))
+}
+function FacilitiesPage({ list, canEdit, userId, reload }) {
+  const [adding, setAdding] = useState(false); const [busy, setBusy] = useState(false); const [msg, setMsg] = useState('')
+  const [form, setForm] = useState({ name: '', category: '', area: '', address: '', lat: '', lng: '', reg_status: '' })
+  const [q, setQ] = useState('')
+  const [fstate, setFstate] = useState('all')
+  const [visits, setVisits] = useState([])
+  const [drawer, setDrawer] = useState(null)
+  const [aiClean, setAiClean] = useState(false)
+  const [geoRun, setGeoRun] = useState(null)
+  const [geoMsg, setGeoMsg] = useState('')
+  useEffect(() => { VIS.list().then(setVisits).catch(() => {}) }, [])
+  const origin = (typeof window !== 'undefined' && window.location) ? window.location.origin : ''
+  function facVisits(f) { return visits.filter(v => (v.facility_id && v.facility_id === f.id) || v.facility_name === f.name) }
+  const fileRef = useRef(null)
+
+  const groups = {}
+  const stateCount = { live: list.filter(isLive).length, dead: list.filter(f => !isLive(f)).length,
+    field: list.filter(f => f.source === 'field').length, unreg: list.filter(f => f.reg_status && f.reg_status !== 'Registered').length }
+  const flist = list.filter(f => matchQ(f, q) && (
+    fstate === 'all' ? true : fstate === 'live' ? isLive(f) : fstate === 'dead' ? !isLive(f)
+    : fstate === 'field' ? f.source === 'field' : fstate === 'unreg' ? (f.reg_status && f.reg_status !== 'Registered') : true))
+  flist.forEach(f => { const a = f.area || 'Unassigned'; (groups[a] = groups[a] || []).push(f) })
+  const areas = Object.keys(groups).sort()
+  const missing = list.filter(f => !hasCoords(f)).length
+
+  async function saveForm() {
+    if (!form.name.trim()) { setMsg('A facility name is required.'); return }
+    setBusy(true); setMsg('')
+    try {
+      const lat = parseFloat(form.lat), lng = parseFloat(form.lng)
+      // Anything added by hand was found by the team, so tag it like the rest.
+      await FAC.addMany([{ name: form.name.trim(), category: form.category.trim(), area: form.area.trim() || 'Unassigned', address: form.address.trim(), last_visit: '', lat: isNaN(lat) ? null : lat, lng: isNaN(lng) ? null : lng, state: 'active', source: 'field', reg_status: form.reg_status || 'Unknown' }], userId)
+      toast('Facility added.')
+      setForm({ name: '', category: '', area: '', address: '', lat: '', lng: '', reg_status: '' }); setAdding(false); await reload()
+    } catch (e) { setMsg(e.message || 'Could not save the facility.') } finally { setBusy(false) }
+  }
+  async function importRows(text, sourceLabel) {
+    let csv = text
+    if (aiClean) {
+      const r = await askAI({ system: 'You clean a facilities CSV for a Lagos health-facility monitoring app. Return ONLY CSV with this header row: name,category,area,address,lat,lng,last_visit. Standardise area/LGA names, fix casing, remove empty or duplicate rows, keep lat/lng if present. No commentary, no code fences.', prompt: text.slice(0, 6000), max_tokens: 2000 })
+      if (r.ok && r.text && /name/i.test(r.text)) csv = r.text.replace(/```[a-z]*/gi, '').replace(/```/g, '').trim()
+      else if (!r.ok && r.reason === 'ai_not_configured') toast('AI clean is not set up; imported as-is.', 'warn')
+    }
+    const items = facilitiesFromCSV(csv)
+    if (!items.length) { setMsg('No rows found. Include a header row with a name column.'); return }
+    await FAC.addMany(items, userId); await reload(); setMsg(items.length + ' facilities imported' + (sourceLabel ? ' from ' + sourceLabel : '') + (aiClean ? ', cleaned with AI' : '') + '.')
+  }
+  async function onFile(e) {
+    const file = e.target.files && e.target.files[0]; if (!file) return
+    setBusy(true); setMsg('')
+    try {
+      const name = (file.name || '').toLowerCase()
+      if (name.endsWith('.xlsx') || name.endsWith('.xls')) {
+        const XLSX = await import('xlsx')
+        const buf = await file.arrayBuffer()
+        const wb = XLSX.read(buf, { type: 'array' })
+        const sheet = wb.Sheets[wb.SheetNames[0]]
+        const csv = XLSX.utils.sheet_to_csv(sheet)
+        await importRows(csv, 'Excel')
+      } else {
+        const text = await file.text(); await importRows(text, '')
+      }
+    } catch (e) { setMsg(e.message || 'Could not import the file.') } finally { setBusy(false); if (fileRef.current) fileRef.current.value = '' }
+  }
+  function downloadTemplate() {
+    const header = 'name,category,area,address,lat,lng,last_visit'
+    const example = 'Example Health Centre,Primary health centre,Ikeja,12 Example Road,,,'
+    download('realms-facilities-template.csv', header + '\n' + example + '\n', 'text/csv')
+  }
+  async function importSheet() {
+    const url = window.prompt('Paste your Google Sheet link (the sheet must be shared as "Anyone with the link can view").')
+    if (!url) return
+    setBusy(true); setMsg('')
+    try {
+      const m = url.match(/\/d\/([a-zA-Z0-9-_]+)/); if (!m) throw new Error('That does not look like a Google Sheet link.')
+      const gid = (url.match(/[#&?]gid=(\d+)/) || [])[1] || '0'
+      const csvUrl = 'https://docs.google.com/spreadsheets/d/' + m[1] + '/export?format=csv&gid=' + gid
+      const res = await fetch(csvUrl); if (!res.ok) throw new Error('Could not read the sheet. Make sure link-sharing is on for anyone with the link.')
+      const text = await res.text(); const items = facilitiesFromCSV(text)
+      if (!items.length) throw new Error('No rows found. Include a header row with a name column.')
+      await FAC.addMany(items, userId); await reload(); setMsg(items.length + ' facilities imported from Google Sheet.')
+    } catch (e) { setMsg(e.message || 'Google Sheet import failed.') } finally { setBusy(false) }
+  }
+  async function locate(f) {
+    setBusy(true); setMsg('')
+    try { const g = await geocode(f.address || f.name + ' ' + (f.area || '')); if (g) { await FAC.update(f.id, { ...g, geo_confirmed: true }); await reload() } else setMsg('No match found. Add coordinates manually.') }
+    catch (e) { setMsg('Location lookup failed. Add coordinates manually.') } finally { setBusy(false) }
+  }
+  async function mapAll() {
+    const todo = list.filter(f => !hasCoords(f))
+    if (!todo.length) { toast('Every facility already has a pin.'); return }
+    let probe = null
+    try { probe = await geocodeCall({ probe: true }) } catch (e) {}
+    if (!probe || !probe.ok) { toast('The lookup service could not be reached.', 'err'); return }
+    if (!probe.hasGoogle && !probe.hasAI) { toast('No lookup service is configured. Add GOOGLE_MAPS_KEY in Vercel.', 'warn'); return }
+
+    const how = probe.hasGoogle
+      ? 'Google will find the exact address for ' + todo.length + ' facilities' + (probe.hasAI ? ', and anything it cannot find will be estimated to its neighbourhood by AI' : '') + '.'
+      : 'AI will estimate each facility to its neighbourhood centre. Add GOOGLE_MAPS_KEY in Vercel for exact pins.'
+    if (!(await confirmAction(how + ' It takes a few minutes. Pins stay marked "check" until your team confirms them.', { title: 'Map the facilities', ok: 'Start' }))) return
+
+    let exact = 0, estimated = 0
+    const misses = []
+    setGeoRun({ done: 0, total: todo.length, found: 0 })
+
+    // Pass 1: exact addresses through Google.
+    if (probe.hasGoogle) {
+      for (let i = 0; i < todo.length; i += 25) {
+        const batch = todo.slice(i, i + 25)
+        const queries = batch.map(f => [f.name, f.address, f.area, 'Lagos, Nigeria'].filter(Boolean).join(', '))
+        let r = null
+        try { r = await geocodeCall({ list: queries, engine: 'google' }) } catch (e) { r = null }
+        if (!r || !r.ok) { setGeoRun(null); toast('Google lookup failed' + (r && r.reason ? ': ' + r.reason : '') + '.', 'err'); return }
+        for (let b = 0; b < batch.length; b++) {
+          const hit = (r.results || [])[b]
+          if (!hit) { misses.push(batch[b]); continue }
+          const solid = hit.precision === 'ROOFTOP'
+          try { await FAC.update(batch[b].id, { lat: hit.lat, lng: hit.lng, geo_confirmed: solid ? true : false }); exact++ } catch (e) {}
+        }
+        setGeoRun({ done: Math.min(i + 25, todo.length), total: todo.length, found: exact })
+      }
+    } else {
+      misses.push(...todo)
+    }
+
+    // Pass 2: whatever is left, estimated to its neighbourhood by AI.
+    if (misses.length && probe.hasAI) {
+      const groupsBy = {}
+      misses.forEach(f => { const k = localityOf(f) + '|' + (f.area || ''); (groupsBy[k] = groupsBy[k] || []).push(f) })
+      const keys = Object.keys(groupsBy)
+      setGeoRun({ done: 0, total: keys.length, found: exact, phase: 'Estimating neighbourhoods' })
+      for (let i = 0; i < keys.length; i += 25) {
+        const batch = keys.slice(i, i + 25)
+        const queries = batch.map(k => { const [loc, area] = k.split('|'); return [loc, area, 'Lagos, Nigeria'].filter(Boolean).join(', ') })
+        let r = null
+        try { r = await geocodeCall({ list: queries, engine: 'ai' }) } catch (e) { r = null }
+        if (!r || !r.ok) break
+        for (let b = 0; b < batch.length; b++) {
+          const hit = (r.results || [])[b]
+          if (!hit) continue
+          for (const f of groupsBy[batch[b]]) {
+            try { await FAC.update(f.id, { lat: hit.lat, lng: hit.lng, geo_confirmed: false }); estimated++ } catch (e) {}
+          }
+        }
+        setGeoRun({ done: Math.min(i + 25, keys.length), total: keys.length, found: exact + estimated, phase: 'Estimating neighbourhoods' })
+      }
+    }
+
+    await reload(); setGeoRun(null)
+    const left = todo.length - exact - estimated
+    setGeoMsg([
+      exact ? exact + ' pinned to their exact address by Google.' : '',
+      estimated ? estimated + ' estimated to their neighbourhood by AI, which is fine for grouping routes but not for finding the door.' : '',
+      left ? left + ' could not be placed at all.' : '',
+      'Pins marked "check" need a quick look from the team.'
+    ].filter(Boolean).join(' '))
+    toast((exact + estimated) + ' of ' + todo.length + ' facilities mapped.')
+  }
+  async function confirmPin(f) { try { await FAC.update(f.id, { geo_confirmed: true }); await reload() } catch (e) { toast('Could not save.', 'err') } }
+  async function del(f) { if (!(await confirmAction('Remove ' + f.name + ' from the facility list?', { title: 'Remove facility', ok: 'Remove', danger: true }))) return; await FAC.remove(f.id); await reload(); toast('Facility removed.') }
+
+  return (<div className="page">
+    <div className="ptitle"><div><p className="eyebrow">Facilities</p><h2>{list.length} in {areas.length} area{areas.length === 1 ? '' : 's'}</h2></div>
+      {canEdit && <div className="ptools">
+        <button className="btn small ghost" onClick={() => fileRef.current && fileRef.current.click()}>Bulk upload</button>
+        <button className="btn small ghost" onClick={importSheet}>Google Sheet</button>
+        <button className="btn small ghost" onClick={downloadTemplate}>Template</button>
+        <button className="btn small ghost" onClick={() => window.alert('HEFAMAA sync connects to the Agency\u2019s data feed. Share the API endpoint and we will enable it.')}>HEFAMAA sync</button>
+        <button className="btn small primary" onClick={() => setAdding(a => !a)}>{adding ? 'Close' : 'Add facility'}</button>
+        <button className="btn small ghost" onClick={mapAll} disabled={!!geoRun}>{geoRun ? ('Mapping ' + geoRun.done + '/' + geoRun.total) : 'Map the facilities'}</button>
+        <label className="ai-check"><input type="checkbox" checked={aiClean} onChange={e => setAiClean(e.target.checked)} /> <span className="ai-spark">✦</span> Clean with AI</label>
+        <input ref={fileRef} type="file" accept=".csv,text/csv,.xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel" onChange={onFile} style={{ display: 'none' }} />
+      </div>}
+    </div>
+    {canEdit && <p className="hintline">Bulk upload a CSV or Excel file. Columns: name, category, area (or lga), address, lat, lng, last_visit. Only name is required. Use Template for the exact format.</p>}
+    {msg && <p className="auth-msg block">{msg}</p>}
+    {missing > 0 && <p className="warnline">{missing} facilit{missing === 1 ? 'y is' : 'ies are'} missing coordinates and will not appear on the map. Add lat/lng or use Locate.</p>}
+
+    {adding && canEdit && (<div className="addform">
+      <div className="fgrid">
+        <label className="field sm"><span>Name</span><input value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} /></label>
+        <label className="field sm"><span>Category</span><input value={form.category} onChange={e => setForm({ ...form, category: e.target.value })} placeholder="e.g. Primary clinic" /></label>
+        <label className="field sm"><span>Area / LGA</span><input value={form.area} onChange={e => setForm({ ...form, area: e.target.value })} placeholder="e.g. Ikeja" /></label>
+        <label className="field sm"><span>Address</span><input value={form.address} onChange={e => setForm({ ...form, address: e.target.value })} /></label>
+        <label className="field sm"><span>Latitude</span><input value={form.lat} onChange={e => setForm({ ...form, lat: e.target.value })} placeholder="optional" /></label>
+        <label className="field sm"><span>Longitude</span><input value={form.lng} onChange={e => setForm({ ...form, lng: e.target.value })} placeholder="optional" /></label>
+      </div>
+      <button className="btn small primary" onClick={saveForm} disabled={busy}>{busy ? 'Saving\u2026' : 'Save facility'}</button>
+    </div>)}
+
+    {geoMsg && <p className="warnline">{geoMsg} <button className="linkbtn subtle" onClick={() => setGeoMsg('')}>Dismiss</button></p>}
+    {geoRun && <div className="mon-meter"><div className="meter-row"><span className="meter-lab">{geoRun.phase || 'Mapping'}</span><div className="meter-track"><div className="meter-fill" style={{ width: Math.round(geoRun.done / geoRun.total * 100) + '%' }} /></div><span className="meter-val">{geoRun.done}/{geoRun.total}</span></div></div>}
+    {list.length > 0 && <div className="list-tools list-tools-row"><SearchBox value={q} onChange={setQ} placeholder="Search facilities, area, category…" /><select className="sel" value={fstate} onChange={e => setFstate(e.target.value)}><option value="all">All ({list.length})</option><option value="live">For the round ({stateCount.live})</option><option value="dead">Closed or untraceable ({stateCount.dead})</option><option value="field">Found in the field ({stateCount.field})</option><option value="unreg">Not fully registered ({stateCount.unreg})</option></select></div>}
+    {list.length === 0 ? <p className="empty">No facilities yet. {canEdit ? 'Add one or import a CSV to begin.' : 'Nothing to show.'}</p> :
+      areas.length === 0 ? <p className="empty">No facilities match your search.</p> :
+      areas.map((a, ai) => (<div className="cluster" key={a}>
+        <div className="cluster-head"><span className="area-dot" style={{ background: AREA_COLORS[ai % AREA_COLORS.length] }} /><h3>{a}</h3><span className="cluster-count">{groups[a].length}</span></div>
+        <div className="frows">{groups[a].map(f => (<div className="frow" key={f.id}>
+          <div className="fmain"><span className="fname">{f.name}</span><span className="fmeta">{[f.category, f.address, f.phone].filter(Boolean).join(' \u00b7 ') || 'No details'}</span>{(f.reg_status || f.state) && <span className="fchips">{f.reg_status && <span className={'reg-chip ' + (f.reg_status === 'Registered' ? 'ok' : f.reg_status === 'Registration in progress' ? 'prog' : 'no')}>{f.reg_status}</span>}{f.state && STATE_LABEL[f.state] && <span className={'state-chip' + (DEAD_STATES.indexOf(f.state) >= 0 ? ' dead' : '')}>{STATE_LABEL[f.state]}</span>}{f.source === 'field' && <span className="state-chip find">Found in field</span>}</span>}{f.remark && <span className="fremark">{f.remark}</span>}</div>
+          <div className="factions">
+            <button className="mini" onClick={() => setDrawer(f)}>History</button>
+            {f.phone && <a className="mini" href={'tel:' + String(f.phone).replace(/[^0-9+]/g, '')}>Call</a>}
+            {hasCoords(f) ? (f.geo_confirmed === false ? (canEdit ? <button className="mini warn" onClick={() => confirmPin(f)}>Confirm pin</button> : <span className="pin no">pin unchecked</span>) : <span className="pin ok" title="Mapped">&#9679;</span>) : (canEdit ? <button className="mini" onClick={() => locate(f)} disabled={busy}>Locate</button> : <span className="pin no">no coords</span>)}
+            {canEdit && <button className="mini danger" onClick={() => del(f)}>Remove</button>}
+          </div>
+        </div>))}</div>
+      </div>))}
+    {drawer && (<div className="drawer-scrim" onClick={() => setDrawer(null)}>
+      <div className="drawer anim-right" onClick={e => e.stopPropagation()}>
+        <div className="drawer-head"><div><h3>{drawer.name}</h3><p className="fmeta">{[drawer.category, drawer.area, drawer.address].filter(Boolean).join(' \u00b7 ') || 'No details'}</p></div><button className="mini" onClick={() => setDrawer(null)}>Close</button></div>
+        <h4 className="drawer-sub">Visit history</h4>
+        {facVisits(drawer).length === 0 ? <p className="empty sm">No visits recorded for this facility yet.</p> :
+          <ul className="drawer-visits">{facVisits(drawer).map(v => (
+            <li key={v.id}>
+              <div className="dv-main"><span className="fname">{(v.arrival_time || v.created_at || '').slice(0, 10)}</span><span className="fmeta">{ragText(v.overall_rating)}{v.score != null ? ' \u00b7 ' + v.score + '%' : ''} \u00b7 {v.status}</span></div>
+              {(v.status === 'monitored' || v.status === 'debriefed') && <button className="mini" onClick={() => printDoc('Monitoring Report', buildReport(v, v.debrief || deriveDebrief(v), origin))}>Report</button>}
+            </li>
+          ))}</ul>}
+      </div>
+    </div>)}
+  </div>)
+}
+function pinIcon(color, num) {
+  const label = num ? '<span style="position:absolute;inset:0;display:grid;place-items:center;transform:rotate(45deg);color:#fff;font:700 11px Lora,serif">' + num + '</span>' : ''
+  return L.divIcon({ className: 'rf-pin', html: '<div style="position:relative;width:24px;height:24px"><div style="width:24px;height:24px;background:' + color + ';border:2px solid #fff;border-radius:50% 50% 50% 0;transform:rotate(-45deg);box-shadow:0 2px 5px rgba(0,0,0,.35)"></div>' + label + '</div>', iconSize: [24, 24], iconAnchor: [12, 22], popupAnchor: [0, -20] })
+}
+function MapRoutePage({ list, role, userId }) {
+  const mapRef = useRef(null); const mapObj = useRef(null); const layerRef = useRef(null)
+  const areas = Array.from(new Set(list.map(f => f.area || 'Unassigned'))).sort()
+  const colorMap = {}; areas.forEach((a, i) => { colorMap[a] = AREA_COLORS[i % AREA_COLORS.length] })
+  const [area, setArea] = useState('all')
+  const [tab, setTab] = useState('plan')
+  const [visits, setVisits] = useState([])
+  const [q, setQ] = useState('')
+  const [perDay, setPerDay] = useState(14)
+  const [days, setDays] = useState(5)
+  const [scope, setScope] = useState('due')
+  const [order, setOrder] = useState('date') // 'date' = oldest first (2nd round), 'geo' = by geography
+  const [mode, setMode] = useState('auto') // 'auto' = system plan, 'manual' = pick facilities
+  const [picks, setPicks] = useState({})
+  const [pq, setPq] = useState('')
+  const [plan, setPlan] = useState(null)
+  const [planErr, setPlanErr] = useState('')
+  const [openDay, setOpenDay] = useState(0)
+  const [assignForm, setAssignForm] = useState({})
+  const [assignBusy, setAssignBusy] = useState('')
+  const canAssign = role === 'team_leader' || role === 'rhsc_hq'
+  const isHQ = role === 'rhsc_hq'
+  useEffect(() => { VIS.list().then(setVisits).catch(() => {}) }, [])
+
+  const areaCount = {}; list.forEach(f => { const a = f.area || 'Unassigned'; areaCount[a] = (areaCount[a] || 0) + 1 })
+  function pickArea(a) { setArea(a); setPlan(null); setPlanErr(''); setOpenDay(-1) }
+  const filtered = (area === 'all' ? list : list.filter(f => (f.area || 'Unassigned') === area))
+  const plotted = filtered.filter(hasCoords)
+
+  const visByFac = {}
+  visits.forEach(v => { const key = v.facility_id || v.facility_name; if (!key) return; const prev = visByFac[key]; if (!prev || (v.arrival_time || v.created_at || '') > (prev.arrival_time || prev.created_at || '')) visByFac[key] = v })
+  function facVisit(f) { return visByFac[f.id] || visByFac[f.name] }
+  function facStatus(f) { const v = facVisit(f); return v ? (v.status === 'debriefed' ? 'Debriefed' : v.status === 'monitored' ? 'Assessed' : 'Engaged') : 'Not visited' }
+  const visitedCount = filtered.filter(facVisit).length
+  const assessedCount = filtered.filter(f => { const v = facVisit(f); return v && (v.status === 'monitored' || v.status === 'debriefed') }).length
+  const overdueCount = visits.filter(v => (area === 'all' || (v.area || 'Unassigned') === area) && v.debrief && v.debrief.remediation_deadline && daysUntil(v.debrief.remediation_deadline) != null && daysUntil(v.debrief.remediation_deadline) < 7).length
+  const tableRows = filtered.filter(f => matchQ(f, q))
+
+  const firstDone = {}, laterDone = {}, firstRec = {}
+  visits.forEach(v => {
+    const key = v.facility_id || v.facility_name
+    if (!key) return
+    if (v.debrief && v.debrief.first_visit) { firstDone[key] = true; if (!firstRec[key]) firstRec[key] = v }
+    else laterDone[key] = true
+  })
+  function firstVisitOf(f) { return firstRec[f.id] || firstRec[f.name] || null }
+  function baselineDate(f) {
+    const v = firstVisitOf(f); if (!v) return ''
+    return (v.visit_date || (v.assessment && v.assessment.date) || (v.arrival_time || '').slice(0, 10) || '')
+  }
+  function isDue(f) { return isLive(f) && (firstDone[f.id] || firstDone[f.name]) && !(laterDone[f.id] || laterDone[f.name]) }
+  const dueCountAll = filtered.filter(isDue).length
+  let scopePool = filtered.filter(f => (scope === 'due' ? isDue(f) : true))
+  // Second round: revisit oldest-first, so the team continues where they began
+  // rather than starting from the last facilities they saw. Sort the whole pool
+  // by first-assessment date BEFORE the days*perDay slice, so the earliest
+  // facilities make this run.
+  if (order === 'date') {
+    scopePool = scopePool.slice().sort((a, b) => {
+      const da = baselineDate(a) || '9999-99-99', db = baselineDate(b) || '9999-99-99'
+      return da < db ? -1 : da > db ? 1 : 0
+    })
+  }
+  const planPool = scopePool.filter(hasCoords).slice(0, Math.max(1, days) * Math.max(1, perDay))
+  const unmapped = scopePool.length - scopePool.filter(hasCoords).length
+
+  function dayMapsUrl(items) {
+    const stops = (items || []).map(f => { if (!f) return null; if (hasCoords(f) && f.geo_confirmed !== false) return f.lat + ',' + f.lng; return encodeURIComponent(f.name + (f.address ? ', ' + f.address : '') + ', Lagos') }).filter(Boolean)
+    return stops.length ? 'https://www.google.com/maps/dir/' + stops.join('/') : ''
+  }
+  function navUrl(f) {
+    if (!f) return ''
+    const dest = (hasCoords(f) && f.geo_confirmed !== false) ? (f.lat + ',' + f.lng) : encodeURIComponent(f.name + (f.address ? ', ' + f.address : '') + ', Lagos')
+    return 'https://www.google.com/maps/dir/?api=1&destination=' + dest + '&travelmode=driving'
+  }
+  function dayLabel(items) {
+    const c = {}; items.forEach(f => { const l = localityOf(f); if (l) c[l] = (c[l] || 0) + 1 })
+    const best = Object.keys(c).sort((a, b) => c[b] - c[a])[0]
+    return best || (items[0] && items[0].area) || ''
+  }
+  function dayDateRange(items) {
+    const ds = items.map(baselineDate).filter(Boolean).sort()
+    if (!ds.length) return ''
+    return ds[0] === ds[ds.length - 1] ? ds[0] : ds[0] + ' \u2192 ' + ds[ds.length - 1]
+  }
+  function buildManual() {
+    setPlanErr('')
+    const chosen = list.filter(f => picks[f.id])
+    if (!chosen.length) { setPlanErr('Tick the facilities you plan to visit.'); return }
+    const withPins = chosen.filter(hasCoords)
+    const ordered = (withPins.length ? orderRoute(withPins) : []).concat(chosen.filter(f => !hasCoords(f)))
+    setPlan([{ day: 1, area: 'Selected route', items: ordered }]); setOpenDay(0)
+    toast(ordered.length + ' stop' + (ordered.length === 1 ? '' : 's') + ' routed, nearest-first.')
+  }
+  function planRoutes() {
+    setPlanErr(''); setPlan(null); setOpenDay(0)
+    if (!planPool.length) { setPlanErr(scope === 'due' ? 'Nothing is due for a visit here.' : 'No mapped facilities in this view.'); return }
+    // Oldest-first keeps chronological day order (continue where the first round began);
+    // by-geography groups purely on closeness. Either way each day is nearest-neighbour inside.
+    const groups = order === 'date'
+      ? clusterDaysByDate(planPool, perDay, baselineDate).slice(0, Math.max(1, days))
+      : clusterDays(planPool, days, perDay)
+    if (!groups.length) { setPlanErr('Could not group these facilities. Check they have map pins.'); return }
+    const out = groups.map((items, i) => ({ day: i + 1, area: order === 'date' ? (dayDateRange(items) || dayLabel(items)) : dayLabel(items), items }))
+    setPlan(out)
+    toast(out.length + ' day' + (out.length === 1 ? '' : 's') + ' planned, ' + out.reduce((n, d) => n + d.items.length, 0) + ' stops.')
+  }
+  async function assignDay(key, d) {
+    const f = assignForm[key] || {}
+    if (!f.monitor) { toast('Choose who leads this day.', 'warn'); return }
+    if (!f.date) { toast('Choose the visit date.', 'warn'); return }
+    const ids = (d.items || []).map(x => x.id).filter(Boolean)
+    if (!ids.length) { toast('No facilities to assign.', 'warn'); return }
+    setAssignBusy(key)
+    try {
+      await ASG.add({ visit_date: f.date, area: d.area || (area === 'all' ? 'Mixed' : area), facility_ids: ids, monitor: f.monitor, note: 'Route plan, ' + ids.length + ' stops' }, userId)
+      toast(ids.length + ' facilities set for ' + f.date + (f.monitor === TEAM_LABEL ? '.' : ', led by ' + f.monitor + '.'))
+    } catch (e) { toast('Could not save the assignment.', 'err') } finally { setAssignBusy('') }
+  }
+
+  useEffect(() => {
+    if (!mapRef.current || mapObj.current) return
+    const m = L.map(mapRef.current, { scrollWheelZoom: true }).setView([6.5244, 3.3792], 10)
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '\u00a9 OpenStreetMap contributors' }).addTo(m)
+    layerRef.current = L.layerGroup().addTo(m); mapObj.current = m
+    setTimeout(() => m.invalidateSize(), 200)
+    return () => { m.remove(); mapObj.current = null }
+  }, [])
+
+  // The map follows what you are looking at: the whole area, or the day you opened.
+  const focus = (plan && plan[openDay]) ? plan[openDay].items : plotted
+  const focusRouted = !!(plan && plan[openDay])
+  useEffect(() => {
+    const m = mapObj.current, lg = layerRef.current; if (!m || !lg) return
+    lg.clearLayers()
+    focus.forEach((f, i) => {
+      const mk = L.marker([f.lat, f.lng], { icon: pinIcon(focusRouted ? '#6D4B8E' : (colorMap[f.area || 'Unassigned'] || '#6D4B8E'), focusRouted ? i + 1 : null) })
+      mk.bindPopup('<strong>' + (f.name || '') + '</strong><br>' + [f.category, f.area, f.phone].filter(Boolean).join(' \u00b7 '))
+      mk.addTo(lg)
+    })
+    if (focusRouted && focus.length > 1) L.polyline(focus.map(f => [f.lat, f.lng]), { color: '#6D4B8E', weight: 3, opacity: .85, dashArray: '6 6' }).addTo(lg)
+    if (focus.length) { try { m.fitBounds(focus.map(f => [f.lat, f.lng]), { padding: [40, 40], maxZoom: focusRouted ? 15 : 13 }) } catch (e) {} }
+    setTimeout(() => m.invalidateSize(), 120)
+  }, [area, list.length, plan, openDay])
+
+  return (<div className="page mr-page">
+    <div className="ptitle">
+      <div><p className="eyebrow">Map &amp; route</p><h2>{plotted.length} mapped{area === 'all' ? '' : ' in ' + area}</h2></div>
+      <div className="ptools">
+        <div className="seg area-seg">
+          <button type="button" className={'segb' + (area === 'all' ? ' on' : '')} onClick={() => pickArea('all')}>{areas.length === 2 ? 'Both' : 'All areas'}<span className="seg-n">{list.length}</span></button>
+          {areas.map(a => (<button type="button" key={a} className={'segb' + (area === a ? ' on' : '')} onClick={() => pickArea(a)}>{a}<span className="seg-n">{areaCount[a] || 0}</span></button>))}
+        </div>
+      </div>
+    </div>
+
+    <div className="mr-grid">
+      <div className="mr-mapcol">
+        <div className="map-frame"><div ref={mapRef} className="leaflet-holder" /></div>
+        <div className="mr-legend">
+          {focusRouted
+            ? <><span className="lg-dot" style={{ background: '#6D4B8E' }} /><span>Day {plan[openDay].day} route, {focus.length} stops in order</span><button className="linkbtn subtle" onClick={() => setOpenDay(-1)}>Show all</button></>
+            : areas.map(a => <span className="lg-item" key={a}><span className="lg-dot" style={{ background: colorMap[a] }} />{a}</span>)}
+        </div>
+        {plotted.length === 0 && <p className="warnline">Nothing mapped here yet. Use "Map the facilities" on the Facilities tab.</p>}
+      </div>
+
+      <aside className="mr-side">
+        <div className="seg mr-tabs">
+          <button type="button" className={'segb' + (tab === 'plan' ? ' on' : '')} onClick={() => setTab('plan')}>Plan days</button>
+          {isHQ && <button type="button" className={'segb' + (tab === 'cover' ? ' on' : '')} onClick={() => setTab('cover')}>Coverage</button>}
+        </div>
+
+        {tab === 'plan' && (<>
+          <div className="mr-card">
+            <div className="seg mr-mode">
+              <button type="button" className={'segb' + (mode === 'auto' ? ' on' : '')} onClick={() => { setMode('auto'); setPlan(null); setPlanErr('') }}>Auto plan</button>
+              <button type="button" className={'segb' + (mode === 'manual' ? ' on' : '')} onClick={() => { setMode('manual'); setPlan(null); setPlanErr('') }}>Pick manually</button>
+            </div>
+            {mode === 'auto' ? (<>
+            <div className="mr-controls">
+              <label className="field sm"><span>Facilities</span>
+                <select value={scope} onChange={e => { setScope(e.target.value); setPlan(null) }}>
+                  <option value="due">Due for a visit ({dueCountAll})</option>
+                  <option value="all">Everything in view ({filtered.length})</option>
+                </select>
+              </label>
+              <label className="field sm"><span>Order</span>
+                <select value={order} onChange={e => { setOrder(e.target.value); setPlan(null) }}>
+                  <option value="date">Oldest first (continue the round)</option>
+                  <option value="geo">By geography (closest together)</option>
+                </select>
+              </label>
+              <div className="mr-two">
+                <NumField label="Days" value={days} min={1} max={10} onChange={v => { setDays(v); setPlan(null) }} />
+                <NumField label="Per day" value={perDay} min={4} max={30} onChange={v => { setPerDay(v); setPlan(null) }} />
+              </div>
+            </div>
+            <button className="btn primary wide" onClick={planRoutes} disabled={!planPool.length}>Plan {Math.min(days, Math.ceil(planPool.length / Math.max(1, perDay)))} day{planPool.length && Math.min(days, Math.ceil(planPool.length / Math.max(1, perDay))) === 1 ? '' : 's'}</button>
+            <p className="hintline">{planPool.length} of {scopePool.length} will be planned{scopePool.length > planPool.length ? ', the rest next run' : ''}.{unmapped ? ' ' + unmapped + ' have no pin yet.' : ''}</p>
+            </>) : (<>
+            <p className="hintline">Tick the facilities you plan to visit. Stops are ordered nearest-first, and you can add any facility you pass in the field.</p>
+            <input className="searchbox" value={pq} onChange={e => setPq(e.target.value)} placeholder="Search facilities…" />
+            <div className="pick-list">{filtered.filter(f => matchQ(f, pq)).slice(0, 150).map(f => (
+              <label key={f.id} className={'pick-item' + (picks[f.id] ? ' on' : '')}>
+                <input type="checkbox" checked={!!picks[f.id]} onChange={() => setPicks(p => ({ ...p, [f.id]: !p[f.id] }))} />
+                <span className="pi-main"><span className="pi-name">{f.name}</span><span className="pi-meta">{[f.area, f.address].filter(Boolean).join(' \u00b7 ') || 'No details'}{!hasCoords(f) ? ' \u00b7 no pin' : ''}</span></span>
+              </label>))}
+            </div>
+            {filtered.filter(f => matchQ(f, pq)).length > 150 && <p className="hintline">Showing 150 \u2014 search to narrow the list.</p>}
+            <div className="pick-actions">
+              <span className="pick-n">{Object.values(picks).filter(Boolean).length} selected</span>
+              {Object.values(picks).filter(Boolean).length > 0 && <button className="mini ghost" onClick={() => setPicks({})}>Clear</button>}
+              <button className="btn primary" onClick={buildManual} disabled={!Object.values(picks).filter(Boolean).length}>Build route</button>
+            </div>
+            </>)}
+          </div>
+
+          {planErr && <p className="warnline">{planErr}</p>}
+
+          {plan && <div className="mr-days">{plan.map((d, i) => {
+            const url = dayMapsUrl(d.items); const dayKey = 'd' + i; const open = openDay === i
+            return (<div className={'mr-day' + (open ? ' open' : '')} key={i}>
+              <button className="mr-day-head" onClick={() => setOpenDay(open ? -1 : i)}>
+                <span className="mr-day-n">{d.day}</span>
+                <span className="mr-day-t"><strong>{d.area || 'Day ' + d.day}</strong><em>{d.items.length} stops</em></span>
+                <span className="mr-day-c">{open ? '\u2212' : '+'}</span>
+              </button>
+              {open && (<div className="mr-day-body">
+                <ol className="plan-list">{d.items.map((f, j) => { const bd = baselineDate(f); return (<li key={j}><span className="pf-name">{f.name}</span>{f.address && <em>{f.address}</em>}{bd && <em className="pf-tel">First assessed {bd}</em>}<a className="pf-nav" href={navUrl(f)} target="_blank" rel="noreferrer">{'\u260e'} Navigate</a></li>) })}</ol>
+                <div className="mr-day-actions">
+                  {url && <a className="btn small ghost" href={url} target="_blank" rel="noreferrer">Start route in Google Maps (turn-by-turn)</a>}
+                </div>
+                {canAssign && <div className="plan-assign">
+                  <select className="sel" value={(assignForm[dayKey] || {}).monitor || ''} onChange={e => setAssignForm(s => ({ ...s, [dayKey]: { ...(s[dayKey] || {}), monitor: e.target.value } }))}>
+                    <option value="">Day led by&#8230;</option>{MONITORS.map(m => <option key={m} value={m}>{m}</option>)}
+                  </select>
+                  <input type="date" className="sel" value={(assignForm[dayKey] || {}).date || ''} onChange={e => setAssignForm(s => ({ ...s, [dayKey]: { ...(s[dayKey] || {}), date: e.target.value } }))} />
+                  <button className="btn small primary" onClick={() => assignDay(dayKey, d)} disabled={assignBusy === dayKey}>{assignBusy === dayKey ? 'Saving\u2026' : 'Assign'}</button>
+                </div>}
+              </div>)}
+            </div>)
+          })}</div>}
+
+          {mode === 'auto' && !plan && !planErr && <p className="empty sm">Set the numbers above and plan the days. {order === 'date' ? 'Days run oldest-first \u2014 the team continues the round from the facilities they first assessed, not the last ones \u2014 and stops within a day are still ordered by how close they are.' : 'Each day is grouped by how close the facilities are to each other.'}</p>}
+        </>)}
+
+        {tab === 'cover' && isHQ && (<>
+          <div className="mr-stats">
+            <div className="mr-stat"><span className="v">{filtered.filter(isLive).length}</span><span className="l">In the round</span></div>
+            <div className="mr-stat"><span className="v">{plotted.length}</span><span className="l">Mapped</span></div>
+            <div className="mr-stat"><span className="v">{visitedCount}</span><span className="l">Visited</span></div>
+            <div className="mr-stat"><span className="v">{assessedCount}</span><span className="l">Assessed</span></div>
+            <div className="mr-stat"><span className="v">{dueCountAll}</span><span className="l">Due</span></div>
+            <div className="mr-stat"><span className="v">{overdueCount}</span><span className="l">Re-inspect</span></div>
+          </div>
+          <SearchBox value={q} onChange={setQ} placeholder="Search facilities&#8230;" />
+          <div className="hq-table" style={{ marginTop: 10 }}>
+            <div className="hq-tr hq-th"><span>Facility</span><span>Area</span><span>Last visit</span><span>Status</span></div>
+            {tableRows.length === 0 ? <div className="hq-tr"><span className="hq-name">Nothing matches.</span></div> :
+              tableRows.slice(0, 200).map(f => { const v = facVisit(f); return (
+                <div className="hq-tr" key={f.id}><span className="hq-name">{f.name}</span><span>{f.area || '\u2014'}</span><span>{v ? (v.arrival_time || v.created_at || '').slice(0, 10) : '\u2014'}</span><span className={'hq-status s-' + facStatus(f).toLowerCase().replace(/[^a-z]/g, '')}>{facStatus(f)}</span></div>
+              ) })}
+          </div>
+          {tableRows.length > 200 && <p className="hintline">Showing the first 200. Use search to narrow it.</p>}
+        </>)}
+      </aside>
+    </div>
+  </div>)
+}
+
+/* ---------- second assessment (round 2; baseline = first assessment) ---------- */
+const SA_FIELDS = [
+  ['reg_status', 'Registration status', 's'],
+  ['renewal_status', 'Renewal status', 's'],
+  ['services', 'Services rendered', 'l'],
+  ['staff_strength', 'Total staff strength', 'l'],
+  ['staff_on_duty', 'Staff met on duty', 'l'],
+  ['basic_equipment', 'Basic equipment available', 'l'],
+  ['wards', '# of Wards', 's'], ['beds', '# of Beds', 's'], ['toilets', '# of Toilets', 's'],
+  ['environment', 'Environment', 'l'],
+  ['waste_mgmt', 'Waste management', 'l'],
+  ['clinical_area', 'Theatre / clinical areas', 'l'],
+  ['others', 'Others', 'l']
+]
+function saNum(v) { if (v == null || v === '') return null; const m = String(v).match(/-?\d+(\.\d+)?/); return m ? parseFloat(m[0]) : null }
+function REC_LABEL(s) { return s === 'resolved' ? 'Resolved' : s === 'in_progress' ? 'In progress' : 'Not done' }
+function SecondAssessmentPage({ facilities, identity, userId, role }) {
+  const origin = (typeof window !== 'undefined' && window.location) ? window.location.origin : ''
+  const [visits, setVisits] = useState([])
+  const [sub, setSub] = useState('due')
+  const [openId, setOpenId] = useState(null)
+  const [form, setForm] = useState({})
+  const [busy, setBusy] = useState(false)
+  const [q, setQ] = useState('')
+  useEffect(() => { VIS.list().then(setVisits).catch(() => {}) }, [])
+
+  const firstRec = {}, secondRec = {}
+  visits.forEach(v => {
+    const key = v.facility_id || v.facility_name; if (!key) return
+    if (v.round === 2 || v.status === 'second' || (v.debrief && v.debrief.second_visit)) secondRec[key] = v
+    else if (v.debrief && v.debrief.first_visit) { if (!firstRec[key]) firstRec[key] = v }
+  })
+  const firstOf = f => firstRec[f.id] || firstRec[f.name] || null
+  const secondOf = f => secondRec[f.id] || secondRec[f.name] || null
+  const baseAssess = f => { const v = firstOf(f); return (v && (v.assessment || (v.monitoring && v.monitoring.first_assessment))) || null }
+  function basePct(b) { if (!b) return null; if (b.pct_score != null && b.pct_score !== '') return { v: saNum(b.pct_score), est: false }; if (b.pct_estimate != null && b.pct_estimate !== '') return { v: saNum(b.pct_estimate), est: true }; return null }
+  const baseDate = f => { const v = firstOf(f); return v ? (v.visit_date || (v.assessment && v.assessment.date) || (v.arrival_time || '').slice(0, 10) || '') : '' }
+
+  const withFirst = facilities.filter(f => isLive(f) && firstOf(f))
+  const byDate = (a, b) => { const x = baseDate(a) || '9999-99-99', y = baseDate(b) || '9999-99-99'; return x < y ? -1 : x > y ? 1 : 0 }
+  const dueAll = withFirst.filter(f => !secondOf(f)).sort(byDate)
+  const doneAll = withFirst.filter(f => secondOf(f)).sort(byDate)
+  const due = dueAll.filter(f => matchQ(f, q))
+  const done = doneAll.filter(f => matchQ(f, q))
+
+  function startVisit(f) {
+    const b = baseAssess(f) || {}
+    setOpenId(f.id)
+    const pre = {}; SA_FIELDS.forEach(([k]) => { pre[k] = b[k] || '' })
+    setForm({ ...pre, total_score: '', pct_score: '', notes: '', newRecs: '',
+      recStatus: (b.recommendations || []).map(() => 'in_progress') })
+  }
+  function improvementFor(f) {
+    const b = baseAssess(f) || {}
+    const bs = saNum(b.total_score), bp = (basePct(b) || {}).v
+    const ns = saNum(form.total_score), np = saNum(form.pct_score)
+    const recTotal = (b.recommendations || []).length
+    const resolved = (form.recStatus || []).filter(s => s === 'resolved').length
+    const dScore = (bs != null && ns != null) ? +(ns - bs).toFixed(1) : null
+    const dPct = (bp != null && np != null) ? +(np - bp).toFixed(1) : null
+    let verdict = 'No change'
+    if (dPct != null) verdict = dPct > 2 ? 'Improved' : dPct < -2 ? 'Declined' : 'No change'
+    else if (recTotal) verdict = resolved > recTotal / 2 ? 'Improved' : resolved === 0 ? 'No change' : 'In progress'
+    return { dScore, dPct, resolved, recTotal, verdict, baseScore: bs, basePct: bp, newScore: ns, newPct: np }
+  }
+  async function save(f) {
+    const b = baseAssess(f) || {}; const first = firstOf(f); const imp = improvementFor(f)
+    const today = new Date().toISOString().slice(0, 10)
+    const assessment = { date: today, source: 'second_assessment', inspected_by: (identity && identity.name) || '' }
+    SA_FIELDS.forEach(([k]) => { assessment[k] = form[k] || '' })
+    assessment.total_score = saNum(form.total_score)
+    assessment.pct_score = saNum(form.pct_score)
+    assessment.recommendation_status = (b.recommendations || []).map((r, i) => ({ text: r, status: (form.recStatus || [])[i] || 'not_done' }))
+    assessment.new_recommendations = (form.newRecs || '').split('\n').map(s => s.trim()).filter(Boolean)
+    assessment.notes = form.notes || ''
+    const row = {
+      facility_id: f.id, facility_name: f.name, area: f.area, status: 'second', round: 2,
+      baseline_visit_id: (first && first.id) || null, visit_date: today, arrival_time: new Date().toISOString(),
+      score: assessment.pct_score != null ? assessment.pct_score : null, overall_rating: ragFromPct(assessment.pct_score),
+      team: [{ name: (identity && identity.name) || 'RHSC Field Monitoring Team', role: 'Team' }],
+      monitoring: { second_assessment: assessment }, assessment, improvement: imp,
+      debrief: { first_visit: false, second_visit: true, narrative: 'Second assessment on ' + today + '. ' + imp.verdict + (imp.recTotal ? ' \u2014 ' + imp.resolved + ' of ' + imp.recTotal + ' first-visit recommendations resolved.' : '.') }
+    }
+    setBusy(true)
+    try { await VIS.add(row, userId); toast('Second assessment saved for ' + f.name + '.'); setOpenId(null); setForm({}); const vs = await VIS.list(); setVisits(vs); setSub('done') }
+    catch (e) { toast('Could not save the second assessment.', 'err') } finally { setBusy(false) }
+  }
+
+  function VerdictChip({ v }) { const c = v === 'Improved' ? 'g' : v === 'Declined' ? 'r' : 'a'; return <span className={'sa-verdict ' + c}>{v}</span> }
+
+  return (<div className="page">
+    <div className="ptitle">
+      <div><p className="eyebrow">Second assessment</p><h2>{dueAll.length} due &middot; {doneAll.length} completed</h2></div>
+    </div>
+    <p className="lead sm">The second visit continues the first. Each facility is shown with its first-assessment baseline so you can record what changed and whether it improved. Oldest baselines are listed first.</p>
+
+    <div className="seg" style={{ margin: '4px 0 14px' }}>
+      <button type="button" className={'segb' + (sub === 'due' ? ' on' : '')} onClick={() => setSub('due')}>Due for a second visit<span className="seg-n">{dueAll.length}</span></button>
+      <button type="button" className={'segb' + (sub === 'done' ? ' on' : '')} onClick={() => setSub('done')}>Completed<span className="seg-n">{doneAll.length}</span></button>
+    </div>
+    <SearchBox value={q} onChange={setQ} placeholder="Search facilities&#8230;" />
+
+    {sub === 'due' && <div className="sa-list">
+      {due.length === 0 && <p className="empty sm">{dueAll.length ? 'Nothing matches your search.' : 'No facilities are due for a second assessment yet. Load the first-assessment baselines, then facilities appear here oldest-first.'}</p>}
+      {due.map(f => { const b = baseAssess(f); const open = openId === f.id; const bd = baseDate(f)
+        return (<div className={'sa-item' + (open ? ' open' : '')} key={f.id}>
+          <button className="sa-head" onClick={() => open ? (setOpenId(null), setForm({})) : startVisit(f)}>
+            <span className="sa-name"><strong>{f.name}</strong><em>{[f.area, f.address].filter(Boolean).join(' \u00b7 ')}</em></span>
+            <span className="sa-meta">{bd ? 'First assessed ' + bd : 'No baseline date'}{(() => { const bp = basePct(b); if (b && b.visited_unscored) return ' \u00b7 not scored (visited)'; return b && b.total_score != null ? ' \u00b7 score ' + b.total_score + (bp ? ' (' + bp.v + '%' + (bp.est ? ' est.' : '') + ')' : '') : '' })()}</span>
+            <span className="sa-tog">{open ? '\u2212' : 'Start'}</span>
+          </button>
+          {open && (() => { const imp = improvementFor(f); const base = b || {}
+            return (<div className="sa-body">
+              {!b && <p className="warnline">No first-assessment baseline is on file for this facility (it was among the first ~50 without reports). You can still record the visit; improvement will be based on this visit only.</p>}
+              <div className="sa-cmp">
+                <div className="sa-col sa-basecol">
+                  <h4 style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>First assessment{bd ? ' \u00b7 ' + bd : ''}<button className="mini" onClick={() => { const fv = firstOf(f); if (fv) printDoc('Monitoring Report', buildMonitoringReport(fv, origin)) }}>Print report</button></h4>
+                  {SA_FIELDS.map(([k, lab]) => (<div className="sa-row" key={k}><span className="sa-lab">{lab}</span><span className="sa-val">{base[k] || '\u2014'}</span></div>))}
+                  <div className="sa-row"><span className="sa-lab">Score</span><span className="sa-val">{base.visited_unscored ? 'Visited \u2014 not scored' : (base.total_score != null ? base.total_score : '\u2014') + (() => { const bp = basePct(base); return bp ? ' (' + bp.v + '%' + (bp.est ? ' est.' : '') + ')' : '' })()}</span></div>
+                  {(base.pct_estimated || base.visited_unscored) && <div className="sa-row"><span className="sa-lab"></span><span className="sa-val" style={{ fontSize: '11.5px', color: '#8A7AA6' }}>{base.score_basis || base.pct_basis || ''}</span></div>}
+                </div>
+                <div className="sa-col sa-nowcol">
+                  <h4>This visit</h4>
+                  {SA_FIELDS.map(([k, lab, sz]) => (<label className="field sm" key={k}><span>{lab}</span>
+                    {sz === 'l'
+                      ? <textarea rows={2} value={form[k] || ''} onChange={e => setForm(s => ({ ...s, [k]: e.target.value }))} />
+                      : <input value={form[k] || ''} onChange={e => setForm(s => ({ ...s, [k]: e.target.value }))} inputMode={k === 'wards' || k === 'beds' || k === 'toilets' ? 'numeric' : undefined} />}
+                  </label>))}
+                  <div className="mr-two">
+                    <label className="field sm"><span>Total score</span><input inputMode="numeric" value={form.total_score || ''} onChange={e => setForm(s => ({ ...s, total_score: e.target.value }))} /></label>
+                    <label className="field sm"><span>% score</span><input inputMode="numeric" value={form.pct_score || ''} onChange={e => setForm(s => ({ ...s, pct_score: e.target.value }))} /></label>
+                  </div>
+                </div>
+              </div>
+
+              {(base.recommendations || []).length > 0 && <div className="sa-recs">
+                <h4>Progress on first-visit recommendations</h4>
+                {(base.recommendations || []).map((r, i) => (<div className="sa-rec" key={i}>
+                  <span className="sa-rec-t">{r}</span>
+                  <span className="sa-rec-pills">{['resolved', 'in_progress', 'not_done'].map(st => (
+                    <button type="button" key={st} className={'sa-pill ' + (st === 'resolved' ? 'g' : st === 'in_progress' ? 'a' : 'r') + ((form.recStatus || [])[i] === st ? ' on' : '')}
+                      onClick={() => setForm(s => { const arr = (s.recStatus || []).slice(); arr[i] = st; return { ...s, recStatus: arr } })}>{REC_LABEL(st)}</button>))}</span>
+                </div>))}
+              </div>}
+
+              <label className="field sm"><span>New recommendations (one per line)</span><textarea rows={2} value={form.newRecs || ''} onChange={e => setForm(s => ({ ...s, newRecs: e.target.value }))} /></label>
+              <label className="field sm"><span>Notes</span><textarea rows={2} value={form.notes || ''} onChange={e => setForm(s => ({ ...s, notes: e.target.value }))} /></label>
+
+              <div className="sa-improve">
+                <span className="sa-improve-l">Change since first assessment</span>
+                <div className="sa-improve-r">
+                  <VerdictChip v={imp.verdict} />
+                  {imp.dScore != null && <span className={'sa-delta ' + (imp.dScore > 0 ? 'g' : imp.dScore < 0 ? 'r' : '')}>score {imp.dScore > 0 ? '+' : ''}{imp.dScore}</span>}
+                  {imp.dPct != null && <span className={'sa-delta ' + (imp.dPct > 0 ? 'g' : imp.dPct < 0 ? 'r' : '')}>{imp.dPct > 0 ? '+' : ''}{imp.dPct}%</span>}
+                  {imp.recTotal > 0 && <span className="sa-delta">{imp.resolved}/{imp.recTotal} resolved</span>}
+                </div>
+              </div>
+              <button className="btn primary wide" onClick={() => save(f)} disabled={busy}>{busy ? 'Saving\u2026' : 'Save second assessment'}</button>
+            </div>)
+          })()}
+        </div>)
+      })}
+    </div>}
+
+    {sub === 'done' && <div className="sa-list">
+      {done.length === 0 && <p className="empty sm">No second assessments recorded yet.</p>}
+      {done.map(f => { const v = secondOf(f); const imp = (v && v.improvement) || {}; const b = baseAssess(f) || {}
+        return (<div className="sa-item done" key={f.id}>
+          <div className="sa-head static">
+            <span className="sa-name"><strong>{f.name}</strong><em>{[f.area, (v && v.visit_date) ? 'revisited ' + v.visit_date : ''].filter(Boolean).join(' \u00b7 ')}</em></span>
+            <span className="sa-meta">
+              {imp.verdict && <VerdictChip v={imp.verdict} />}
+              {imp.dScore != null && <span className={'sa-delta ' + (imp.dScore > 0 ? 'g' : imp.dScore < 0 ? 'r' : '')}>score {imp.dScore > 0 ? '+' : ''}{imp.dScore}</span>}
+              {imp.dPct != null && <span className={'sa-delta ' + (imp.dPct > 0 ? 'g' : imp.dPct < 0 ? 'r' : '')}>{imp.dPct > 0 ? '+' : ''}{imp.dPct}%</span>}
+              {imp.recTotal > 0 && <span className="sa-delta">{imp.resolved}/{imp.recTotal} resolved</span>}
+            </span>
+          </div>
+        </div>)
+      })}
+    </div>}
+  </div>)
+}
+
+/* ---------- engage (Stage 4) ---------- */
+function IdCard({ name, role }) {
+  return (<div className="idcard">
+    <img className="idmark" src="/rhsc-mark.png" alt="RHSC" />
+    <div className="idbody">
+      <span className="idname">{name || 'Team member'}</span>
+      <span className="idrole">{role || 'Field Monitor'}</span>
+      <span className="idorg">RHSC &middot; HEFAMAA &middot; Lagos State</span>
+    </div>
+  </div>)
+}
+
+function EngagePage({ list, identity, role, userId }) {
+  const roleLabel = (roleById(role) || {}).label || 'Field Monitor'
+  const [step, setStep] = useState(0)
+  const [facility, setFacility] = useState(null)
+  const [arrival, setArrival] = useState(null)
+  const [coords, setCoords] = useState(null)
+  const [geoMsg, setGeoMsg] = useState('')
+  const [team, setTeam] = useState([{ name: identity.name, role: roleLabel }])
+  const [nm, setNm] = useState(''); const [nr, setNr] = useState('')
+  const [pic, setPic] = useState({ name: '', role: '', phone: '' })
+  const [greeted, setGreeted] = useState(false)
+  const [busy, setBusy] = useState(false); const [msg, setMsg] = useState(''); const [done, setDone] = useState(false)
+  const [ref] = useState(() => 'RF-' + new Date().toISOString().slice(0, 10).replace(/-/g, '') + '-' + String(Math.floor(Math.random() * 9000) + 1000))
+  const [q, setQ] = useState('')
+
+  const [asgs, setAsgs] = useState([]); const [todayVisits, setTodayVisits] = useState([])
+  const todayISO = new Date().toISOString().slice(0, 10)
+  const todayStr = new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'long' })
+  useEffect(() => { ASG.list().then(setAsgs).catch(() => {}); VIS.list().then(setTodayVisits).catch(() => {}) }, [])
+  const myIds = {}
+  // RHSC works as a single team, so today's round is everyone's round.
+  asgs.filter(a => a.visit_date === todayISO).forEach(a => { (a.facility_ids || []).forEach(id => { myIds[id] = true }) })
+  const myDay = list.filter(f => myIds[f.id])
+  const visitedToday = {}
+  todayVisits.forEach(v => { if ((v.arrival_time || '').slice(0, 10) === todayISO && v.facility_id) visitedToday[v.facility_id] = true })
+
+  const groups = {}; list.forEach(f => { const a = f.area || 'Unassigned'; (groups[a] = groups[a] || []).push(f) })
+  const areaKeys = Object.keys(groups).sort()
+  const dateStr = new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })
+  const lead = team[0]; const others = team.slice(1)
+  const introMembers = others.length ? others.map(m => m.name).join(', ') : ''
+  const intro = 'Good morning, sir/ma. We are from REALMS Healthcare Services Consulting Limited, working with HEFAMAA, Lagos State. I am ' + (lead ? lead.name : 'the team lead') + (others.length ? (', and these are ' + introMembers) : '') + '. We are here to conduct routine monitoring of this health facility as mandated by law.'
+
+  function chooseFacility(f) { setFacility(f); setStep(1) }
+  function checkIn() {
+    if (!coords) { setGeoMsg('GPS location is required at check-in. Tap Capture location and allow access.'); return }
+    setArrival(new Date()); setStep(2)
+  }
+  function capture() {
+    if (!navigator.geolocation) { setGeoMsg('Location is not available on this device. GPS is required to check in.'); return }
+    setGeoMsg('Locating\u2026')
+    navigator.geolocation.getCurrentPosition(
+      p => { setCoords({ lat: +p.coords.latitude.toFixed(6), lng: +p.coords.longitude.toFixed(6) }); setGeoMsg('') },
+      () => setGeoMsg('Location permission denied. GPS is required at check-in, please enable location and try again.'),
+      { enableHighAccuracy: true, timeout: 10000 }
+    )
+  }
+  useEffect(() => { if (step === 1 && !coords) capture() }, [step])
+  function addMember() { if (!nm.trim()) return; setTeam(t => t.concat([{ name: nm.trim(), role: nr.trim() || 'Field Monitor' }])); setNm(''); setNr('') }
+  function removeMember(i) { setTeam(t => t.filter((_, x) => x !== i)) }
+
+  async function save() {
+    if (!greeted) { setMsg('Confirm the greeting to continue.'); return }
+    setBusy(true); setMsg('')
+    try {
+      await VIS.add({
+        facility_id: facility.id, facility_name: facility.name, area: facility.area || 'Unassigned',
+        address: facility.address || '', category: facility.category || '',
+        status: 'engaged', arrival_time: (arrival || new Date()).toISOString(),
+        lat: coords ? coords.lat : null, lng: coords ? coords.lng : null,
+        team, person_in_charge: pic, greeting_confirmed: true
+      }, userId)
+      setDone(true); toast('Check-in saved.')
+    } catch (e) { setMsg(e.message || 'Could not save the check-in.') } finally { setBusy(false) }
+  }
+  function reset() { setStep(0); setFacility(null); setArrival(null); setCoords(null); setGeoMsg(''); setTeam([{ name: identity.name, role: roleLabel }]); setPic({ name: '', role: '', phone: '' }); setGreeted(false); setDone(false); setMsg('') }
+
+  if (done) {
+    return (<div className="page"><div className="engage-done anim">
+      <span className="done-badge">Engaged</span>
+      <h2>Check-in complete</h2>
+      <p>{facility.name} &middot; {dateStr}</p>
+      <p className="muted">The assessment checklist unlocks in Stage 5. This visit is saved and ready.</p>
+      <button className="btn primary" onClick={reset}>New check-in</button>
+    </div></div>)
+  }
+
+  const steps = ['Facility', 'Check-in', 'Present', 'Greeting']
+  return (<div className="page engage">
+    <div className="ptitle"><div><p className="eyebrow">Engage</p><h2>Arrival check-in</h2></div></div>
+    <ol className="stepper">{steps.map((s, i) => (<li key={s} className={'stp' + (i === step ? ' on' : '') + (i < step ? ' done' : '')}><span>{i + 1}</span>{s}</li>))}</ol>
+    {msg && <p className="auth-msg block">{msg}</p>}
+
+    {step === 0 && (<div className="engage-pick">
+      <SearchBox value={q} onChange={setQ} placeholder="Search all facilities…" />
+      {q.trim() ? (() => {
+        const hits = list.filter(f => matchQ(f, q))
+        return hits.length === 0 ? <p className="empty">No facilities match "{q}".</p> :
+          (<div className="cluster"><div className="cluster-head"><h3>Results</h3><span className="cluster-count">{hits.length}</span></div>
+            <div className="frows">{hits.slice(0, 60).map(f => (<button className="frow pickable" key={f.id} onClick={() => chooseFacility(f)}>
+              <div className="fmain"><span className="fname">{f.name}</span><span className="fmeta">{[f.category, f.area, f.address].filter(Boolean).join(' \u00b7 ') || 'No details'}{visitedToday[f.id] ? ' \u00b7 checked in' : ''}</span></div>
+              <span className="mini">Select</span></button>))}</div>
+            {hits.length > 60 && <p className="hintline">Showing 60 of {hits.length} \u2014 keep typing to narrow.</p>}
+          </div>)
+      })() : (<>
+      {myDay.length > 0 && (<div className="myday">
+        <div className="myday-head"><h3>Today's round, {todayStr}</h3><span className="plan-count">{myDay.length} assigned</span></div>
+        <div className="frows">{myDay.map(f => (<button className="frow pickable" key={'my' + f.id} onClick={() => chooseFacility(f)}>
+          <div className="fmain"><span className="fname">{f.name}</span><span className="fmeta">{[f.category, f.address].filter(Boolean).join(' \u00b7 ') || 'No details'}{visitedToday[f.id] ? ' \u00b7 checked in' : ''}</span></div>
+          <span className={'mini' + (visitedToday[f.id] ? ' ok' : '')}>{visitedToday[f.id] ? 'Done' : 'Start'}</span>
+        </button>))}</div>
+      </div>)}
+      {list.length === 0 ? <p className="empty">No facilities yet. Add them on the Facilities tab first.</p> :
+        areaKeys.map(a => (<div className="cluster" key={a}>
+          <div className="cluster-head"><h3>{a}</h3><span className="cluster-count">{groups[a].length}</span></div>
+          <div className="frows">{groups[a].map(f => (<button className="frow pickable" key={f.id} onClick={() => chooseFacility(f)}>
+            <div className="fmain"><span className="fname">{f.name}</span><span className="fmeta">{[f.category, f.address].filter(Boolean).join(' \u00b7 ') || 'No details'}</span></div>
+            <span className="mini">Select</span>
+          </button>))}</div>
+        </div>))}
+      </>)}
+    </div>)}
+
+    {step === 1 && facility && (<div className="engage-card">
+      <p className="eyebrow">Confirm arrival</p>
+      <h3 className="fbig">{facility.name}</h3>
+      <p className="fsub">{[facility.category, facility.area, facility.address].filter(Boolean).join(' \u00b7 ')}</p>
+      <div className="ci-row"><span>Arrival time</span><em>{new Date().toLocaleTimeString('en-GB')}</em></div>
+      <div className="ci-row"><span>Location</span><em>{coords ? (coords.lat + ', ' + coords.lng) : 'Required \u2014 not captured'}</em></div>
+      {geoMsg && <p className="hintline">{geoMsg}</p>}
+      {!coords && <p className="hintline req">GPS is mandatory at check-in.</p>}
+      <div className="btnrow"><button className="btn small ghost" onClick={capture}>{coords ? 'Re-capture location' : 'Capture location'}</button>
+        <button className="btn small ghost" onClick={() => setStep(0)}>Back</button>
+        <button className="btn small primary" onClick={checkIn} disabled={!coords}>Confirm and continue</button></div>
+    </div>)}
+
+    {step === 2 && facility && (<div className="engage-present">
+      <div className="letter">
+        <div className="letter-head"><img src="/rhsc-mark.png" alt="RHSC" /><div><strong>REALMS HEALTHCARE SERVICES CONSULTING LIMITED</strong><span>In collaboration with HEFAMAA, Lagos State</span></div></div>
+        <div className="letter-meta"><span>Ref: {ref}</span><span>{dateStr}</span></div>
+        <p className="letter-to">The Proprietor / Person in Charge<br />{facility.name}<br />{[facility.area, 'Lagos State'].filter(Boolean).join(', ')}</p>
+        <p className="letter-sub"><strong>RE: ROUTINE HEALTH FACILITY MONITORING</strong></p>
+        <p>This is to introduce the REALMS Healthcare Services Consulting Limited monitoring team, authorised to conduct routine monitoring of this facility in collaboration with the Health Facility Monitoring and Accreditation Agency (HEFAMAA), Lagos State, as mandated by law.</p>
+        <p>Your cooperation in supporting a safe, standard and quality assessment is appreciated.</p>
+        <p className="letter-sign">{lead ? lead.name : ''}<br /><span>{lead ? lead.role : ''}, for RHSC</span></p>
+      </div>
+      <div className="present-side">
+        <p className="pick-label">Team identification</p>
+        <div className="idcards">{team.map((m, i) => (<div key={i} className="idwrap"><IdCard name={m.name} role={i === 0 ? (m.role + ' (Lead)') : m.role} />{i > 0 && <button className="mini danger" onClick={() => removeMember(i)}>Remove</button>}</div>))}</div>
+        <div className="addmember"><input placeholder="Name" value={nm} onChange={e => setNm(e.target.value)} /><input placeholder="Role" value={nr} onChange={e => setNr(e.target.value)} /><button className="mini" onClick={addMember}>Add</button></div>
+        <p className="pick-label">Introduction script</p>
+        <blockquote className="script">{intro}</blockquote>
+        <div className="btnrow"><button className="btn small ghost" onClick={() => setStep(1)}>Back</button><button className="btn small primary" onClick={() => setStep(3)}>Continue</button></div>
+      </div>
+    </div>)}
+
+    {step === 3 && facility && (<div className="engage-card">
+      <p className="eyebrow">Person in charge</p>
+      <div className="fgrid">
+        <label className="field sm"><span>Name</span><input value={pic.name} onChange={e => setPic({ ...pic, name: e.target.value })} /></label>
+        <label className="field sm"><span>Role / title</span><input value={pic.role} onChange={e => setPic({ ...pic, role: e.target.value })} placeholder="e.g. Matron" /></label>
+        <label className="field sm"><span>Phone</span><input value={pic.phone} onChange={e => setPic({ ...pic, phone: e.target.value })} /></label>
+      </div>
+      <label className="greet"><input type="checkbox" checked={greeted} onChange={e => setGreeted(e.target.checked)} /><span>I have introduced the team and completed a cordial greeting with the person in charge.</span></label>
+      <div className="btnrow"><button className="btn small ghost" onClick={() => setStep(2)}>Back</button><button className="btn small primary" onClick={save} disabled={busy || !greeted}>{busy ? 'Saving\u2026' : 'Complete check-in'}</button></div>
+    </div>)}
+  </div>)
+}
+
+/* ---------- monitor (Stage 5) ---------- */
+const CHECKLIST = [
+  { id: 'infrastructure', label: 'Infrastructure & environment', items: ['Cleanliness and hygiene', 'Ventilation and lighting', 'Water supply', 'Power supply', 'Waste disposal and sanitation', 'Toilets and patient facilities'] },
+  { id: 'infection', label: 'Infection prevention', items: ['Hand hygiene stations', 'Sterilisation and disinfection', 'PPE availability and use', 'Waste segregation'] },
+  { id: 'personnel', label: 'Personnel', items: ['Qualified staff on duty', 'Valid professional / practising licences', 'Staff in appropriate uniform', 'Duty rosters displayed', 'Staffing adequate for patient load'] },
+  { id: 'equipment', label: 'Equipment', items: ['Essential equipment available', 'Equipment functional and maintained', 'Emergency and basic life-support equipment', 'Medication storage and cold chain'] },
+  { id: 'records', label: 'Records', items: ['Patient registers', 'Admission and discharge books', 'Laboratory registers', 'Quality-control and equipment logs', 'Reagent inventory (laboratory)'] },
+  { id: 'compliance', label: 'Compliance', items: ['Valid HEFAMAA registration', 'Valid HEFAMAA licence', 'HEFAMAA logo and signage displayed', 'Required permits displayed', 'Qualified personnel on duty', 'Price list displayed'] },
+  { id: 'laboratory', label: 'Laboratory & biosafety', items: ['Laboratory services within licensed scope', 'Specimen handling and biosafety', 'Reagent and cold-chain controls'] },
+  { id: 'services', label: 'Services', items: ['Services match the licensed category', 'Service scope matches capacity', 'Emergency readiness and referral'] }
+]
+
+// Full HEFAMAA Facility Inspection Tool (Primary Health Care) digitised.
+// Field: [id, label, type, options?]. Types: yn, ai (adequate), fn (functional),
+// av (available), num, txt, ta (notes), sel, chk (multi).
+const HEFAMAA_FORM = [
+  { id: 'ident', title: 'Facility identification', fields: [
+    ['ward', 'Ward', 'txt'], ['lga', 'Local Government Area', 'sel', ['Alimosho', 'Ifako-Ijaiye']], ['status', 'Status of establishment', 'sel', ['New', 'Existing']],
+    ['reg_no', 'HEFAMAA Reg. Number', 'txt'], ['contact', 'Contact (name, email, phone)', 'txt'], ['hours', 'Days & hours of operation', 'txt', ['24 hours', '8am - 5pm', '8am - 4pm', 'Mon-Fri 8am-5pm', 'Mon-Sat 8am-6pm']],
+    ['interviewed', 'Person(s) interviewed (name, designation)', 'txt'], ['officers', 'HEFAMAA officer(s) & designation', 'txt'], ['departure', 'Departure time', 'time'],
+    ['estab_type', 'Type of establishment', 'chk', ['Public Comprehensive HC', 'Public PHC', 'Private Clinic/HC', 'Convalescent/Nursing Home', 'Maternity Home', 'Private Hospital', 'Other']],
+    ['estab_type_other', 'Other type (specify)', 'txt'], ['branches', 'Any branches?', 'yn'], ['branches_detail', 'Branches: number & locations', 'ta'] ] },
+  { id: 'services', title: 'A. Services provided', fields: [
+    ['svc_primary', 'Primary healthcare services', 'chk', ['Child Welfare & Immunization', 'Skilled birth delivery', 'General Medical Practice', 'Family Planning', 'HIV Prevention (HCT & PMTCT)', 'TB/DOTS']],
+    ['svc_primary_other', 'Other services (specify)', 'txt'], ['svc_support', 'Clinical support services', 'chk', ['Laboratory', 'Ultrasound', 'Pharmaceutical', 'Other']] ] },
+  { id: 'gov', title: 'B. Ownership, governance & registration', fields: [
+    ['own_type', 'Type of ownership', 'sel', ['Public', 'Private', 'Public Private Partnership', 'Other']], ['own_arrangement', 'If private, ownership arrangement', 'sel', ['Sole proprietorship', 'Group practice', 'Limited Liability Company']],
+    ['organogram', 'Organogram present?', 'yn'], ['cac', 'CAC registration status', 'sel', ['Registered', 'Registration in progress', 'Not registered']],
+    ['hefamaa_reg', 'HEFAMAA registration status', 'sel', ['Ever Registered', 'Registration in progress', 'Not registered']], ['hefamaa_renewal', 'HEFAMAA renewal status', 'sel', ['Up to date', 'Not up to date']],
+    ['hefamaa_last_renewal', 'Last year of renewal', 'txt', ['2026', '2025', '2024', '2023', '2022', 'Never renewed']], ['gov_comment', 'Comment', 'ta'] ] },
+  { id: 'building', title: 'C. Building & designated areas', fields: [
+    ['build_type', 'Type of building', 'sel', ['Purpose built', 'Stand alone', 'Shared accommodation', 'Other']],
+    ['waiting_size', 'Waiting/Reception adequate in size', 'yn'], ['waiting_equip', 'Waiting/Reception well-equipped', 'yn'],
+    ['consult_rooms', 'Number of consulting rooms', 'num'], ['consult_size', 'Consulting room adequate in size', 'yn'], ['consult_equip', 'Consulting room well-equipped', 'yn'],
+    ['treat_size', 'Treatment room adequate in size', 'yn'], ['treat_equip', 'Treatment room well-equipped', 'yn'],
+    ['wards_size', 'Wards adequate in size', 'yn'], ['wards_equip', 'Wards well-equipped', 'yn'],
+    ['labour_size', 'Labour room adequate in size', 'yn'], ['labour_equip', 'Labour room well-equipped', 'yn'],
+    ['ventilation', 'Ventilation', 'ai'], ['lighting', 'Lighting', 'ai'], ['painting', 'Painting', 'ai'], ['build_comment', 'Comment', 'ta'] ] },
+  { id: 'inpatient', title: 'D. Observation / inpatient care', fields: [
+    ['inpatient', 'Provides inpatient care', 'yn'], ['beds_no', 'Number of beds (if inpatient)', 'num'], ['obs_beds', 'Number of observation beds (if no)', 'num'],
+    ['beds_functional', 'Beds functional', 'num'], ['beds_nonfunctional', 'Beds non-functional', 'num'], ['bed_space', 'One-metre space between beds', 'yn'],
+    ['mattresses', 'Mattresses & pillows', 'fn'], ['mackintosh', 'Covered with mackintosh', 'yn'], ['inpatient_comment', 'Comment', 'ta'] ] },
+  { id: 'maternity', title: 'E. Maternity', fields: [
+    ['delivery_bed', 'Delivery bed with stirrups', 'fn'], ['delivery_bed_no', 'Delivery beds (number)', 'num'], ['angle_lamp', 'Angle poise lamp', 'fn'],
+    ['resuscitaire', 'Resuscitaire (mucus extractor, ambu bag, table, lamp)', 'fn'], ['suction_manual', 'Suction machine — manual', 'fn'], ['suction_auto', 'Suction machine — automatic', 'fn'],
+    ['suturing', 'Suturing materials', 'av'], ['oxygen_cylinder', 'Oxygen cylinder with accessories', 'av'], ['oxygen_concentrator', 'Oxygen concentrator', 'av'],
+    ['pinard', 'Pinard fetoscope', 'yn'], ['sonicaid', 'Sonicaid', 'yn'], ['mag_sulphate', 'Magnesium sulphate', 'yn'], ['misoprostol', 'Misoprostol', 'yn'], ['antishock', 'Anti-shock garment', 'yn'],
+    ['delivery_packs', 'Delivery packs (min 3)', 'yn'], ['baby_cots', 'Baby cots', 'fn'], ['baby_cots_no', 'Baby cots (number functional)', 'num'], ['infant_id', 'Infant ID bracelets', 'yn'], ['maternity_comment', 'Comment', 'ta'] ] },
+  { id: 'emergency', title: 'F. Emergency & referral', fields: [
+    ['bls_trained', 'Personnel trained on BLS', 'yn'], ['mnch_trained', 'Personnel trained on MNCH emergencies', 'yn'], ['emerg_equip', 'Emergency equipment available & functional', 'yn'],
+    ['emerg_tray', 'Emergency tray contents', 'ai'], ['referral_system', 'Referral system in place', 'yn'], ['ambulance', 'Ambulance services accessible', 'yn'], ['emergency_comment', 'Comment', 'ta'] ] },
+  { id: 'sterilization', title: 'G. Sterilization / infection control', fields: [
+    ['steril_area', 'Designated sterilization area', 'av'], ['autoclave', 'Functional autoclave', 'yn'], ['steril_drum', 'Sterilization drum', 'yn'], ['indicator_tape', 'Use of indicator tape', 'yn'],
+    ['steril_other', 'Other methods (specify)', 'txt'], ['ppe', 'Personal protective equipment', 'ai'], ['steril_comment', 'Comment', 'ta'] ] },
+  { id: 'handwash', title: 'H. Hand washing facilities', fields: [
+    ['hw_treatment', 'Treatment room', 'ai'], ['hw_consulting', 'Consulting room', 'ai'], ['hw_wards', 'Wards', 'ai'], ['hw_records', 'Health records', 'ai'], ['hw_labour', 'Labour room', 'ai'], ['hw_lab', 'Laboratory', 'ai'], ['hw_comment', 'Comment', 'ta'] ] },
+  { id: 'records', title: 'I. Health records', fields: [
+    ['rec_type', 'Records type', 'sel', ['Paper-based', 'Digital', 'Both']], ['rec_secured', 'Secured location', 'yn'], ['rec_shelving', 'Shelving', 'yn'], ['rec_filing', 'Filing', 'yn'],
+    ['nhmis', 'NHMIS registers available', 'yn'], ['hmis_monthly', 'HMIS data submitted monthly', 'yn'], ['records_comment', 'Comment', 'ta'] ] },
+  { id: 'lab', title: 'J. Diagnostic services — laboratory', fields: [
+    ['lab_type', 'Type of laboratory', 'sel', ['Commercial (standalone)', 'Hospital Lab', 'Side Lab', 'None']], ['lab_tests', 'Laboratory investigations (list)', 'ta', ['Malaria parasite', 'Full blood count', 'Widal', 'Urinalysis', 'HIV screening', 'Hepatitis B', 'Blood sugar', 'PCV', 'Pregnancy test', 'Genotype', 'Blood group', 'Liver function', 'Kidney function', 'Lipid profile']],
+    ['lab_personnel', 'Personnel in charge', 'chk', ['Pathologist', 'Med. Lab. Scientist', 'Med. Lab. Tech.', 'Other']], ['lab_equip', 'Lab equipment adequacy', 'ai'], ['lab_equip_list', 'Lab equipment sighted & functionality', 'ta', ['Microscope', 'Centrifuge', 'Haematology analyser', 'Chemistry analyser', 'Refrigerator', 'Autoclave', 'Water bath', 'Incubator', 'Rotator']],
+    ['lab_power', 'Power supply', 'ai'], ['lab_waste', 'Waste management', 'ai'], ['lab_illum', 'Illumination', 'ai'], ['lab_water', 'Water supply', 'ai'], ['lab_ppe', 'PPE', 'ai'], ['lab_comment', 'Comment', 'ta'],
+    ['ultrasound', 'Provides ultrasound services', 'yn'], ['ultrasound_by', 'Ultrasound provided by', 'chk', ['Radiologist', 'Sonographer', 'Sonologist', 'Other']] ] },
+  { id: 'medication', title: 'K. Medication management', fields: [
+    ['pharmacy', 'Functional pharmacy or dispensary', 'yn'], ['pharmacy_type', 'Pharmacy or dispensary (specify)', 'txt'], ['pharm_personnel', 'Personnel in charge', 'chk', ['Pharmacist', 'Pharm. Technician']],
+    ['counselling_area', 'Counselling area', 'yn'], ['compounding_area', 'Compounding area', 'yn'], ['dispensing_size', 'Dispensing room adequate (min 30 sq m)', 'yn'], ['pharm_arranged', 'Well arranged, adequate ventilation', 'yn'],
+    ['pharm_illum', 'Illumination', 'ai'], ['formulary', 'Drug formulary (EMDEX, BNF)', 'yn'], ['room_temp_charts', 'Room temperature charts', 'yn'], ['fridge', 'Functional fridge', 'yn'], ['fridge_charts', 'Fridge temperature charts (incl vaccines)', 'yn'],
+    ['dda', 'Lockable DDA cupboard & register', 'yn'], ['expired_disposal', 'Disposal of expired drugs', 'ai'], ['pharm_ppe', 'Appropriate use of PPE', 'yn'], ['pharm_fire', 'Fire-fighting equipment', 'yn'], ['medication_comment', 'Comment', 'ta'] ] },
+  { id: 'catering', title: 'L. Catering services', fields: [
+    ['catering', 'Catering services provided', 'yn'], ['catering_type', 'Catering type', 'sel', ['In-house', 'Outsourced', 'N/A']], ['kitchen_clean', 'Kitchen clean', 'yn'], ['kitchen_vent', 'Kitchen well-ventilated', 'yn'],
+    ['kitchen_equip', 'Kitchen well-equipped', 'yn'], ['kitchen_fire', 'Fire blanket & extinguisher', 'yn'], ['kitchen_alarm', 'Fire alarm functional', 'yn'], ['food_handlers', 'Food handlers test evidence', 'yn'], ['catering_comment', 'Comment', 'ta'] ] },
+  { id: 'environment', title: 'M. Environment & amenities', fields: [
+    ['gen_ventilation', 'General ventilation', 'ai'], ['gen_illum', 'Illumination', 'ai'], ['electricity', 'Main source of electricity', 'sel', ['PHCN', 'Other']], ['alt_power', 'Alternate power supply', 'yn'],
+    ['alt_power_type', 'Alternate power type', 'chk', ['Generator', 'Inverter', 'Solar', 'Other']], ['water_supply', 'Portable water supply', 'yn'], ['water_source', 'Source(s) of water', 'chk', ['Pipe borne', 'Borehole', 'Well', 'Vendor', 'Other']],
+    ['toilets_available', 'Toilets available (cistern)', 'num'], ['toilets_functional', 'Toilets functional', 'num'], ['toilets_staff', 'Toilets for staff', 'ai'], ['toilets_opd', 'Toilets for OPD', 'ai'], ['toilets_inpatient', 'Toilets for inpatients', 'ai'],
+    ['wash_basin', 'Wash hand basin with running water', 'yn'], ['cleaning_agents', 'Cleaning agents & disinfectant', 'yn'], ['antibac_wash', 'Anti-bacterial hand wash', 'yn'], ['toilet_roll', 'Toilet roll', 'yn'], ['pedal_bin', 'Pedal bin lined with nylon', 'yn'],
+    ['serviette', 'Serviette / single-use hand towel', 'yn'], ['shower', 'Shower with running water', 'yn'], ['drainage', 'External drainage (gutter)', 'yn'], ['drainage_covered', 'Drainage covered', 'yn'], ['env_comment', 'Comment', 'ta'] ] },
+  { id: 'waste', title: 'Waste management', fields: [
+    ['lawma_psp', 'Registered with LAWMA PSP', 'yn'], ['lawma_medical', 'Registered with LAWMA Medical', 'yn'], ['sharps_container', 'Correct bin & sharps container', 'yn'], ['waste_segregation', 'Proper waste segregation', 'yn'],
+    ['coloured_bags', 'Coloured bags available', 'chk', ['Black', 'Yellow', 'Red', 'Brown', 'Safety sharp box']], ['collection_point', 'Final collection point', 'ai'], ['domestic_waste', 'Domestic waste management', 'ai'], ['medical_waste', 'Medical waste management', 'ai'], ['waste_comment', 'Comment', 'ta'] ] },
+  { id: 'fire', title: 'N. Fire safety', fields: [
+    ['fire_cert', 'Fire service certification', 'av'], ['fire_equip', 'Fire-fighting equipment', 'yn'], ['fire_service_history', 'Service history', 'yn'], ['fire_exits', 'Two labelled exits', 'yn'], ['muster_point', 'Muster / assembly point', 'av'], ['fire_comment', 'Comment', 'ta'] ] },
+  { id: 'staffing', title: 'O. Staffing', fields: [
+    ['qip', 'Quality improvement programme', 'yn'], ['update_training', 'Regular update training', 'yn'], ['duty_roster', 'Duty roster available', 'yn'], ['adequate_staff', 'Adequate number of qualified personnel', 'yn'], ['staff_shortfall', 'If no, personnel type lacking', 'txt', ['Doctor', 'Nurse', 'Med Lab Scientist', 'Pharmacist', 'Health records officer']],
+    ['doctors_ft', 'Doctors (full time)', 'num'], ['doctors_pt', 'Doctors (part time)', 'num'], ['nurses_ft', 'Nurses (full time)', 'num'], ['nurses_pt', 'Nurses (part time)', 'num'], ['others_ft', 'Other staff (full time)', 'num'], ['others_pt', 'Other staff (part time)', 'num'],
+    ['staff_complement', 'Staff complement (name, reg no, designation, specialty)', 'ta'], ['staffing_comment', 'Comment', 'ta'] ] },
+  { id: 'submission', title: 'Inspection report (for HEFAMAA submission)', fields: [
+    ['address', 'Facility address', 'txt'], ['schedule', 'Facility schedule (category)', 'txt', ['Hospital', 'Clinic', 'Maternity Home', 'Nursing Home', 'Convalescent Home', 'Dental Clinic', 'Eye Clinic', 'Laboratory', 'Diagnostic Centre', 'Specialist Hospital']], ['opening', 'Opening schedule', 'txt', ['24 hours', '8am - 5pm', '8am - 4pm', 'Mon-Fri 8am-5pm', 'Mon-Sat 8am-6pm']],
+    ['services_rendered', 'Services rendered', 'ta', ['General medical practice', 'Antenatal care', 'Skilled birth delivery', 'Immunisation', 'Family planning', 'Laboratory', 'Ultrasound', 'Pharmacy', 'Dental', 'Eye care', 'HIV counselling and testing', 'TB DOTS', 'Minor surgery', 'Inpatient care']], ['total_staff', 'Total staff strength & breakdown', 'ta'], ['staff_on_duty', 'Staff met on duty', 'ta', ['Doctor', 'Nurse', 'Matron', 'Med Lab Scientist', 'Pharmacist', 'Pharmacy technician', 'Health assistant', 'Receptionist', 'Cleaner', 'Security']], ['basic_equipment', 'Basic equipment available', 'ta', ['BP apparatus', 'Stethoscope', 'Thermometer', 'Weighing scale', 'Glucometer', 'Nebuliser', 'Oxygen cylinder', 'Suction machine', 'Delivery bed', 'Resuscitaire', 'Autoclave', 'Wheelchair', 'Examination couch', 'Ambu bag']],
+    ['wards_no', '# of Wards', 'txt'], ['treatment_room', 'Treatment room', 'txt', ['Available and adequate', 'Available but inadequate', 'Not available']], ['environment', 'Environment', 'txt', ['Clean and well maintained', 'Fairly clean', 'Poor, needs attention']], ['waste_mgmt', 'Waste management', 'txt', ['Adequate, registered with LAWMA PSP', 'Colour-coded bins in use', 'Inadequate segregation', 'No medical waste contract']], ['observation', 'Observation (gaps)', 'ta'], ['other_notes', 'Others', 'ta'] ] }
+]
+const HEF_TYPES = { yn: ['Yes', 'No'], ai: ['Adequate', 'Inadequate'], fn: ['Functional', 'Non-functional'], av: ['Available', 'Not available'] }
+function ragWeight(r) { return r === 'green' ? 2 : r === 'amber' ? 1 : 0 }
+function ragFromPct(pct) { return pct == null ? null : pct >= 80 ? 'green' : pct >= 50 ? 'amber' : 'red' }
+function computeScore(data) {
+  let sum = 0, max = 0, rated = 0
+  CHECKLIST.forEach(cat => cat.items.forEach((_, i) => { const it = data[cat.id + '_' + i]; if (it && it.rating) { rated++; max += 2; sum += ragWeight(it.rating) } }))
+  const pct = max ? Math.round(sum / max * 100) : null
+  return { pct, rag: ragFromPct(pct), rated }
+}
+function categoryScore(data, cat) {
+  let sum = 0, max = 0, rated = 0
+  cat.items.forEach((_, i) => { const it = data[cat.id + '_' + i]; if (it && it.rating) { rated++; max += 2; sum += ragWeight(it.rating) } })
+  const pct = max ? Math.round(sum / max * 100) : null
+  return { pct, rag: ragFromPct(pct), rated, total: cat.items.length }
+}
+function downscaleImage(file, maxW = 1100, quality = 0.6) {
+  return new Promise((res, rej) => {
+    const img = new Image(); const url = URL.createObjectURL(file)
+    img.onload = () => {
+      const scale = Math.min(1, maxW / img.width); const w = Math.round(img.width * scale), h = Math.round(img.height * scale)
+      const c = document.createElement('canvas'); c.width = w; c.height = h; c.getContext('2d').drawImage(img, 0, 0, w, h)
+      URL.revokeObjectURL(url); res(c.toDataURL('image/jpeg', quality))
+    }
+    img.onerror = () => { URL.revokeObjectURL(url); rej(new Error('image error')) }
+    img.src = url
+  })
+}
+
+function Rag({ value, onChange }) {
+  return (<div className="rag">{[['green', 'G'], ['amber', 'A'], ['red', 'R']].map(([v, l]) => (
+    <button key={v} type="button" aria-label={v} title={v[0].toUpperCase() + v.slice(1)} aria-pressed={value === v} className={'ragb ' + v + (value === v ? ' on' : '')} onClick={() => onChange(value === v ? null : v)}>{l}</button>
+  ))}</div>)
+}
+function Chip({ rag, pct }) {
+  const label = rag ? (rag === 'green' ? 'Green' : rag === 'amber' ? 'Amber' : 'Red') : 'Not rated'
+  return (<span className={'chip ' + (rag || 'none')}>{label}{pct != null ? ' \u00b7 ' + pct + '%' : ''}</span>)
+}
+function VoiceButton({ onClip }) {
+  const [rec, setRec] = useState(false); const mrRef = useRef(null); const chunks = useRef([])
+  async function toggle() {
+    if (rec) { if (mrRef.current) mrRef.current.stop(); return }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      const mr = new MediaRecorder(stream); mrRef.current = mr; chunks.current = []
+      mr.ondataavailable = e => { if (e.data && e.data.size) chunks.current.push(e.data) }
+      mr.onstop = () => { const blob = new Blob(chunks.current, { type: 'audio/webm' }); const fr = new FileReader(); fr.onload = () => onClip(fr.result); fr.readAsDataURL(blob); stream.getTracks().forEach(t => t.stop()); setRec(false) }
+      mr.start(); setRec(true)
+    } catch (e) { window.alert('Microphone not available on this device.') }
+  }
+  return <button type="button" className={'ev-btn' + (rec ? ' recording' : '')} onClick={toggle}>{rec ? 'Stop' : 'Voice'}</button>
+}
+
+function Seg({ options, value, onChange }) {
+  return (<div className="seg">{options.map(o => (<button type="button" key={o} className={'segb' + (value === o ? ' on' : '')} onClick={() => onChange(value === o ? '' : o)}>{o}</button>))}</div>)
+}
+function fragToggle(cur, frag) {
+  const parts = String(cur || '').split(/;\s*/).map(x => x.trim()).filter(Boolean)
+  const i = parts.findIndex(x => x.toLowerCase() === frag.toLowerCase())
+  if (i >= 0) parts.splice(i, 1); else parts.push(frag)
+  return parts.join('; ')
+}
+function fragHas(cur, frag) {
+  return String(cur || '').split(/;\s*/).some(x => x.trim().toLowerCase() === frag.toLowerCase())
+}
+function HefField({ f, value, onChange }) {
+  const id = f[0], label = f[1], type = f[2], opts = f[3]
+  const picks = (type === 'txt' || type === 'ta') && Array.isArray(opts) && opts.length ? opts : null
+  let control
+  if (HEF_TYPES[type]) control = <Seg options={HEF_TYPES[type]} value={value || ''} onChange={onChange} />
+  else if (type === 'num') control = <input type="number" inputMode="numeric" pattern="[0-9]*" className="hef-input" value={value || ''} onChange={e => onChange(e.target.value)} />
+  else if (type === 'time') control = <input type="time" className="hef-input" value={value || ''} onChange={e => onChange(e.target.value)} />
+  else if (type === 'txt') control = (<>
+    {picks && <div className="picks">{picks.map(o => (
+      <button type="button" key={o} className={'pick' + (String(value || '').trim().toLowerCase() === o.toLowerCase() ? ' on' : '')}
+        onClick={() => onChange(String(value || '').trim().toLowerCase() === o.toLowerCase() ? '' : o)}>{o}</button>))}</div>}
+    <input className="hef-input" value={value || ''} onChange={e => onChange(e.target.value)}
+      placeholder={picks ? 'Tap an answer, or type your own' : ''} />
+  </>)
+  else if (type === 'ta') control = (<>
+    {picks && <div className="picks">{picks.map(o => (
+      <button type="button" key={o} className={'pick' + (fragHas(value, o) ? ' on' : '')}
+        onClick={() => onChange(fragToggle(value, o))}>{o}</button>))}</div>}
+    <textarea className="hef-input" rows="2" value={value || ''} onChange={e => onChange(e.target.value)}
+      placeholder={picks ? 'Tap what applies, and add anything else here' : ''} />
+  </>)
+  else if (type === 'sel') control = <select className="hef-input" value={value || ''} onChange={e => onChange(e.target.value)}><option value="">—</option>{opts.map(o => <option key={o} value={o}>{o}</option>)}</select>
+  else if (type === 'chk') { const arr = Array.isArray(value) ? value : []; control = <div className="chks">{opts.map(o => { const on = arr.includes(o); return <label key={o} className={'chkpill' + (on ? ' on' : '')}><input type="checkbox" checked={on} onChange={() => onChange(on ? arr.filter(x => x !== o) : arr.concat([o]))} />{o}</label> })}</div> }
+  return (<div className="hef-field"><span className="hef-label">{label}</span>{control}</div>)
+}
+function hefAnswered(sec, hef) { return sec.fields.filter(f => { const v = hef[f[0]]; return Array.isArray(v) ? v.length : (v != null && v !== '') }).length }
+function HefammaForm({ value, onChange }) {
+  const hef = value || {}
+  const set = (id, val) => onChange({ ...hef, [id]: val })
+  return (<div className="hef-form">{HEFAMAA_FORM.map(sec => (
+    <details className="hef-sec" key={sec.id}>
+      <summary><span>{sec.title}</span><span className="hef-count">{hefAnswered(sec, hef)}/{sec.fields.length}</span></summary>
+      <div className="hef-fields">{sec.fields.map(f => <HefField key={f[0]} f={f} value={hef[f[0]]} onChange={val => set(f[0], val)} />)}</div>
+    </details>
+  ))}</div>)
+}
+
+function DictateButton({ onText }) {
+  const [rec, setRec] = useState(false); const ref = useRef(null)
+  function toggle() {
+    const SR = (typeof window !== 'undefined') && (window.SpeechRecognition || window.webkitSpeechRecognition)
+    if (!SR) { toast('Voice typing is not supported on this browser. Try Chrome.', 'warn'); return }
+    if (rec && ref.current) { ref.current.stop(); return }
+    const r = new SR(); r.lang = 'en-NG'; r.interimResults = false; r.continuous = false
+    r.onresult = e => { const txt = Array.from(e.results).map(x => x[0].transcript).join(' '); onText(txt) }
+    r.onend = () => setRec(false); r.onerror = () => setRec(false)
+    ref.current = r; setRec(true); r.start()
+  }
+  return <button type="button" className={'mini dictate' + (rec ? ' rec' : '')} onClick={toggle} title="Dictate a note">{rec ? '\u25cf Listening' : '\u25cf Dictate'}</button>
+}
+function MonitorPage({ userId }) {
+  const [visits, setVisits] = useState([])
+  const [active, setActive] = useState(null)
+  const [data, setData] = useState({})
+  const [online, setOnline] = useState(typeof navigator !== 'undefined' ? navigator.onLine : true)
+  const [saveState, setSaveState] = useState('')
+  const [busy, setBusy] = useState(false); const [msg, setMsg] = useState('')
+  const [geo, setGeo] = useState(null)
+  const [profile, setProfile] = useState({})
+  const [hef, setHef] = useState({})
+  const [q, setQ] = useState('')
+  const [lightbox, setLightbox] = useState(null)
+  const [hefCheck, setHefCheck] = useState('')
+
+  useEffect(() => { VIS.list().then(setVisits).catch(() => {}) }, [])
+  useEffect(() => { const on = () => setOnline(true), off = () => setOnline(false); window.addEventListener('online', on); window.addEventListener('offline', off); return () => { window.removeEventListener('online', on); window.removeEventListener('offline', off) } }, [])
+  useEffect(() => { if (navigator.geolocation) navigator.geolocation.getCurrentPosition(p => setGeo({ lat: +p.coords.latitude.toFixed(6), lng: +p.coords.longitude.toFixed(6) }), () => {}) }, [])
+
+  const draftKey = active ? 'realms_monitor_' + active.id : ''
+  useEffect(() => { if (!active) return; try { localStorage.setItem(draftKey, JSON.stringify({ items: data })) } catch (e) {} }, [data, active])
+
+  function open(v) {
+    setMsg(''); let d = (v.monitoring && v.monitoring.items) || {}
+    try { const raw = localStorage.getItem('realms_monitor_' + v.id); if (raw) { const p = JSON.parse(raw); if (p && p.items) d = p.items } } catch (e) {}
+    setActive(v); setData(d); setProfile((v.monitoring && v.monitoring.profile) || {}); setHef((v.monitoring && v.monitoring.hefamaa) || {}); setSaveState('')
+  }
+  function setProfileField(k, val) { setProfile(p => ({ ...p, [k]: val })); setSaveState('draft') }
+  function setItem(key, patch) { setData(d => ({ ...d, [key]: { ...(d[key] || { rating: null, note: '', evidence: [] }), ...patch } })); setSaveState('draft') }
+  function addEvidence(key, type, url) { setData(d => { const it = d[key] || { rating: null, note: '', evidence: [] }; const ev = (it.evidence || []).concat([{ type, data: url, at: new Date().toISOString(), lat: geo ? geo.lat : null, lng: geo ? geo.lng : null }]); return { ...d, [key]: { ...it, evidence: ev } } }); setSaveState('draft') }
+  function removeEvidence(key, idx) { setData(d => { const it = d[key]; if (!it) return d; return { ...d, [key]: { ...it, evidence: it.evidence.filter((_, i) => i !== idx) } } }); setSaveState('draft') }
+  async function onPickImage(key, type, file) { if (!file) return; try { const dataUrl = await downscaleImage(file); const stored = await uploadEvidence(active.id, type, dataUrl); addEvidence(key, type, stored) } catch (e) { setMsg('Could not process the image.') } }
+
+  const score = computeScore(data)
+  const totalItems = CHECKLIST.reduce((n, c) => n + c.items.length, 0)
+
+  function requirements() {
+    const noPhoto = [], noVoice = []
+    CHECKLIST.forEach(cat => {
+      let hasVoice = false, hasRating = false
+      cat.items.forEach((label, i) => {
+        const it = data[cat.id + '_' + i]; if (!it) return
+        if (it.rating) hasRating = true
+        if ((it.evidence || []).some(e => e.type === 'voice')) hasVoice = true
+        if (it.rating === 'red' && !(it.evidence || []).some(e => e.type === 'photo')) noPhoto.push(cat.label + ': ' + label)
+      })
+      if (hasRating && !hasVoice) noVoice.push(cat.label)
+    })
+    return { noPhoto, noVoice }
+  }
+
+  async function save() {
+    if (!active) return
+    const req = requirements()
+    if (req.noPhoto.length || req.noVoice.length) {
+      const parts = []
+      if (req.noPhoto.length) parts.push('add a photo on red items (' + req.noPhoto.join('; ') + ')')
+      if (req.noVoice.length) parts.push('add a voice note for ' + req.noVoice.join(', '))
+      setMsg('Before saving, please ' + parts.join(', and ') + '.')
+      return
+    }
+    setBusy(true); setMsg('')
+    const payload = { items: data, profile, hefamaa: hef, score: score.pct, overallRating: score.rag, updatedAt: new Date().toISOString() }
+    try {
+      await VIS.update(active.id, { monitoring: payload, score: score.pct, overall_rating: score.rag, status: 'monitored' })
+      try { localStorage.removeItem(draftKey) } catch (e) {}
+      setSaveState('saved'); setMsg('Assessment saved.'); toast('Assessment saved.')
+      setVisits(vs => vs.map(v => v.id === active.id ? { ...v, monitoring: payload, score: score.pct, overall_rating: score.rag, status: 'monitored' } : v))
+    } catch (e) { setSaveState('pending'); setMsg('Saved locally. It will sync when you are back online; use Sync now to retry.') }
+    finally { setBusy(false) }
+  }
+
+  if (!active) {
+    const monVisits = visits.filter(v => matchQ(v, q))
+    return (<div className="page">
+      <div className="ptitle"><div><p className="eyebrow">Monitor</p><h2>Assessments</h2></div>
+        <span className={'net ' + (online ? 'on' : 'off')}>{online ? 'Online' : 'Offline'}</span></div>
+      {visits.length > 0 && <div className="list-tools"><SearchBox value={q} onChange={setQ} placeholder="Search facilities…" /></div>}
+      {monVisits.length === 0 ? <p className="empty">{visits.length === 0 ? 'No visits yet. Complete an Engage check-in first.' : 'No visits match your search.'}</p> :
+        <div className="mon-list">{monVisits.map(v => (
+          <button className="mon-row" key={v.id} onClick={() => open(v)}>
+            <div><span className="fname">{v.facility_name}</span><span className="fmeta">{v.area} &middot; {(v.arrival_time || v.created_at || '').slice(0, 10)}</span></div>
+            <div className="mon-right">{v.score != null ? <Chip rag={v.overall_rating} pct={v.score} /> : <span className={'chip ' + (v.status || 'engaged')}>{v.status === 'monitored' ? 'Assessed' : 'Ready'}</span>}<span className="mini">{v.status === 'monitored' ? 'Review' : 'Assess'}</span></div>
+          </button>
+        ))}</div>}
+    </div>)
+  }
+
+  return (<div className="page monitor">
+    <div className="mon-head">
+      <div className="mon-head-l">
+        <button className="linkbtn subtle" onClick={() => setActive(null)}>&larr; All assessments</button>
+        <h2>{active.facility_name}</h2>
+        <p className="fsub">{active.area} &middot; arrival {(active.arrival_time || '').slice(11, 16) || 'logged'}</p>
+      </div>
+      <div className="mon-head-r">
+        <span className={'net ' + (online ? 'on' : 'off')}>{online ? 'Online' : 'Offline'}</span>
+        <Chip rag={score.rag} pct={score.pct} />
+        <span className="rated">{score.rated}/{totalItems} rated</span>
+      </div>
+    </div>
+    {(() => { const hefTotal = HEFAMAA_FORM.reduce((n, s) => n + s.fields.length, 0); const hefDone = HEFAMAA_FORM.reduce((n, s) => n + hefAnswered(s, hef), 0); const ragPct = Math.round((score.rated / totalItems) * 100); const hefPct = Math.round((hefDone / hefTotal) * 100); return (
+      <div className="mon-meter">
+        <div className="meter-row"><span className="meter-lab">Ratings</span><div className="meter-track"><div className="meter-fill" style={{ width: ragPct + '%' }} /></div><span className="meter-val">{score.rated}/{totalItems}</span></div>
+        <div className="meter-row"><span className="meter-lab">HEFAMAA form</span><div className="meter-track"><div className="meter-fill alt" style={{ width: hefPct + '%' }} /></div><span className="meter-val">{hefDone}/{hefTotal}</span></div>
+      </div>) })()}
+    {msg && <p className="auth-msg block">{msg}</p>}
+    <p className="mon-rules">Evidence rules: a photo on every red item, a voice note per category, and GPS captured at check-in.</p>
+
+    <details className="hef-wrap" open>
+      <summary className="hef-title"><span>HEFAMAA facility inspection form</span><span className="hef-total">{HEFAMAA_FORM.reduce((n, s) => n + hefAnswered(s, hef), 0)}/{HEFAMAA_FORM.reduce((n, s) => n + s.fields.length, 0)}</span></summary>
+      <p className="hintline">The full Lagos HEFAMAA inspection tool. Complete each section as you would on the paper form; every section is saved with the visit.</p>
+      <div className="ai-row"><AIButton label="AI consistency check" build={() => ({ system: 'You review a HEFAMAA facility inspection form for internal contradictions, missing critical items, and implausible entries. List up to 6 short, specific issues as bullets. If none, say the form looks consistent. Use only the data.', prompt: JSON.stringify(hef), max_tokens: 500 })} onText={txt => setHefCheck(txt)} /></div>
+      {hefCheck && <div className="ai-panel"><h4><span className="ai-spark">✦</span> Consistency check</h4><p className="ai-text">{hefCheck}</p><button className="linkbtn subtle" onClick={() => setHefCheck('')}>Dismiss</button></div>}
+      <HefammaForm value={hef} onChange={setHef} />
+    </details>
+
+    <div className="rag-summary-head"><h3>Compliance rating summary</h3><p className="hintline">A quick RAG rating that drives the score, debrief and reports.</p></div>
+
+    {CHECKLIST.map(cat => {
+      const cs = categoryScore(data, cat)
+      const catRated = cat.items.some((_, i) => { const it = data[cat.id + '_' + i]; return it && it.rating })
+      const catVoice = cat.items.some((_, i) => { const it = data[cat.id + '_' + i]; return it && (it.evidence || []).some(e => e.type === 'voice') })
+      return (<div className="mcat" key={cat.id}>
+        <div className="mcat-head"><h3>{cat.label}</h3><div className="mcat-r">{catRated && !catVoice && <span className="need">Voice note needed</span>}{catVoice && <span className="ok">Voice &#10003;</span>}<Chip rag={cs.rag} pct={cs.pct} /></div></div>
+        <div className="mitems">{cat.items.map((label, i) => {
+          const key = cat.id + '_' + i; const it = data[key] || { rating: null, note: '', evidence: [] }
+          const needPhoto = it.rating === 'red' && !(it.evidence || []).some(e => e.type === 'photo')
+          return (<div className={'mitem' + (needPhoto ? ' flag' : '')} key={key}>
+            <div className="mitem-top"><span className="mlabel">{label}</span><Rag value={it.rating} onChange={r => setItem(key, { rating: r })} /></div>
+            <div className="mnote-row"><textarea className="mnote" rows="1" placeholder="Note (optional)" value={it.note || ''} onChange={e => setItem(key, { note: e.target.value })} /><DictateButton onText={txt => setItem(key, { note: ((it.note || '') + (it.note ? ' ' : '') + txt) })} /></div>
+            <div className="evrow">
+              <label className={'ev-btn' + (needPhoto ? ' urgent' : '')}>Photo<input type="file" accept="image/*" capture="environment" onChange={e => { onPickImage(key, 'photo', e.target.files[0]); e.target.value = '' }} /></label>
+              <label className="ev-btn">Scan<input type="file" accept="image/*" onChange={e => { onPickImage(key, 'scan', e.target.files[0]); e.target.value = '' }} /></label>
+              <VoiceButton onClip={async url => { const stored = await uploadEvidence(active.id, 'voice', url); addEvidence(key, 'voice', stored) }} />
+              {geo && <span className="geotag">geotag on</span>}
+              {needPhoto && <span className="need">Photo required</span>}
+            </div>
+            {it.evidence && it.evidence.length > 0 && (<div className="evstrip">{it.evidence.map((ev, ei) => (
+              <div className="evthumb" key={ei}>
+                {ev.type === 'voice' ? <audio controls src={ev.data} /> : <img src={ev.data} alt={ev.type} onClick={() => setLightbox(ev.data)} style={{ cursor: 'zoom-in' }} />}
+                {ev.type !== 'voice' && <AIButton className="mini ev-ai" label="AI check" busyLabel="Checking" build={() => ({ system: 'You are a HEFAMAA monitoring officer reviewing an evidence photo from a health facility. In 1 to 2 sentences note visible compliance issues (hygiene, PPE, waste, equipment, signage, cold chain) or say it looks acceptable. Be specific and cautious; do not overstate.', prompt: 'Category: ' + cat.label + '; item: ' + label + '. Note compliance-relevant observations.', image: ev.data, max_tokens: 200 })} onText={txt => setItem(key, { note: ((it.note || '') + (it.note ? '\n' : '') + 'AI: ' + txt) })} />}
+                <button className="evx" onClick={() => removeEvidence(key, ei)}>&times;</button>
+              </div>
+            ))}</div>)}
+          </div>)
+        })}</div>
+      </div>)
+    })}
+
+    <div className="mon-actions">
+      <button className="btn primary" onClick={save} disabled={busy}>{busy ? 'Saving\u2026' : 'Save assessment'}</button>
+      {saveState === 'pending' && <button className="btn ghost" onClick={save}>Sync now</button>}
+      <span className="save-note">{saveState === 'saved' ? 'Saved' : saveState === 'pending' ? 'Pending sync' : 'Draft saved on this device'}</span>
+    </div>
+    <p className="hintline">The debrief, e-signature and report generation follow in Stage 6.</p>
+    {lightbox && <div className="lightbox" onClick={() => setLightbox(null)}><img src={lightbox} alt="Evidence" /><button className="lightbox-x" onClick={() => setLightbox(null)} aria-label="Close">&times;</button></div>}
+  </div>)
+}
+
+/* ---------- debrief (Stage 6) ---------- */
+const REINSPECT = ['1 week', '2 weeks', '1 month', '3 months']
+function itemMeta(key) { const idx = key.lastIndexOf('_'); const catId = key.slice(0, idx); const i = +key.slice(idx + 1); const cat = CHECKLIST.find(c => c.id === catId); return { category: cat ? cat.label : catId, label: cat ? cat.items[i] : key } }
+function ragText(r) { return r === 'green' ? 'Green' : r === 'amber' ? 'Amber' : r === 'red' ? 'Red' : 'Not rated' }
+
+function deriveDebrief(v) {
+  const data = (v.monitoring && v.monitoring.items) || {}
+  const strengths = [], gaps = []
+  Object.keys(data).forEach(k => { const it = data[k]; if (!it || !it.rating) return; const m = itemMeta(k)
+    if (it.rating === 'green') strengths.push(m.category + ': ' + m.label)
+    else gaps.push({ key: k, category: m.category, label: m.label, rating: it.rating, action: it.note || '', timeline: '2 weeks' })
+  })
+  return { strengths, gaps }
+}
+
+const DOC_CSS = "@import url('https://fonts.googleapis.com/css2?family=Lora:ital,wght@0,400;0,600;1,400&display=swap');*{font-family:'Lora',Georgia,serif;color:#241536;box-sizing:border-box}body{max-width:760px;margin:36px auto;padding:0 24px;line-height:1.6}h1{color:#574277;font-size:23px;margin:14px 0 6px}h2{color:#574277;font-size:15px;margin:22px 0 8px}p{margin:0 0 10px}table{width:100%;border-collapse:collapse;margin:8px 0 14px}th,td{border:1px solid #E4DCEE;padding:8px 10px;text-align:left;font-size:12.5px;vertical-align:top}th{background:#F6F3FA;color:#574277}ul,ol{margin:6px 0 14px;padding-left:20px}li{font-size:13px;margin-bottom:4px}.head{display:flex;align-items:center;gap:12px;border-bottom:2px solid #EDE7F4;padding-bottom:12px;margin-bottom:8px}.chip{display:inline-block;padding:2px 10px;border-radius:12px;font-size:12px;border:1px solid #ccc}.g{background:#E6F4EA;color:#2E7D46;border-color:#BFE3CB}.a{background:#FBF3E6;color:#9A5B12;border-color:#F0D9B5}.r{background:#FBE9E6;color:#B4442E;border-color:#F0C9BF}.muted{color:#7A6A93;font-size:12px}.sig{height:80px;margin:6px 0}.right{text-align:right}@media print{body{margin:0}}"
+function chipCls(r) { return r === 'green' ? 'g' : r === 'amber' ? 'a' : r === 'red' ? 'r' : '' }
+function printDoc(title, inner) {
+  const w = window.open('', '_blank'); if (!w) { window.alert('Please allow pop-ups to open the document, then try again.'); return }
+  w.document.write('<html><head><title>' + title + '</title><meta charset="utf-8"><style>' + DOC_CSS + '</style></head><body>' + inner + '</body></html>')
+  w.document.close(); w.focus(); setTimeout(() => { try { w.print() } catch (e) {} }, 400)
+}
+function safePrint(title, build) {
+  let html
+  try { html = build() } catch (e) { try { toast('Could not build the document: ' + ((e && e.message) || e), 'warn') } catch (_) { window.alert('Could not build the document.') } return }
+  printDoc(title, html)
+}
+function docHead(origin) {
+  return '<div class="head"><img src="' + origin + '/rhsc-mark.png" style="height:44px"><div><strong>REALMS HEALTHCARE SERVICES CONSULTING LIMITED</strong><br><span class="muted">Licensed HEFAMAA monitoring operator, Lagos State</span></div></div>'
+}
+function inspHead(origin) {
+  return '<div class="head" style="justify-content:space-between"><div style="display:flex;align-items:center;gap:12px"><img src="' + origin + '/rhsc-mark.png" style="height:54px"><div><strong style="font-size:14px">HEALTH FACILITY MONITORING AND ACCREDITATION AGENCY (HEFAMAA)</strong><br><span style="color:#574277">Inspection Report (Realms Consulting)</span></div></div><img src="' + origin + '/hefamaa-logo.png" style="height:54px" onerror="this.style.display=\'none\'"></div>'
+}
+function firstVal() { for (let i = 0; i < arguments.length; i++) { const v = arguments[i]; if (v != null && String(v).trim() !== '') return String(v) } return '' }
+function buildInspectionReport(v, d, origin) {
+  const hef = (v.monitoring && v.monitoring.hefamaa) || {}
+  const date = firstVal(hef.assess_date, (v.arrival_time || v.created_at || '').slice(0, 10))
+  const svcList = [].concat(Array.isArray(hef.svc_primary) ? hef.svc_primary : [], Array.isArray(hef.svc_support) ? hef.svc_support : []).join(', ')
+  const staffAuto = [hef.doctors_ft && (hef.doctors_ft + ' doctor(s)'), hef.nurses_ft && (hef.nurses_ft + ' nurse(s)'), hef.others_ft && (hef.others_ft + ' other staff')].filter(Boolean).join(', ')
+  const renewal = firstVal(hef.hefamaa_renewal ? (hef.hefamaa_renewal + (hef.hefamaa_last_renewal ? ' (' + hef.hefamaa_last_renewal + ')' : '')) : '')
+  const gapsText = (d && d.gaps && d.gaps.length) ? d.gaps.map(g => (g.category ? g.category + ': ' : '') + g.label).join('; ') : ''
+  const observation = firstVal(hef.observation, d && d.narrative, gapsText)
+  const rows = [
+    ['General', ''],
+    ['Date', date], ['Facility Name', v.facility_name || ''], ['Facility Address', firstVal(hef.address, v.address)],
+    ['LGA', v.area || ''], ['Facility Schedule', firstVal(hef.schedule, v.category)], ['Opening Schedule', firstVal(hef.opening, hef.hours)], ['Registration Status', firstVal(hef.registration, hef.hefamaa_reg)],
+    ['Findings', ''],
+    ['Renewal Status', renewal], ['Services Rendered', firstVal(hef.services_rendered, svcList)], ['Total Staff Strength and Breakdown', firstVal(hef.total_staff, staffAuto)], ['Staff met on duty', firstVal(hef.staff_on_duty)],
+    ['Basic Equipment Available', firstVal(hef.basic_equipment)], ['# of Wards', firstVal(hef.wards_no)], ['# of Beds', firstVal(hef.beds_no)], ['# of Toilets', firstVal(hef.toilets_available)],
+    ['Observation (Gaps)', observation], ['Environment', firstVal(hef.environment, hef.gen_ventilation)], ['Waste Management', firstVal(hef.waste_mgmt, hef.medical_waste)], ['Treatment Room', firstVal(hef.treatment_room)], ['Others', firstVal(hef.other_notes)]
+  ]
+  const esc = s => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/\n/g, '<br>')
+  const body = rows.map(r => r[1] === '' && (r[0] === 'General' || r[0] === 'Findings') ? '<tr><th colspan="2" style="font-size:13px">' + r[0] + '</th></tr>' : '<tr><td style="width:34%;font-weight:600;color:#574277">' + r[0] + '</td><td>' + esc(r[1]) + '</td></tr>').join('')
+  const stamp = (v.approval && v.approval.status === 'approved') ? '<p class="muted" style="border:1px solid #BFE3CB;background:#E6F4EA;color:#2E7D46;border-radius:6px;padding:6px 10px;display:inline-block">Approved for submission by ' + esc(v.approval.by || 'Team Lead') + ' on ' + String(v.approval.at || '').slice(0, 10) + '</p>' : ''
+  return inspHead(origin) + '<table style="margin-top:10px">' + body + '</table>' + stamp + (d && d.signature ? '<p class="muted">Proprietor sign-off:</p><img class="sig" src="' + d.signature + '">' : '') + '<p class="muted" style="border:1px solid #E4DCEE;border-radius:6px;padding:8px 10px"><strong>Integrity notice.</strong> ' + INTEGRITY_NOTICE + '</p><p class="muted">Prepared by REALMS Healthcare Services Consulting Limited for HEFAMAA, Lagos State.</p>'
+}
+function hasFirstAssessment(v) {
+  const a = v && v.assessment
+  return !!((a && (a.ruid || a.services != null || a.total_score != null || a.recommendations || a.environment != null || a.visited_unscored)) || (v && v.monitoring && v.monitoring.first_assessment))
+}
+function firstAssessmentData(v) {
+  const a = v && v.assessment
+  if (a && (a.ruid || a.services != null || a.total_score != null || a.recommendations || a.environment != null || a.visited_unscored)) return a
+  return (v && v.monitoring && v.monitoring.first_assessment) || (v && v.assessment) || {}
+}
+function buildMonitoringReport(v, origin) {
+  const a = firstAssessmentData(v)
+  const esc = s => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/\n/g, '<br>')
+  const date = firstVal(a.date, v.visit_date, (v.arrival_time || v.created_at || '').slice(0, 10))
+  const pctText = a.visited_unscored ? 'Visited \u2014 not scored'
+    : (a.pct_score != null && a.pct_score !== '') ? a.pct_score + '%'
+    : (a.pct_estimate != null && a.pct_estimate !== '') ? a.pct_estimate + '% (estimated from the raw score)'
+    : ''
+  const gen = [
+    ['Date', date], ['Facility Name', firstVal(a.name, v.facility_name)], ['Facility Address', firstVal(a.address, v.address)],
+    ['LGA', firstVal(a.lga, v.area)], ['Facility Schedule', firstVal(a.schedule, v.category)], ['Opening Schedule', a.opening], ['Registration Status', a.reg_status]
+  ]
+  const find = [
+    ['Renewal Status', a.renewal_status], ['Services Rendered', a.services], ['Total Staff Strength and Breakdown', a.staff_strength], ['Staff met on duty', a.staff_on_duty],
+    ['Basic Equipment Available', a.basic_equipment], ['# of Wards', a.wards], ['# of Beds', a.beds], ['# of Toilets', a.toilets],
+    ['Environment', a.environment], ['Waste Management', a.waste_mgmt], ['Theatre / Clinical Areas', a.clinical_area], ['Others', a.others]
+  ]
+  const scoreRows = [['Total Score', a.total_score != null && a.total_score !== '' ? String(a.total_score) : ''], ['Percentage', pctText]]
+  const row = r => '<tr><td style="width:34%;font-weight:600;color:#574277">' + r[0] + '</td><td>' + esc(r[1]) + '</td></tr>'
+  const sec = t => '<tr><th colspan="2" style="font-size:13px">' + t + '</th></tr>'
+  const recs = Array.isArray(a.recommendations) && a.recommendations.length
+    ? '<h2>Recommendation(s)</h2><ol>' + a.recommendations.map(r => '<li>' + esc(r) + '</li>').join('') + '</ol>' : ''
+  const inspBy = firstVal(a.inspected_by) ? '<p class="muted"><strong>Inspected by:</strong> ' + esc(a.inspected_by) + '</p>' : ''
+  const estNote = (a.pct_estimated || a.visited_unscored) && a.score_basis ? '<p class="muted">' + esc(a.score_basis) + '</p>' : ''
+  return inspHead(origin) + '<h1 style="font-size:18px;margin-top:10px">First Assessment \u2014 Monitoring Report</h1>'
+    + '<table style="margin-top:6px">' + sec('General') + gen.map(row).join('') + sec('Findings') + find.map(row).join('') + sec('Scores') + scoreRows.map(row).join('') + '</table>'
+    + recs + estNote + inspBy
+    + '<p class="muted" style="border:1px solid #E4DCEE;border-radius:6px;padding:8px 10px"><strong>Integrity notice.</strong> ' + INTEGRITY_NOTICE + '</p>'
+    + '<p class="muted">Prepared by REALMS Healthcare Services Consulting Limited for HEFAMAA, Lagos State.</p>'
+}
+function buildMonitoringBatch(visits, origin) {
+  const parts = visits.map((v, i) => '<div style="' + (i ? 'page-break-before:always;' : '') + '">' + buildMonitoringReport(v, origin) + '</div>')
+  const idx = '<h1>First-assessment monitoring reports</h1><p>REALMS Healthcare Services Consulting Limited. ' + visits.length + ' report' + (visits.length === 1 ? '' : 's') + '.</p><table><tr><th>#</th><th>Facility</th><th>LGA</th><th>Date</th></tr>' + visits.map((v, i) => { const a = firstAssessmentData(v); return '<tr><td>' + (i + 1) + '</td><td>' + (v.facility_name || '') + '</td><td>' + (v.area || '') + '</td><td>' + firstVal(a.date, v.visit_date, (v.arrival_time || '').slice(0, 10)) + '</td></tr>' }).join('') + '</table>'
+  return docHead(origin) + idx + '<div style="page-break-before:always">' + parts.join('') + '</div>'
+}
+function buildWeeklyBatch(visits, origin, from, to) {
+  const parts = visits.map((v, i) => '<div style="' + (i ? 'page-break-before:always;' : '') + '">' + buildInspectionReport(v, v.debrief || deriveDebrief(v), origin) + '</div>')
+  const idx = '<h1>HEFAMAA submission: ' + from + ' to ' + to + '</h1><p>REALMS Healthcare Services Consulting Limited. ' + visits.length + ' approved inspection report' + (visits.length === 1 ? '' : 's') + '.</p><table><tr><th>#</th><th>Facility</th><th>LGA</th><th>Date</th></tr>' + visits.map((v, i) => '<tr><td>' + (i + 1) + '</td><td>' + v.facility_name + '</td><td>' + (v.area || '') + '</td><td>' + (v.arrival_time || '').slice(0, 10) + '</td></tr>').join('') + '</table>'
+  return docHead(origin) + idx + '<div style="page-break-before:always">' + parts.join('') + '</div>'
+}
+function buildReport(v, d, origin) {
+  const data = (v.monitoring && v.monitoring.items) || {}
+  const date = (v.arrival_time || v.created_at || '').slice(0, 10)
+  const cats = CHECKLIST.map(c => { const cs = categoryScore(data, c); return '<tr><td>' + c.label + '</td><td><span class="chip ' + chipCls(cs.rag) + '">' + ragText(cs.rag) + (cs.pct != null ? ' ' + cs.pct + '%' : '') + '</span></td></tr>' }).join('')
+  const strengths = d.strengths.length ? '<ul>' + d.strengths.map(s => '<li>' + s + '</li>').join('') + '</ul>' : '<p class="muted">None recorded.</p>'
+  const gaps = d.gaps.length ? '<table><tr><th>Finding</th><th>Rating</th><th>Required action</th><th>Timeline</th></tr>' + d.gaps.map(g => '<tr><td>' + g.category + ': ' + g.label + '</td><td>' + ragText(g.rating) + '</td><td>' + (g.action || '\u2014') + '</td><td>' + (g.timeline || '\u2014') + '</td></tr>').join('') + '</table>' : '<p class="muted">No gaps recorded.</p>'
+  const sig = d.signature ? '<img class="sig" src="' + d.signature + '">' : '<p class="muted">Not signed.</p>'
+  const pr = (v.monitoring && v.monitoring.profile) || {}
+  const profileBits = [pr.wards && (pr.wards + ' wards'), pr.beds && (pr.beds + ' beds'), pr.toilets && (pr.toilets + ' toilets'), pr.staff && (pr.staff + ' staff on duty'), pr.scope].filter(Boolean).join(' &middot; ')
+  const profileHtml = profileBits ? '<h2>Facility profile</h2><p>' + profileBits + '</p>' : ''
+  const digital = d.genesys_interest ? '<h2>Digital health</h2><p>Facility expressed interest in the Genesys EMR.' + (d.genesys_note ? ' ' + d.genesys_note : '') + '</p>' : ''
+  const esc = d.escalated ? '<p class="muted"><strong>Note:</strong> critical finding escalated to HEFAMAA / RHSC HQ.</p>' : ''
+  const hef = (v.monitoring && v.monitoring.hefamaa) || {}
+  const hefHtml = HEFAMAA_FORM.map(sec => {
+    const rows = sec.fields.filter(f => { const val = hef[f[0]]; return Array.isArray(val) ? val.length : (val != null && val !== '') })
+      .map(f => '<tr><td>' + f[1] + '</td><td>' + (Array.isArray(hef[f[0]]) ? hef[f[0]].join(', ') : String(hef[f[0]])) + '</td></tr>').join('')
+    return rows ? '<h3>' + sec.title + '</h3><table>' + rows + '</table>' : ''
+  }).join('')
+  const hefSection = hefHtml ? '<h2>HEFAMAA inspection form</h2>' + hefHtml : ''
+  const narr = d.narrative ? '<h2>Summary &amp; recommendations</h2><p>' + String(d.narrative).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/\n/g, '<br>') + '</p>' : ''
+  return docHead(origin) + '<h1>Health Facility Monitoring Report</h1>' +
+    '<p><strong>Facility:</strong> ' + v.facility_name + ' &middot; <strong>Area:</strong> ' + (v.area || '') + '<br><strong>Visit date:</strong> ' + date + ' &middot; <strong>Overall:</strong> <span class="chip ' + chipCls(v.overall_rating) + '">' + ragText(v.overall_rating) + (v.score != null ? ' ' + v.score + '%' : '') + '</span></p>' +
+    profileHtml +
+    narr +
+    '<h2>Assessment by category</h2><table><tr><th>Category</th><th>Rating</th></tr>' + cats + '</table>' +
+    '<h2>Strengths</h2>' + strengths +
+    '<h2>Gaps and required corrective actions</h2>' + gaps +
+    '<h2>Next steps</h2><p>Remediation deadline: ' + (d.remediation_deadline || 'to be set') + '. Re-inspection: ' + (d.reinspection || 'to be scheduled') + '. Compliance letter issued: ' + (d.letter_issued ? 'Yes' : 'No') + '.' + (d.closure_recommended ? ' Closure recommended.' : '') + '</p>' + esc +
+    digital +
+    '<h2>Debrief and sign-off</h2><p>Person in charge: ' + (d.proprietor_name || '\u2014') + '. Acknowledged: ' + (d.proprietor_ack ? 'Yes' : 'No') + '.</p>' + sig + (d.signed_at ? '<p class="muted">Signed ' + d.signed_at.slice(0, 16).replace('T', ' ') + '</p>' : '') +
+    hefSection +
+    '<p class="muted"><strong>Integrity notice.</strong> ' + INTEGRITY_NOTICE + '</p><p class="muted">Prepared by REALMS Healthcare Services Consulting Limited in support of the HEFAMAA regulatory mandate. This report is not legal advice.</p>'
+}
+function buildClosure(v, d, origin) {
+  const date = (v.arrival_time || v.created_at || '').slice(0, 10)
+  const ref = 'RHSC/CN/' + (v.area || 'LAG').slice(0, 3).toUpperCase() + '/' + date.replace(/-/g, '')
+  const grounds = d.gaps && d.gaps.length ? '<ol>' + d.gaps.filter(g => g.rating === 'red').slice(0, 8).map(g => '<li>' + g.category + ' &mdash; ' + g.label + '.</li>').join('') + '</ol>' : '<p>Grounds as recorded during the monitoring visit.</p>'
+  return docHead(origin) + '<p class="right">Ref: ' + ref + '<br>' + date + '</p>' +
+    '<p>The Proprietor / Person in Charge<br>' + v.facility_name + '<br>' + (v.area || '') + ', Lagos State</p>' +
+    '<p><strong>Dear Sir/Ma,</strong></p>' +
+    '<p><strong>RE: NOTICE OF CLOSURE &mdash; ' + (v.facility_name || '').toUpperCase() + '</strong></p>' +
+    '<p>Following a routine monitoring visit conducted at your facility on ' + date + ' by REALMS Healthcare Services Consulting Limited, as a licensed monitoring operator for the Health Facility Monitoring and Accreditation Agency (HEFAMAA), Lagos State, your facility has been found to be in serious breach of the standards required to operate.</p>' +
+    '<p><strong>Grounds for this notice.</strong></p>' + grounds +
+    '<p>You are hereby directed to cease operations pending regulatory review and the correction of the above. This matter has been referred to HEFAMAA for enforcement. You may make representations to the Agency.</p>' +
+    '<p>Yours Sincerely,<br>For: REALMS Healthcare Services Consulting Limited</p>' +
+    '<p class="muted">Issued in support of the HEFAMAA regulatory mandate. Final enforcement decisions rest with HEFAMAA.</p>'
+}
+const SIGN_JOY = '<svg viewBox="0 0 428.4 134.9" xmlns="http://www.w3.org/2000/svg" style="height:62px;max-width:270px"><path d="M 41.7 126.9 Q 32.2 126.9 24.5 123.7 Q 16.9 120.5 12.5 114.4 Q 8.0 108.3 8.0 99.7 Q 8.0 91.7 11.1 86.6 Q 14.2 81.4 17.9 78.8 Q 20.0 77.3 21.8 76.7 Q 23.6 76.0 24.2 76.0 Q 24.8 76.0 24.8 76.5 Q 24.8 77.0 24.3 77.3 Q 19.1 80.4 16.3 86.1 Q 13.6 91.8 13.6 98.6 Q 13.6 106.4 17.2 112.2 Q 20.8 117.9 27.2 121.0 Q 33.6 124.1 42.0 124.1 Q 56.2 124.1 69.1 112.9 Q 82.0 101.7 94.0 81.7 Q 98.5 74.0 102.5 65.8 Q 106.5 57.6 110.1 49.6 Q 113.7 41.8 117.0 35.5 Q 120.2 29.3 122.6 25.0 Q 125.1 20.7 126.2 19.0 Q 100.9 22.4 87.0 29.8 Q 73.2 37.2 73.2 48.8 Q 73.2 54.8 76.3 57.8 Q 79.4 60.7 83.4 60.7 Q 87.3 60.7 91.2 58.2 Q 95.2 55.7 97.8 51.2 Q 100.5 46.8 100.5 40.9 Q 100.5 38.0 98.7 36.2 Q 98.7 35.2 99.7 35.2 Q 100.9 35.2 101.8 37.0 Q 102.8 38.8 102.8 41.5 Q 102.8 48.2 99.6 53.1 Q 96.5 57.9 91.6 60.5 Q 86.8 63.1 81.7 63.1 Q 77.8 63.1 74.3 61.4 Q 70.8 59.7 68.5 56.2 Q 66.3 52.7 66.3 47.5 Q 66.3 40.7 70.8 35.7 Q 75.4 30.6 83.7 27.0 Q 91.9 23.4 103.2 20.8 Q 114.4 18.2 127.9 16.3 Q 130.7 12.4 133.0 10.2 Q 135.4 8.0 138.2 8.0 Q 139.8 8.0 140.8 8.8 Q 141.7 9.6 141.7 11.2 Q 141.7 13.5 139.8 15.0 Q 137.9 16.4 135.0 17.3 Q 132.1 18.1 129.2 18.6 Q 125.5 25.0 122.8 31.8 Q 120.0 38.5 117.6 45.6 Q 115.3 52.6 112.6 60.0 Q 110.0 67.3 106.4 75.0 Q 98.9 90.9 89.1 102.5 Q 79.3 114.2 67.4 120.5 Q 55.5 126.9 41.7 126.9 Z M 131.0 16.1 Q 135.1 15.4 136.5 14.4 Q 137.9 13.3 137.9 12.4 Q 137.9 11.2 136.7 11.2 Q 135.6 11.2 134.0 12.9 Q 132.5 14.5 131.0 16.1 Z M 123.1 88.7 Q 119.0 88.7 117.0 85.8 Q 115.1 82.8 115.1 78.6 Q 115.1 74.7 116.6 70.5 Q 118.2 65.9 121.0 62.1 Q 123.9 58.3 127.3 56.0 Q 130.8 53.6 134.2 53.6 Q 138.3 53.6 140.2 56.4 Q 142.2 59.2 142.2 63.5 Q 142.2 66.5 141.2 69.8 Q 140.2 73.1 138.5 76.3 Q 139.8 77.6 142.2 77.6 Q 145.0 77.6 147.0 75.8 Q 149.0 74.0 150.9 69.4 Q 152.1 69.4 152.1 70.3 Q 150.2 74.9 147.7 77.1 Q 145.3 79.2 141.5 79.1 Q 139.2 79.1 137.7 77.8 Q 134.9 82.4 131.0 85.6 Q 127.2 88.7 123.1 88.7 Z M 124.5 86.5 Q 126.8 86.5 129.1 84.6 Q 131.4 82.6 133.3 80.1 Q 135.2 77.6 136.0 75.8 Q 134.4 72.9 134.2 71.5 Q 133.9 70.0 133.9 69.3 Q 133.9 67.4 134.9 66.4 Q 135.9 65.4 136.9 65.4 Q 138.3 65.4 139.3 66.6 Q 139.5 65.5 139.6 64.6 Q 139.7 63.6 139.7 62.7 Q 139.7 60.1 138.7 58.5 Q 137.8 56.8 135.8 56.8 Q 133.7 56.8 131.4 58.6 Q 129.1 60.4 127.0 63.4 Q 125.0 66.4 123.5 70.1 Q 122.2 73.2 121.5 76.0 Q 120.8 78.7 120.8 81.0 Q 120.8 83.5 121.7 85.0 Q 122.6 86.5 124.5 86.5 Z M 137.1 120.6 Q 131.9 120.6 129.7 118.5 Q 127.5 116.5 127.5 113.7 Q 127.5 109.4 130.7 105.8 Q 133.8 102.1 138.4 99.9 Q 143.6 97.5 150.2 96.0 Q 156.9 94.5 163.0 92.7 Q 164.9 89.4 166.5 85.2 Q 168.1 80.9 169.4 76.9 Q 170.7 72.8 171.5 70.2 Q 170.3 72.4 168.4 75.6 Q 166.6 78.7 164.3 81.7 Q 162.0 84.7 159.3 86.7 Q 156.7 88.7 153.8 88.7 Q 152.7 88.7 151.1 88.2 Q 149.6 87.7 148.4 86.4 Q 147.3 85.0 147.3 82.3 Q 147.3 79.7 148.9 76.6 Q 150.5 73.4 152.1 70.3 Q 151.6 70.3 151.2 70.2 Q 150.9 70.1 150.9 69.4 Q 151.2 68.8 152.1 66.8 Q 153.0 64.8 154.1 62.4 Q 155.3 60.0 156.2 58.2 Q 157.3 55.9 158.6 55.0 Q 160.0 54.1 161.3 54.1 L 167.5 54.1 Q 166.8 54.7 165.7 55.5 Q 164.7 56.2 163.8 57.7 Q 161.1 62.3 159.1 66.5 Q 157.1 70.8 154.8 75.6 Q 153.7 77.9 153.2 79.8 Q 152.7 81.7 152.7 83.1 Q 152.7 86.4 154.9 86.4 Q 157.3 86.4 160.7 82.5 Q 163.5 79.2 166.3 74.7 Q 169.2 70.1 171.8 65.3 Q 174.5 60.4 176.5 56.3 Q 177.6 54.1 180.4 54.1 L 185.9 54.1 Q 183.0 56.1 181.5 59.3 Q 179.9 62.5 178.0 67.5 Q 175.9 73.0 174.0 78.9 Q 172.1 84.8 169.8 91.0 Q 174.7 89.3 178.0 86.6 Q 181.3 83.9 183.8 79.7 Q 186.4 75.4 189.0 69.4 Q 190.2 69.4 190.2 70.3 Q 188.0 74.9 186.2 78.4 Q 184.4 81.9 182.2 84.6 Q 180.0 87.2 176.7 89.5 Q 173.4 91.7 168.2 93.8 Q 165.8 98.1 162.7 102.8 Q 159.7 107.4 155.8 111.5 Q 152.0 115.5 147.3 118.0 Q 142.7 120.6 137.1 120.6 Z M 134.7 118.6 Q 138.0 118.6 141.5 116.6 Q 145.0 114.6 148.3 111.5 Q 151.6 108.5 154.3 105.3 Q 157.1 102.2 158.8 99.8 Q 159.3 99.1 159.9 98.0 Q 160.5 96.9 161.1 95.9 Q 156.2 97.2 150.3 98.8 Q 144.5 100.3 140.2 102.2 Q 135.4 104.2 132.7 107.9 Q 129.9 111.6 129.9 114.5 Q 129.9 116.3 131.1 117.5 Q 132.2 118.6 134.7 118.6 Z M 231.8 94.8 Q 221.6 94.8 215.9 88.5 Q 210.1 82.2 210.1 70.6 Q 210.1 63.3 213.1 55.5 Q 208.9 52.6 207.0 49.0 Q 205.2 45.3 205.2 40.1 Q 205.2 33.2 208.3 27.8 Q 211.5 22.4 216.8 18.6 Q 222.1 14.7 228.7 12.7 Q 235.3 10.7 242.1 10.7 Q 248.8 10.7 255.1 12.8 Q 261.4 14.8 266.3 19.0 Q 271.3 23.3 274.0 29.8 Q 276.8 36.3 276.4 45.3 Q 281.1 42.4 284.5 39.0 Q 288.0 35.5 289.6 32.6 Q 290.1 31.7 290.6 31.7 Q 291.1 31.7 291.2 32.5 Q 291.4 33.3 290.7 34.4 Q 288.2 38.3 284.5 42.1 Q 280.9 45.9 276.0 48.9 Q 275.9 51.1 275.3 53.9 Q 274.8 56.6 273.8 59.6 Q 271.9 65.7 267.7 71.9 Q 263.6 78.1 257.9 83.3 Q 252.2 88.5 245.5 91.6 Q 238.8 94.8 231.8 94.8 Z M 235.1 57.7 Q 243.5 57.7 252.8 55.2 Q 262.2 52.8 270.4 48.5 Q 270.6 47.2 270.6 46.0 Q 270.6 44.7 270.6 43.5 Q 270.6 33.3 267.0 26.5 Q 263.5 19.7 257.2 16.3 Q 250.9 12.9 242.5 12.9 Q 236.0 12.9 230.2 14.9 Q 224.5 16.9 220.0 20.5 Q 215.6 24.1 213.1 29.0 Q 210.6 33.9 210.6 39.8 Q 210.6 42.5 211.4 45.7 Q 212.1 48.8 214.9 51.3 Q 216.3 48.3 218.7 44.5 Q 221.1 40.8 224.2 37.0 Q 227.4 33.1 231.0 29.9 Q 234.7 26.7 238.7 24.8 Q 242.6 22.8 246.6 22.8 Q 248.3 22.8 250.0 23.2 Q 251.8 23.6 253.4 24.6 Q 254.2 25.1 254.2 25.5 Q 254.2 25.8 253.7 26.0 Q 253.3 26.2 252.6 26.0 Q 251.3 25.6 249.7 25.6 Q 246.1 25.6 242.4 27.8 Q 238.7 29.9 235.2 33.4 Q 231.7 36.8 228.7 40.8 Q 225.7 44.7 223.4 48.5 Q 221.2 52.2 220.0 54.8 Q 226.1 57.7 235.1 57.7 Z M 232.6 92.4 Q 238.2 92.4 243.5 89.6 Q 248.9 86.8 253.7 82.0 Q 258.4 77.2 262.1 71.3 Q 265.8 65.4 268.0 59.2 Q 268.6 57.5 269.1 55.7 Q 269.6 53.8 269.7 52.1 Q 261.6 56.4 252.4 58.7 Q 243.2 61.0 234.8 61.0 Q 225.5 61.0 218.6 58.3 Q 215.5 66.2 215.5 73.8 Q 215.5 83.1 220.3 87.8 Q 225.2 92.4 232.6 92.4 Z M 243.0 120.6 Q 237.8 120.6 235.7 118.5 Q 233.5 116.5 233.5 113.7 Q 233.5 111.0 235.0 108.3 Q 236.4 105.4 238.9 103.3 Q 241.4 101.3 244.4 99.9 Q 249.5 97.5 256.2 96.0 Q 262.8 94.5 268.9 92.7 Q 269.7 91.3 270.6 89.8 Q 271.4 88.3 272.1 86.9 Q 274.1 82.9 275.8 79.0 Q 277.5 75.0 280.0 70.4 Q 279.1 70.4 279.1 69.4 L 283.5 59.3 Q 283.6 59.1 283.7 58.8 Q 283.8 58.4 283.8 58.0 Q 283.8 56.9 283.3 56.2 Q 282.8 55.4 282.6 55.1 L 288.1 54.9 L 288.6 54.9 Q 290.8 54.9 290.8 56.3 Q 290.8 57.0 290.2 58.5 L 282.2 77.3 Q 280.8 80.6 279.2 83.9 Q 277.6 87.2 275.9 90.6 Q 282.9 87.9 287.0 84.0 Q 291.2 80.0 293.4 76.1 Q 295.7 72.1 296.9 69.4 Q 298.1 69.4 298.1 70.3 Q 297.1 72.5 295.5 75.6 Q 293.9 78.6 291.3 82.0 Q 288.7 85.3 284.6 88.4 Q 280.5 91.5 274.3 93.8 Q 271.9 98.1 268.8 102.8 Q 265.7 107.4 261.8 111.5 Q 257.9 115.5 253.3 118.0 Q 248.6 120.6 243.0 120.6 Z M 240.6 118.6 Q 243.9 118.6 247.4 116.6 Q 251.0 114.6 254.3 111.5 Q 257.6 108.5 260.4 105.3 Q 263.1 102.1 264.8 99.7 Q 265.4 98.9 265.9 97.9 Q 266.4 96.9 266.9 95.9 Q 262.1 97.2 256.3 98.8 Q 250.5 100.3 246.1 102.2 Q 241.3 104.2 238.6 107.8 Q 235.9 111.5 235.9 114.4 Q 235.9 116.3 237.1 117.5 Q 238.2 118.6 240.6 118.6 Z M 291.0 49.0 Q 289.7 49.0 288.8 48.0 Q 287.8 47.0 287.8 45.6 Q 287.8 43.9 289.2 42.6 Q 290.6 41.2 292.3 41.2 Q 293.7 41.2 294.7 42.1 Q 295.7 43.0 295.7 44.4 Q 295.7 46.2 294.3 47.6 Q 292.9 49.0 291.0 49.0 Z M 299.8 88.7 Q 298.7 88.7 297.1 88.2 Q 295.6 87.7 294.4 86.4 Q 293.3 85.0 293.3 82.3 Q 293.3 79.7 295.0 76.3 Q 296.7 72.9 298.0 70.3 Q 296.9 70.3 296.9 69.4 Q 297.0 69.1 297.8 67.5 Q 298.6 65.9 299.7 63.7 Q 300.8 61.5 301.8 59.5 Q 302.9 57.4 303.5 56.3 Q 304.7 54.1 307.3 54.1 L 313.5 54.1 Q 311.8 55.4 310.4 57.0 Q 309.1 58.5 307.1 62.6 Q 307.1 62.6 306.4 64.0 Q 305.7 65.4 304.6 67.6 Q 303.6 69.7 302.5 71.9 Q 301.5 74.1 300.8 75.6 Q 299.5 78.4 299.1 80.1 Q 298.7 81.7 298.7 83.1 Q 298.7 86.4 300.9 86.4 Q 303.3 86.4 306.7 82.5 Q 309.5 79.2 312.2 74.6 Q 314.9 70.0 317.3 65.1 Q 319.8 60.2 321.7 56.3 Q 322.8 54.1 325.6 54.1 L 331.1 54.1 Q 328.9 55.9 326.7 59.5 Q 324.4 63.1 321.7 68.7 Q 321.0 70.2 319.9 72.5 Q 318.8 74.8 317.9 77.4 Q 317.1 80.0 317.1 82.6 Q 317.1 86.1 319.6 86.1 Q 323.0 86.1 326.2 81.4 Q 329.4 76.7 332.5 69.4 Q 333.3 69.4 333.4 69.5 Q 333.6 69.6 333.7 70.3 Q 332.6 73.0 331.0 76.2 Q 329.5 79.3 327.5 82.2 Q 325.6 85.1 323.2 86.9 Q 320.9 88.7 318.1 88.7 Q 315.6 88.7 314.0 86.9 Q 312.4 85.0 312.4 81.6 Q 312.4 78.9 313.4 75.8 Q 311.7 78.8 309.5 81.8 Q 307.3 84.8 304.8 86.8 Q 302.3 88.7 299.8 88.7 Z M 322.8 89.2 Q 326.5 82.1 329.8 75.0 Q 333.1 67.8 336.5 61.4 Q 338.5 57.8 339.8 56.4 Q 341.2 54.9 343.5 54.9 Q 344.3 54.9 345.2 55.2 Q 346.1 55.4 347.0 55.4 Q 347.6 55.4 347.9 55.3 Q 346.5 56.1 344.3 59.3 Q 342.1 62.4 339.8 66.5 Q 337.5 70.6 335.7 74.2 Q 337.6 71.9 339.6 69.6 Q 341.7 67.3 344.2 65.2 Q 346.4 63.3 348.8 61.0 Q 351.3 58.8 353.7 57.2 Q 356.1 55.6 357.9 55.6 Q 358.6 55.6 358.8 55.7 Q 360.7 56.5 360.7 58.3 Q 360.7 58.9 360.2 60.1 Q 358.9 63.5 356.8 67.1 Q 354.8 70.6 353.0 74.2 Q 354.5 72.4 356.8 69.8 Q 359.0 67.2 361.3 65.2 Q 363.5 63.2 366.9 61.0 Q 370.3 58.8 373.6 57.2 Q 376.9 55.6 378.9 55.6 Q 379.6 55.6 379.9 55.7 Q 379.9 55.7 378.8 57.7 Q 377.7 59.6 376.0 62.8 Q 374.4 65.9 372.7 69.5 Q 371.0 73.0 369.6 76.2 Q 368.3 79.5 367.9 81.7 Q 367.6 83.0 367.6 84.1 Q 367.6 85.7 368.2 86.2 Q 368.8 86.7 369.5 86.7 Q 371.5 86.7 373.4 85.0 Q 375.4 83.3 377.3 80.7 Q 379.2 78.0 380.7 75.0 Q 382.3 72.0 383.4 69.4 Q 384.6 69.4 384.6 70.3 Q 383.5 73.0 381.8 76.2 Q 380.2 79.5 378.1 82.4 Q 376.0 85.3 373.5 87.2 Q 371.0 89.1 368.1 89.1 Q 366.0 89.1 364.1 87.7 Q 362.3 86.3 362.3 82.5 Q 362.3 78.4 364.2 74.3 Q 366.2 70.2 368.3 66.8 Q 369.3 65.1 369.3 64.1 Q 369.3 62.9 368.1 62.9 Q 367.1 62.9 365.3 63.9 Q 363.6 64.9 361.0 67.4 Q 359.4 68.9 357.2 71.6 Q 355.1 74.2 352.9 77.3 Q 350.7 80.4 349.1 83.4 Q 347.5 86.4 347.0 88.7 Q 345.5 88.7 344.6 87.5 Q 343.7 86.2 343.7 84.5 Q 343.7 84.2 343.7 83.9 Q 343.7 83.6 343.8 83.2 Q 344.3 80.1 345.4 78.0 Q 346.5 75.8 347.9 72.9 Q 348.6 71.6 349.5 69.9 Q 350.4 68.1 351.1 66.5 Q 351.8 64.8 351.8 63.7 Q 351.8 62.7 351.0 62.7 Q 350.1 62.7 348.6 63.6 Q 347.2 64.5 345.9 65.7 Q 344.6 66.8 343.9 67.4 Q 341.4 69.8 337.8 74.3 Q 334.3 78.8 330.1 87.1 Q 329.5 88.2 328.7 88.5 Q 327.9 88.7 326.2 88.7 Q 325.1 88.7 324.3 88.8 Q 323.6 88.8 322.8 89.2 Z M 405.1 89.0 Q 402.8 89.0 401.0 87.7 Q 399.3 86.4 399.3 82.4 Q 399.3 80.7 399.5 79.2 Q 399.8 77.7 400.2 76.0 Q 399.3 77.5 397.7 79.7 Q 396.1 81.9 394.1 84.0 Q 392.2 86.1 390.1 87.5 Q 388.1 88.9 386.3 88.9 Q 383.7 88.9 382.1 86.6 Q 380.5 84.2 380.5 80.4 Q 380.5 76.3 382.4 71.6 Q 384.3 66.9 387.6 62.6 Q 390.9 58.3 395.2 55.6 Q 399.5 52.9 404.2 52.9 Q 406.5 52.9 408.6 53.7 Q 410.7 54.4 412.3 56.1 Q 413.0 56.8 413.0 57.7 Q 413.0 58.3 412.5 58.7 Q 412.0 59.1 411.2 58.9 Q 410.1 55.4 406.5 55.4 Q 404.8 55.4 402.6 56.5 Q 399.9 57.9 396.8 61.0 Q 393.8 64.0 391.1 67.9 Q 388.5 71.7 386.8 75.6 Q 385.1 79.5 385.1 82.7 Q 385.1 86.0 387.6 86.0 Q 389.8 86.0 392.1 83.9 Q 394.5 81.8 396.6 78.7 Q 398.8 75.5 400.6 72.4 Q 402.4 69.3 403.4 67.4 Q 404.9 64.7 406.2 62.9 Q 407.5 61.1 409.9 61.1 Q 411.0 61.1 412.1 61.4 Q 413.2 61.7 414.4 61.5 Q 411.4 64.5 409.2 68.6 Q 406.9 72.7 405.7 76.7 Q 404.5 80.6 404.5 83.3 Q 404.5 86.3 406.5 86.3 Q 408.1 86.3 409.9 84.5 Q 411.8 82.7 413.5 80.0 Q 415.3 77.2 416.8 74.4 Q 418.3 71.5 419.2 69.4 Q 419.7 69.4 420.0 69.5 Q 420.4 69.6 420.4 70.3 Q 420.3 70.7 420.0 71.2 Q 419.8 71.6 419.3 72.7 Q 418.5 74.3 417.1 77.0 Q 415.7 79.7 413.8 82.5 Q 411.9 85.2 409.7 87.1 Q 407.5 89.0 405.1 89.0 Z" fill="#16305B"/></svg>'
+function buildLetter(v, d, origin) {
+  const date = (v.arrival_time || v.created_at || '').slice(0, 10)
+  const ref = 'RHSC/' + (v.area || 'LAG').slice(0, 3).toUpperCase() + '/' + date.replace(/-/g, '')
+  const strengthsP = d.strengths.length ? 'Your facility demonstrated good practice in areas including ' + d.strengths.slice(0, 4).map(s => s.split(': ').pop().toLowerCase()).join(', ') + '.' : 'Areas of strength were noted during the visit.'
+  const gapsL = d.gaps.length ? '<ol>' + d.gaps.map(g => '<li>' + g.category + ' &mdash; ' + g.label + '. Required action: ' + (g.action || 'address the non-compliance') + '. Timeline: ' + (g.timeline || 'as advised') + '.</li>').join('') + '</ol>' : '<p>No significant non-compliance was recorded.</p>'
+  return docHead(origin) + '<p class="right">Ref: ' + ref + '<br>' + date + '</p>' +
+    '<p>The Proprietor / Person in Charge<br>' + v.facility_name + '<br>' + (v.area || '') + ', Lagos State</p>' +
+    '<p><strong>Dear Sir/Ma,</strong></p>' +
+    '<p><strong>RE: OUTCOME OF ROUTINE HEALTH FACILITY MONITORING AT ' + (v.facility_name || '').toUpperCase() + '</strong></p>' +
+    '<p>Following the routine monitoring visit conducted at your facility on ' + date + ' by REALMS Healthcare Services Consulting Limited, in collaboration with the Health Facility Monitoring and Accreditation Agency (HEFAMAA), Lagos State, please find below a summary of our assessment and the actions required.</p>' +
+    '<p>The overall outcome of the visit is <strong>' + ragText(v.overall_rating) + '</strong>, with a compliance score of <strong>' + (v.score != null ? v.score + '%' : 'not scored') + '</strong>.</p>' +
+    '<p><strong>Areas of strength.</strong> ' + strengthsP + '</p>' +
+    '<p><strong>Areas requiring correction.</strong></p>' + gapsL +
+    '<p>You are required to complete the corrective actions above by <strong>' + (d.remediation_deadline || 'the date advised') + '</strong>. A re-inspection is scheduled within ' + (d.reinspection || 'the coming weeks') + ' to confirm the required corrections. Continued non-compliance may result in escalation to HEFAMAA for regulatory action.</p>' +
+    '<p style="margin-bottom:2px">Yours Sincerely,</p>' +
+    '<div style="margin:2px 0">' + SIGN_JOY + '</div>' +
+    '<p style="margin-top:0"><strong>Joy Ojuma</strong><br>Team Lead<br>For: REALMS Healthcare Services Consulting Limited</p>' +
+    '<p class="muted">Issued in support of the HEFAMAA regulatory mandate. This letter is not legal advice.</p>'
+}
+
+function buildHefamaaDoc(v, origin) {
+  const date = (v.arrival_time || v.created_at || '').slice(0, 10)
+  const hef = (v.monitoring && v.monitoring.hefamaa) || {}
+  const body = HEFAMAA_FORM.map(sec => {
+    const rows = sec.fields.filter(f => { const val = hef[f[0]]; return Array.isArray(val) ? val.length : (val != null && val !== '') }).map(f => '<tr><td>' + f[1] + '</td><td>' + (Array.isArray(hef[f[0]]) ? hef[f[0]].join(', ') : String(hef[f[0]])) + '</td></tr>').join('')
+    return '<h3>' + sec.title + '</h3>' + (rows ? '<table>' + rows + '</table>' : '<p class="muted">Not completed.</p>')
+  }).join('')
+  return docHead(origin) + '<h1>HEFAMAA Facility Inspection Form</h1><p><strong>Facility:</strong> ' + v.facility_name + ' &middot; <strong>Area:</strong> ' + (v.area || '') + ' &middot; <strong>Date:</strong> ' + date + '</p>' + body + '<p class="muted">Digitised Lagos HEFAMAA Facility Inspection Tool (Primary Health Care). Prepared by REALMS Healthcare Services Consulting Limited.</p>'
+}
+function SignaturePad({ value, onChange }) {
+  const ref = useRef(null); const drawing = useRef(false); const last = useRef(null)
+  useEffect(() => { const c = ref.current; if (!c) return; const ctx = c.getContext('2d'); ctx.lineWidth = 2.2; ctx.lineCap = 'round'; ctx.strokeStyle = '#241536' }, [])
+  function pos(e) { const c = ref.current; const r = c.getBoundingClientRect(); const t = e.touches ? e.touches[0] : e; return { x: (t.clientX - r.left) * (c.width / r.width), y: (t.clientY - r.top) * (c.height / r.height) } }
+  function start(e) { e.preventDefault(); drawing.current = true; last.current = pos(e) }
+  function move(e) { if (!drawing.current) return; e.preventDefault(); const p = pos(e); const ctx = ref.current.getContext('2d'); ctx.beginPath(); ctx.moveTo(last.current.x, last.current.y); ctx.lineTo(p.x, p.y); ctx.stroke(); last.current = p }
+  function end() { if (!drawing.current) return; drawing.current = false; onChange(ref.current.toDataURL('image/png')) }
+  function clear() { const c = ref.current; c.getContext('2d').clearRect(0, 0, c.width, c.height); onChange('') }
+  return (<div className="sigwrap"><canvas ref={ref} width="600" height="170" className="sigpad" onMouseDown={start} onMouseMove={move} onMouseUp={end} onMouseLeave={end} onTouchStart={start} onTouchMove={move} onTouchEnd={end} /><button type="button" className="mini" onClick={clear}>Clear signature</button></div>)
+}
+
+function DebriefPage({ userId, facilities }) {
+  const [visits, setVisits] = useState([])
+  const [active, setActive] = useState(null)
+  const [strengths, setStrengths] = useState([])
+  const [gaps, setGaps] = useState([])
+  const [deadline, setDeadline] = useState('')
+  const [reinspection, setReinspection] = useState('2 weeks')
+  const [letterIssued, setLetterIssued] = useState(true)
+  const [propName, setPropName] = useState('')
+  const [ack, setAck] = useState(false)
+  const [signature, setSignature] = useState('')
+  const [genesys, setGenesys] = useState(false)
+  const [genesysNote, setGenesysNote] = useState('')
+  const [closure, setClosure] = useState(false)
+  const [escalate, setEscalate] = useState(false)
+  const [narrative, setNarrative] = useState('')
+  const [online, setOnline] = useState(typeof navigator !== 'undefined' ? navigator.onLine : true)
+  const [busy, setBusy] = useState(false); const [msg, setMsg] = useState(''); const [saveState, setSaveState] = useState('')
+  const [q, setQ] = useState('')
+
+  useEffect(() => { VIS.list().then(setVisits).catch(() => {}) }, [])
+  useEffect(() => { const on = () => setOnline(true), off = () => setOnline(false); window.addEventListener('online', on); window.addEventListener('offline', off); return () => { window.removeEventListener('online', on); window.removeEventListener('offline', off) } }, [])
+
+  function open(v) {
+    setActive(v); setMsg(''); setSaveState('')
+    const existing = v.debrief
+    if (existing) {
+      setStrengths(existing.strengths || []); setGaps(existing.gaps || []); setDeadline(existing.remediation_deadline || '')
+      setReinspection(existing.reinspection || '2 weeks'); setLetterIssued(existing.letter_issued !== false)
+      setPropName(existing.proprietor_name || (v.person_in_charge && v.person_in_charge.name) || ''); setAck(!!existing.proprietor_ack); setSignature(existing.signature || '')
+      setGenesys(!!existing.genesys_interest); setGenesysNote(existing.genesys_note || ''); setClosure(!!existing.closure_recommended); setEscalate(!!existing.escalated); setNarrative(existing.narrative || '')
+    } else {
+      const d = deriveDebrief(v); setStrengths(d.strengths); setGaps(d.gaps); setDeadline(''); setReinspection(getSettings().default_reinspection || '2 weeks'); setLetterIssued(true)
+      setPropName((v.person_in_charge && v.person_in_charge.name) || ''); setAck(false); setSignature('')
+      setGenesys(false); setGenesysNote(''); setClosure(false); setEscalate(false); setNarrative('')
+    }
+  }
+  function setGap(i, patch) { setGaps(gs => gs.map((g, x) => x === i ? { ...g, ...patch } : g)); setSaveState('draft') }
+
+  function payload() { return { strengths, gaps, remediation_deadline: deadline, reinspection, letter_issued: letterIssued, proprietor_name: propName.trim(), proprietor_ack: ack, signature, signed_at: signature ? new Date().toISOString() : '', genesys_interest: genesys, genesys_note: genesysNote.trim(), closure_recommended: closure, escalated: escalate, narrative: narrative.trim(), updatedAt: new Date().toISOString() } }
+  function findingsText() {
+    const g = gaps.map(x => '- ' + (x.category ? x.category + ': ' : '') + (x.label || '')).join('\n')
+    const s = strengths.map(x => '- ' + (x.label || x)).join('\n')
+    return 'Facility: ' + (active ? active.facility_name : '') + ' (' + (active ? active.area : '') + '). Overall: ' + ragText(active && active.overall_rating) + (active && active.score != null ? ' ' + active.score + '%' : '') + '.\nStrengths:\n' + (s || '- none noted') + '\nGaps:\n' + (g || '- none noted')
+  }
+
+  async function save() {
+    if (!active) return
+    if (!ack) { setMsg('Confirm the proprietor acknowledgement to complete the debrief.'); return }
+    setBusy(true); setMsg('')
+    const d = payload(); const firstClose = active.status !== 'debriefed'
+    try {
+      await VIS.update(active.id, { debrief: d, status: 'debriefed' })
+      setSaveState('saved'); setMsg('Debrief saved.'); toast('Debrief saved.')
+      setVisits(vs => vs.map(v => v.id === active.id ? { ...v, debrief: d, status: 'debriefed' } : v))
+      if (firstClose) {
+        try {
+          await NOTIF.add({ type: 'visit_completed', visit_id: active.id, facility_name: active.facility_name, area: active.area, channel: 'customer_service', status: 'pending', message: 'Visit completed at ' + active.facility_name + ' (' + (active.area || '') + '). Customer service to call the facility to hear how the visit went.' }, userId)
+        } catch (e) {}
+        const cs = getSettings(); const csMsg = 'RHSC: monitoring completed at ' + active.facility_name + '. Please call the facility to follow up.'
+        // The facility hears from us directly, so a demand for money has somewhere to go.
+        const fac = (facilities || []).find(f => f.id === active.facility_id || f.name === active.facility_name)
+        const encPhone = (active.person_in_charge && active.person_in_charge.phone) || ''
+        const facNum = (fac && fac.phone) || encPhone
+        // a number captured at the visit sticks to the facility, so follow-ups can dial it later
+        if (fac && !fac.phone && encPhone) { try { await FAC.update(fac.id, { phone: encPhone }) } catch (e) {} }
+        if (facNum) {
+          const fm = 'RHSC/HEFAMAA: your facility was monitored today. This visit is free of charge and our officers must never request money, gifts or favours. If anything was asked of you, report it in confidence to ' + CONTACT.phone + '.'
+          try { sendNotify({ channel: 'sms', to: facNum, message: fm }) } catch (e) {}
+          try { sendNotify({ channel: 'whatsapp', to: facNum, message: fm }) } catch (e) {}
+          try { await NOTIF.add({ type: 'integrity_notice', visit_id: active.id, facility_name: active.facility_name, area: active.area, channel: 'sms', status: 'sent', message: fm }, userId) } catch (e) {}
+        }
+        if (cs.cs_email) { try { sendNotify({ channel: 'email', to: cs.cs_email, subject: 'Visit completed: ' + active.facility_name, message: csMsg }) } catch (e) {} }
+        if (cs.cs_phone) { try { sendNotify({ channel: 'sms', to: cs.cs_phone, message: csMsg }) } catch (e) {} }
+        if (cs.cs_whatsapp) { try { sendNotify({ channel: 'whatsapp', to: cs.cs_whatsapp, message: csMsg }) } catch (e) {} }
+      }
+    } catch (e) { setSaveState('pending'); setMsg('Saved locally. It will sync when you are back online; use Sync now to retry.') }
+    finally { setBusy(false) }
+  }
+  const origin = (typeof window !== 'undefined' && window.location) ? window.location.origin : ''
+
+  if (!active) {
+    const ready = visits.filter(v => (v.status === 'monitored' || (v.status === 'debriefed' && !(v.debrief && v.debrief.first_visit))) && matchQ(v, q))
+    const anyReady = visits.some(v => v.status === 'monitored' || (v.status === 'debriefed' && !(v.debrief && v.debrief.first_visit)))
+    return (<div className="page">
+      <div className="ptitle"><div><p className="eyebrow">Debrief</p><h2>Close out visits</h2></div><span className={'net ' + (online ? 'on' : 'off')}>{online ? 'Online' : 'Offline'}</span></div>
+      {anyReady && <div className="list-tools"><SearchBox value={q} onChange={setQ} placeholder="Search facilities…" /></div>}
+      {ready.length === 0 ? <p className="empty">{anyReady ? 'No visits match your search.' : 'No assessed visits yet. Complete a Monitor assessment first.'}</p> :
+        <div className="mon-list">{ready.map(v => (
+          <button className="mon-row" key={v.id} onClick={() => open(v)}>
+            <div><span className="fname">{v.facility_name}</span><span className="fmeta">{v.area} &middot; {(v.arrival_time || v.created_at || '').slice(0, 10)}</span></div>
+            <div className="mon-right"><Chip rag={v.overall_rating} pct={v.score} /><span className={'chip ' + (v.status === 'debriefed' ? 'green' : 'monitored')}>{v.status === 'debriefed' ? 'Debriefed' : 'To debrief'}</span></div>
+          </button>
+        ))}</div>}
+    </div>)
+  }
+
+  return (<div className="page debrief">
+    <div className="mon-head">
+      <div className="mon-head-l"><button className="linkbtn subtle" onClick={() => setActive(null)}>&larr; All visits</button><h2>{active.facility_name}</h2><p className="fsub">{active.area} &middot; {(active.arrival_time || '').slice(0, 10)}</p></div>
+      <div className="mon-head-r"><span className={'net ' + (online ? 'on' : 'off')}>{online ? 'Online' : 'Offline'}</span><Chip rag={active.overall_rating} pct={active.score} /></div>
+    </div>
+    {msg && <p className="auth-msg block">{msg}</p>}
+
+    <div className="dsec"><h3>Strengths</h3>
+      {strengths.length ? <ul className="dstr">{strengths.map((s, i) => <li key={i}>{s}</li>)}</ul> : <p className="empty sm">No green-rated items.</p>}
+    </div>
+
+    <div className="dsec"><h3>Gaps and corrective actions</h3>
+      {gaps.length === 0 ? <p className="empty sm">No amber or red items. Nothing to correct.</p> : gaps.map((g, i) => (
+        <div className="gap" key={g.key}>
+          <div className="gap-top"><span className="gap-label">{g.category}: {g.label}</span><span className={'chip ' + chipCls(g.rating)}>{ragText(g.rating)}</span></div>
+          <div className="fgrid two">
+            <label className="field sm"><span>Required action</span><input value={g.action} onChange={e => setGap(i, { action: e.target.value })} /></label>
+            <label className="field sm"><span>Timeline</span><input value={g.timeline} onChange={e => setGap(i, { timeline: e.target.value })} placeholder="e.g. 2 weeks" /></label>
+          </div>
+        </div>
+      ))}
+    </div>
+
+    <div className="dsec"><h3>Next steps</h3>
+      <div className="fgrid">
+        <label className="field sm"><span>Remediation deadline</span><input type="date" value={deadline} onChange={e => { setDeadline(e.target.value); setSaveState('draft') }} /></label>
+        <label className="field sm"><span>Re-inspection within</span><select value={reinspection} onChange={e => { setReinspection(e.target.value); setSaveState('draft') }}>{REINSPECT.map(r => <option key={r} value={r}>{r}</option>)}</select></label>
+        <label className="field sm chkfield"><span>Compliance letter</span><label className="inl"><input type="checkbox" checked={letterIssued} onChange={e => { setLetterIssued(e.target.checked); setSaveState('draft') }} /> Issue letter</label></label>
+      </div>
+    </div>
+
+    <div className="dsec"><h3>AI recommendations</h3>
+      <div className="ai-row">
+        <AIButton label="Draft report narrative" build={() => ({ system: 'You are a HEFAMAA facility-monitoring officer at RHSC writing the narrative summary of a monitoring visit. Write 2 short paragraphs in professional British English: what was observed and the required improvements. Factual, non-alarmist, no invented details.', prompt: findingsText(), max_tokens: 500 })} onText={txt => { setNarrative(txt); setSaveState('draft') }} />
+        <AIButton label="Suggest corrective actions" build={() => ({ system: 'You are a HEFAMAA monitoring officer. From the gaps, list specific, practical corrective actions with realistic timelines as short bullet points. Only actions grounded in the gaps provided.', prompt: findingsText(), max_tokens: 500 })} onText={txt => { setNarrative(n => (n ? n + '\n\nCorrective actions:\n' : 'Corrective actions:\n') + txt); setSaveState('draft') }} />
+      </div>
+      <label className="field sm"><span>Narrative &amp; recommendations (editable, included in the report)</span><textarea rows="5" value={narrative} onChange={e => { setNarrative(e.target.value); setSaveState('draft') }} placeholder="Draft with AI, or write your own. Always review before issuing." /></label>
+    </div>
+
+    <div className="dsec"><h3>Regulatory action</h3>
+      <div className="fgrid">
+        <label className="field sm chkfield"><span>Closure notice</span><label className="inl"><input type="checkbox" checked={closure} onChange={e => { setClosure(e.target.checked); setSaveState('draft') }} /> Recommend closure</label></label>
+        <label className="field sm chkfield"><span>Escalation</span><label className="inl"><input type="checkbox" checked={escalate} onChange={e => { setEscalate(e.target.checked); setSaveState('draft') }} /> Escalate critical finding</label></label>
+      </div>
+      <p className="hintline">Closure applies where a facility operates without registration, with an expired licence, without HEFAMAA signage, or without qualified personnel on duty.</p>
+    </div>
+
+    <div className="dsec"><h3>Digital health</h3>
+      <label className="field sm chkfield"><span>Genesys EMR</span><label className="inl"><input type="checkbox" checked={genesys} onChange={e => { setGenesys(e.target.checked); setSaveState('draft') }} /> Facility interested in the Genesys EMR</label></label>
+      {genesys && <label className="field sm"><span>Notes</span><input value={genesysNote} onChange={e => { setGenesysNote(e.target.value); setSaveState('draft') }} placeholder="Contact, timing, systems in use" /></label>}
+    </div>
+
+    <div className="dsec"><h3>Proprietor sign-off</h3>
+      <div className="fgrid two">
+        <label className="field sm"><span>Person in charge</span><input value={propName} onChange={e => { setPropName(e.target.value); setSaveState('draft') }} /></label>
+        <label className="field sm chkfield"><span>Acknowledgement</span><label className="inl"><input type="checkbox" checked={ack} onChange={e => setAck(e.target.checked)} /> Findings acknowledged</label></label>
+      </div>
+      <p className="pick-label">Signature</p>
+      <SignaturePad value={signature} onChange={s => { setSignature(s); setSaveState('draft') }} />
+    </div>
+
+    <div className="mon-actions">
+      <button className="btn primary" onClick={save} disabled={busy}>{busy ? 'Saving\u2026' : 'Save debrief'}</button>
+      {saveState === 'pending' && <button className="btn ghost" onClick={save}>Sync now</button>}
+      <button className="btn ghost" onClick={() => printDoc('Monitoring Report', buildReport(active, payload(), origin))}>Monitoring report</button>
+      <button className="btn primary" onClick={() => printDoc('HEFAMAA Inspection Report', buildInspectionReport(active, payload(), origin))}>Inspection report</button>
+      <button className="btn ghost" onClick={() => printDoc('HEFAMAA Form', buildHefamaaDoc(active, origin))}>HEFAMAA form</button>
+      {letterIssued && <button className="btn ghost" onClick={() => printDoc('Compliance Letter', buildLetter(active, payload(), origin))}>Corrective letter</button>}
+      {closure && <button className="btn ghost" onClick={() => printDoc('Closure Notice', buildClosure(active, payload(), origin))}>Closure notice</button>}
+      <span className="save-note">{saveState === 'saved' ? 'Saved' : saveState === 'pending' ? 'Pending sync' : ''}</span>
+    </div>
+    <p className="hintline">Reports open in a new tab; use your browser's Print or Save as PDF. Human review before issue is expected.</p>
+  </div>)
+}
+
+/* ---------- proprietor view ---------- */
+function ProprietorPage({ facilityId, facilities }) {
+  const [visits, setVisits] = useState([])
+  const [q, setQ] = useState('')
+  useEffect(() => { VIS.list().then(setVisits).catch(() => {}) }, [])
+  const origin = (typeof window !== 'undefined' && window.location) ? window.location.origin : ''
+  const mineFac = (facilities || []).find(f => f.id === facilityId)
+  const all = visits.filter(v => (v.status === 'monitored' || v.status === 'debriefed') && (!facilityId || v.facility_id === facilityId || (mineFac && v.facility_name === mineFac.name)))
+  const mine = all.filter(v => matchQ(v, q))
+  return (<div className="page">
+    <div className="ptitle"><div><p className="eyebrow">My facility</p><h2>{mineFac ? mineFac.name : 'Monitoring outcomes'}</h2></div></div>
+    <p className="page-lede">Your latest monitoring outcomes, the corrective actions required, and re-inspection timelines.</p>
+    {all.length > 0 && <div className="list-tools"><SearchBox value={q} onChange={setQ} placeholder="Search facilities…" /></div>}
+    {mine.length === 0 ? <p className="empty">{all.length === 0 ? 'No monitoring visits recorded yet.' : 'No visits match your search.'}</p> :
+      <div className="prop-list">{mine.map(v => {
+        const d = v.debrief || deriveDebrief(v); const gaps = d.gaps || []
+        return (<div className="prop-card" key={v.id}>
+          <div className="prop-head"><div><span className="fname">{v.facility_name}</span><span className="fmeta">{v.area} &middot; {(v.arrival_time || v.created_at || '').slice(0, 10)}</span></div><Chip rag={v.overall_rating} pct={v.score} /></div>
+          <div className="prop-sec"><h4>Corrective actions</h4>
+            {gaps.length === 0 ? <p className="muted sm">No corrective actions outstanding. Well done.</p> :
+              <ul className="corr">{gaps.map((g, i) => (<li key={i}><span className="corr-item">{(g.category ? g.category + ': ' : '') + (typeof g.label === 'string' ? g.label : '')}</span>{g.action ? <em> {g.action}</em> : null}{g.timeline ? <span className="corr-tl">{g.timeline}</span> : null}</li>))}</ul>}
+          </div>
+          {(d.remediation_deadline || d.reinspection) && <div className="prop-sec"><h4>Re-inspection</h4><p className="muted sm">{d.remediation_deadline ? 'Corrective actions due by ' + d.remediation_deadline + '. ' : ''}{d.reinspection ? 'A re-inspection is scheduled within ' + d.reinspection + '.' : ''}</p></div>}
+          <div className="prop-actions"><button className="mini" onClick={() => printDoc('Monitoring Report', buildReport(v, d, origin))}>View full report</button></div>
+        </div>)
+      })}</div>}
+    <p className="hintline">{facilityId ? 'This view is limited to your facility.' : 'No facility is linked to your account yet. Contact RHSC.'}</p>
+  </div>)
+}
+
+/* ---------- customer service follow-ups ---------- */
+function fuDaysSince(d) { if (!d) return null; const t = new Date((d.length > 10 ? d.slice(0, 10) : d) + 'T00:00:00').getTime(); if (isNaN(t)) return null; return Math.max(0, Math.floor((Date.now() - t) / 86400000)) }
+function FollowUpsPage({ userId, identity, facilities, onChange }) {
+  const [visits, setVisits] = useState([])
+  const [notes, setNotes] = useState([])
+  const [callLog, setCallLog] = useState([])
+  const [q, setQ] = useState('')
+  const [filter, setFilter] = useState('awaiting')
+  const [openId, setOpenId] = useState(null)
+  const [form, setForm] = useState({ outcome: 'Reached', notes: '', caller: '', integrity: 'Not asked' })
+  const [busy, setBusy] = useState(false)
+  const [briefs, setBriefs] = useState({})
+  const [showLog, setShowLog] = useState(false)
+  const [logTab, setLogTab] = useState('calls')
+  const [copied, setCopied] = useState('')
+  async function refresh() {
+    try { setVisits(await VIS.list()) } catch (e) {}
+    try { setNotes(await NOTIF.list()) } catch (e) {}
+    try { setCallLog(await CALLS.list()) } catch (e) {}
+  }
+  useEffect(() => { refresh() }, [])
+
+  const phoneMap = {}
+  ;(facilities || []).forEach(f => { if (!f) return; if (f.id) phoneMap['id:' + f.id] = f.phone || ''; if (f.name) phoneMap['n:' + f.name.toLowerCase()] = f.phone || '' })
+  const facPhone = v => phoneMap['id:' + v.facility_id] || phoneMap['n:' + (v.facility_name || '').toLowerCase()] || (v.person_in_charge && v.person_in_charge.phone) || ''
+  const telHref = n => 'tel:' + String(n).replace(/[^0-9+]/g, '')
+  function callsFor(id) { return callLog.filter(c => c.visit_id === id) }
+  const completedAt = v => ((v.debrief && v.debrief.updatedAt) || v.visit_date || v.arrival_time || v.created_at || '').slice(0, 10)
+  function integrityFlagged(id) { return callsFor(id).some(c => c.integrity === 'Payment or gift was requested') }
+  function statusOf(v) {
+    const last = callsFor(v.id)[0]
+    if (integrityFlagged(v.id)) return 'escalated'
+    if (!last) return 'awaiting'
+    if (last.outcome === 'Escalated') return 'escalated'
+    return 'called'
+  }
+
+  const all = visits.filter(v => v.status === 'debriefed' && !(v.debrief && v.debrief.first_visit))
+  const counts = { awaiting: 0, called: 0, escalated: 0, integrity: 0 }
+  all.forEach(v => { counts[statusOf(v)]++; if (integrityFlagged(v.id)) counts.integrity++ })
+  const prio = { escalated: 0, awaiting: 1, called: 2 }
+  const shown = all
+    .filter(v => filter === 'all' || statusOf(v) === filter)
+    .filter(v => matchQ(v, q))
+    .sort((a, b) => { const d = prio[statusOf(a)] - prio[statusOf(b)]; return d !== 0 ? d : (completedAt(a) || '').localeCompare(completedAt(b) || '') })
+
+  function openForm(v) { setOpenId(v.id); setForm({ outcome: 'Reached', notes: '', caller: (identity && identity.name) || '', integrity: 'Not asked' }) }
+  function copyNum(n) { try { navigator.clipboard.writeText(n); setCopied(n); setTimeout(() => setCopied(''), 1400) } catch (e) {} }
+  async function saveCall(v) {
+    setBusy(true)
+    try {
+      await CALLS.add({ visit_id: v.id, facility_name: v.facility_name, area: v.area, outcome: form.outcome, notes: form.notes.trim(), caller: form.caller.trim(), integrity: form.integrity }, userId)
+      if (form.integrity === 'Payment or gift was requested') {
+        const m = 'INTEGRITY ALERT: ' + v.facility_name + ' (' + (v.area || '') + ') reports that a payment or gift was requested during monitoring. Logged by ' + (form.caller || 'customer service') + '.'
+        try { await NOTIF.add({ type: 'integrity_alert', visit_id: v.id, facility_name: v.facility_name, area: v.area, channel: 'email', status: 'sent', message: m }, userId) } catch (e) {}
+        try { sendNotify({ channel: 'email', to: OWNER_EMAIL, subject: 'Integrity alert: ' + v.facility_name, message: m }) } catch (e) {}
+        toast('Integrity alert raised with the executive office.', 'warn')
+      } else { toast('Call logged.') }
+      setOpenId(null); await refresh(); if (onChange) onChange()
+    } catch (e) {} finally { setBusy(false) }
+  }
+  function aiBrief(v) {
+    return { system: 'You brief RHSC customer service before they call a facility about a completed monitoring visit. In 3 to 4 sentences summarise the outcome, the key gaps, and what to ask on the call. Use only the data.', prompt: JSON.stringify({ facility: v.facility_name, area: v.area, history: visits.filter(x => x.facility_name === v.facility_name).map(x => ({ date: (x.visit_date || x.arrival_time || x.created_at || '').slice(0, 10), rating: x.overall_rating, score: x.score, status: x.status, gaps: ((x.debrief && x.debrief.gaps) || []).map(g => g.label) })) }), max_tokens: 350 }
+  }
+
+  const kpis = [
+    { key: 'awaiting', v: counts.awaiting, l: 'Awaiting call', tone: 'amber' },
+    { key: 'called', v: counts.called, l: 'Called', tone: 'green' },
+    { key: 'escalated', v: counts.escalated, l: 'Escalated', tone: 'red' },
+    { key: 'all', v: all.length, l: 'All follow-ups', tone: 'plain' },
+  ]
+
+  return (<div className="page">
+    <div className="ptitle"><div><p className="eyebrow">Customer service</p><h2>Visit follow-ups</h2></div></div>
+    <p className="page-lede">When a monitoring visit is completed, customer service calls the facility to hear how it went — and to give any demand for money somewhere to go. Work the queue below, oldest first.</p>
+
+    {counts.integrity > 0 && <div className="fu-flag"><span className="fu-flag-ic">!</span><div><strong>{counts.integrity} integrity {counts.integrity === 1 ? 'flag' : 'flags'} raised.</strong> A facility reported that money, a gift or a favour was requested during monitoring. These sit at the top of the queue and are escalated to the executive office.</div></div>}
+
+    <div className="fu-kpis">{kpis.map(k => (
+      <button key={k.key} className={'fu-kpi ' + k.tone + (filter === k.key ? ' on' : '')} onClick={() => setFilter(k.key)}>
+        <span className="fu-kpi-v">{k.v}</span><span className="fu-kpi-l">{k.l}</span>
+      </button>))}
+    </div>
+
+    <div className="fu-toolbar">
+      <div className="fu-segs">{[['awaiting', 'Awaiting'], ['called', 'Called'], ['escalated', 'Escalated'], ['all', 'All']].map(([k, l]) => (
+        <button key={k} className={'fu-seg' + (filter === k ? ' on' : '')} onClick={() => setFilter(k)}>{l}{k !== 'all' && counts[k] ? <span className="fu-seg-n">{counts[k]}</span> : null}</button>))}
+      </div>
+      <SearchBox value={q} onChange={setQ} placeholder="Search facilities…" />
+    </div>
+
+    {shown.length === 0 ? <p className="empty">{all.length ? 'Nothing in this view — try another filter.' : 'No completed monitoring visits to follow up yet. When a visit is debriefed, it appears here automatically.'}</p> :
+      <div className="fu-queue">{shown.map(v => {
+        const cs = callsFor(v.id); const last = cs[0]; const st = statusOf(v)
+        const phone = facPhone(v); const wait = st === 'awaiting' ? fuDaysSince(completedAt(v)) : null
+        const chip = st === 'escalated' ? <span className="chip red">Escalated</span> : st === 'called' ? <span className="chip green">Called &middot; {last.outcome}</span> : <span className="chip amber">Awaiting call</span>
+        return (<div className={'fu-card2 ' + st} key={v.id}>
+          <div className="fu-c-top">
+            <div className="fu-c-id">
+              <span className="fname">{v.facility_name}</span>
+              <span className="fmeta">{v.area || '\u2014'} &middot; completed {completedAt(v) || '\u2014'}{wait != null ? <span className="fu-wait">{wait === 0 ? 'today' : 'waiting ' + wait + 'd'}</span> : null}</span>
+            </div>
+            {chip}
+          </div>
+          <div className="fu-c-actions">
+            {phone ? <a className="mini call" href={telHref(phone)}>{'\u260e'} Call</a> : <span className="mini disabled">No number on file</span>}
+            {phone && <button className="mini ghost" onClick={() => copyNum(phone)}>{copied === phone ? 'Copied \u2713' : phone}</button>}
+            <AIButton className="mini" label="AI briefing" build={() => aiBrief(v)} onText={txt => setBriefs(b => ({ ...b, [v.id]: txt }))} />
+            <button className={'mini' + (openId === v.id ? ' on' : '')} onClick={() => openId === v.id ? setOpenId(null) : openForm(v)}>{openId === v.id ? 'Close' : cs.length ? 'Log another call' : 'Log call'}</button>
+          </div>
+          {briefs[v.id] && <div className="ai-panel"><h4><span className="ai-spark">{'\u2726'}</span> Call briefing</h4><p className="ai-text">{briefs[v.id]}</p></div>}
+          {openId === v.id && <div className="fu-form">
+            <div className="fgrid two">
+              <label className="field sm"><span>Outcome</span><select value={form.outcome} onChange={e => setForm({ ...form, outcome: e.target.value })}>{['Reached', 'No answer', 'Call back', 'Escalated'].map(o => <option key={o}>{o}</option>)}</select></label>
+              <label className="field sm"><span>Caller</span><input value={form.caller} onChange={e => setForm({ ...form, caller: e.target.value })} /></label>
+            </div>
+            <label className="field sm"><span>Was any payment, gift or favour requested by our officer?</span>
+              <select value={form.integrity} onChange={e => setForm({ ...form, integrity: e.target.value })}>{['Not asked', 'No, nothing was requested', 'Payment or gift was requested', 'Facility preferred not to say'].map(o => <option key={o}>{o}</option>)}</select>
+            </label>
+            <label className="field sm"><span>Notes</span><textarea rows="2" value={form.notes} onChange={e => setForm({ ...form, notes: e.target.value })} placeholder="What did the facility say about the visit?" /></label>
+            <button className="btn small primary" onClick={() => saveCall(v)} disabled={busy}>{busy ? 'Saving\u2026' : 'Save call'}</button>
+          </div>}
+          {cs.length > 0 && <ul className="fu-timeline">{cs.map((c, i) => (<li key={i} className={c.integrity === 'Payment or gift was requested' ? 'flag' : ''}><span className="fu-dot" /><div className="fu-t-body"><span className="fu-t-head"><strong>{c.outcome}</strong><span className="fu-t-when">{(c.created_at || '').slice(0, 16).replace('T', ' ')}{c.caller ? ' \u00b7 ' + c.caller : ''}</span></span>{c.notes ? <span className="fu-t-note">{c.notes}</span> : null}</div></li>))}</ul>}
+        </div>)
+      })}</div>}
+
+    <button className="fu-logtoggle" onClick={() => setShowLog(s => !s)}>{showLog ? '\u2013 Hide activity log' : '+ Show activity log'}</button>
+    {showLog && <div className="fu-logwrap">
+      <div className="fu-segs sm">{[['calls', 'Call log'], ['notes', 'Notifications']].map(([k, l]) => (<button key={k} className={'fu-seg' + (logTab === k ? ' on' : '')} onClick={() => setLogTab(k)}>{l}</button>))}</div>
+      {logTab === 'calls' ? (callLog.length === 0 ? <p className="empty sm">No calls logged yet.</p> :
+        <ul className="log-list">{callLog.slice(0, 50).map((c, i) => (<li key={i}><span className="log-when">{(c.created_at || '').slice(0, 16).replace('T', ' ')}</span><span className="log-msg">{c.facility_name} &middot; {c.outcome}{c.caller ? ' \u00b7 ' + c.caller : ''}{c.notes ? ' \u2014 ' + c.notes : ''}</span></li>))}</ul>)
+        : (notes.length === 0 ? <p className="empty sm">No notifications yet.</p> :
+        <ul className="log-list">{notes.slice(0, 50).map((n, i) => (<li key={i}><span className="log-when">{(n.created_at || '').slice(0, 16).replace('T', ' ')}</span><span className="log-msg">{n.message || (n.type + ' ' + (n.facility_name || ''))}</span></li>))}</ul>)}
+    </div>}
+  </div>)
+}
+
+/* ---------- re-inspection reminders ---------- */
+function reminderStage(days) { return days == null ? null : days < 0 ? 'overdue' : days === 0 ? 'due' : days <= 7 ? 't7' : null }
+async function runReminders(visits, facilities, userId, opts) {
+  const st = getSettings()
+  const sent = []
+  let logged = []
+  try { logged = await NOTIF.list() } catch (e) {}
+  const already = {}
+  logged.forEach(n => { if (n.type === 'reminder' && n.visit_id) already[n.visit_id + ':' + (n.stage || '')] = true })
+  for (const v of visits) {
+    const d = v.debrief && v.debrief.remediation_deadline
+    if (!d) continue
+    const stage = reminderStage(daysUntil(d))
+    if (!stage) continue
+    const key = v.id + ':' + stage
+    if (already[key]) continue
+    const label = stage === 'overdue' ? 'is OVERDUE' : stage === 'due' ? 'is due today' : 'is due within 7 days'
+    const msg = 'RHSC reminder: corrective actions at ' + v.facility_name + ' (' + (v.area || '') + ') ' + label + '. Deadline ' + d + '.'
+    try { await NOTIF.add({ type: 'reminder', stage, visit_id: v.id, facility_name: v.facility_name, area: v.area, channel: 'in-app', status: 'sent', message: msg }, userId) } catch (e) { continue }
+    if (st.lead_email) { try { sendNotify({ channel: 'email', to: st.lead_email, subject: 'Re-inspection ' + stage, message: msg }) } catch (e) {} }
+    if (st.cs_email) { try { sendNotify({ channel: 'email', to: st.cs_email, subject: 'Re-inspection ' + stage, message: msg }) } catch (e) {} }
+    if (st.lead_phone) { try { sendNotify({ channel: 'sms', to: st.lead_phone, message: msg }) } catch (e) {} }
+    if (st.cs_whatsapp) { try { sendNotify({ channel: 'whatsapp', to: st.cs_whatsapp, message: msg }) } catch (e) {} }
+    if (st.notify_facility) {
+      const f = (facilities || []).find(x => x.id === v.facility_id || x.name === v.facility_name)
+      if (f && f.phone) {
+        const fm = 'RHSC/HEFAMAA: the corrective actions agreed at ' + v.facility_name + ' ' + label + ' (deadline ' + d + '). Please contact RHSC on ' + (st.cs_phone || CONTACT.email) + '.'
+        try { sendNotify({ channel: 'sms', to: f.phone, message: fm }) } catch (e) {}
+        if (st.cs_whatsapp) { try { sendNotify({ channel: 'whatsapp', to: f.phone, message: fm }) } catch (e) {} }
+      }
+    }
+    sent.push({ facility: v.facility_name, stage })
+  }
+  return sent
+}
+
+/* ---------- integrity oversight (HQ) ----------
+   RHSC monitors as ONE team, so comparing officers against each other proves
+   nothing: everybody is on every visit. And a team that watches itself did not
+   stop the last case, because juniors do not report the person leading them.
+   So this looks at the VISITS instead, for the marks a hurried or bought visit
+   leaves behind, and leans on the two checks that sit outside the team: what the
+   facility says, and a random re-inspection. */
+function monitorOf(v) { return (v.team && v.team[0] && v.team[0].name) || 'Unknown' }
+function minutesOnSite(v) {
+  const a = v.arrival_time ? new Date(v.arrival_time).getTime() : 0
+  const d = (v.debrief && v.debrief.updatedAt) ? new Date(v.debrief.updatedAt).getTime() : ((v.monitoring && v.monitoring.updatedAt) ? new Date(v.monitoring.updatedAt).getTime() : 0)
+  if (!a || !d || d <= a) return null
+  const m = Math.round((d - a) / 60000)
+  return m > 0 && m < 600 ? m : null
+}
+function evidenceCount(v) {
+  const items = (v.monitoring && v.monitoring.items) || {}
+  let n = 0
+  Object.keys(items).forEach(k => { n += ((items[k] && items[k].evidence) || []).length })
+  return n
+}
+function metresBetween(a, b) {
+  const R = 6371000, t = Math.PI / 180
+  const dLat = (b.lat - a.lat) * t, dLng = (b.lng - a.lng) * t
+  const la1 = a.lat * t, la2 = b.lat * t
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(la1) * Math.cos(la2) * Math.sin(dLng / 2) ** 2
+  return Math.round(2 * R * Math.asin(Math.sqrt(h)))
+}
+function IntegrityPage({ facilities }) {
+  const [visits, setVisits] = useState([])
+  const [calls, setCalls] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [sample, setSample] = useState(null)
+  useEffect(() => {
+    VIS.list().then(v => { setVisits(v); setLoading(false) }).catch(() => setLoading(false))
+    CALLS.list().then(setCalls).catch(() => {})
+  }, [])
+  const scored = visits.filter(v => !(v.debrief && v.debrief.first_visit) && (v.status === 'monitored' || v.status === 'debriefed'))
+  const facById = {}; (facilities || []).forEach(f => { facById[f.id] = f; facById[f.name] = f })
+
+  function checkVisit(v) {
+    const f = facById[v.facility_id] || facById[v.facility_name]
+    const flags = []
+    const mins = minutesOnSite(v)
+    const ev = evidenceCount(v)
+    if (mins != null && mins < 20) flags.push('In and out in ' + mins + ' min')
+    if (!ev) flags.push('No photo evidence')
+    if (typeof v.lat !== 'number' || typeof v.lng !== 'number') flags.push('No GPS at check-in')
+    else if (f && hasCoords(f) && f.geo_confirmed !== false) {
+      const d = metresBetween({ lat: v.lat, lng: v.lng }, { lat: f.lat, lng: f.lng })
+      if (d > 800) flags.push('Checked in ' + (d > 1500 ? (d / 1000).toFixed(1) + ' km' : d + ' m') + ' from the facility')
+    }
+    const gaps = (v.debrief && v.debrief.gaps) || []
+    if (v.overall_rating === 'green' && !gaps.length && !ev) flags.push('Passed with nothing recorded')
+    return { v, mins, ev, flags }
+  }
+  const checked = scored.map(checkVisit)
+  const flagged = checked.filter(c => c.flags.length).sort((a, b) => b.flags.length - a.flags.length)
+  const passRate = scored.length ? Math.round(scored.filter(v => v.overall_rating === 'green').length / scored.length * 100) : null
+  const allMins = checked.map(c => c.mins).filter(m => m != null).sort((a, b) => a - b)
+  const medMins = allMins.length ? allMins[Math.floor(allMins.length / 2)] : null
+  const noEv = scored.length ? Math.round(checked.filter(c => !c.ev).length / scored.length * 100) : 0
+
+  // Who was on the visits that raised a flag. With one team this only sharpens
+  // as the roster changes, but it is the record you would want later.
+  const present = {}
+  flagged.forEach(c => (c.v.team || []).forEach(m => { if (m && m.name) present[m.name] = (present[m.name] || 0) + 1 }))
+  const presentRows = Object.keys(present).map(n => ({ name: n, n: present[n] })).sort((a, b) => b.n - a.n)
+
+  const reported = calls.filter(c => c.integrity === 'Payment or gift was requested')
+  const askedCount = calls.filter(c => c.integrity && c.integrity !== 'Not asked').length
+  const approved = scored.filter(v => v.approval && v.approval.status === 'approved')
+
+  function drawSample() {
+    const pool = approved.length ? approved : scored
+    if (!pool.length) { toast('No completed visits to sample yet.', 'warn'); return }
+    const n = Math.max(1, Math.round(pool.length * 0.05))
+    const picked = pool.slice().sort(() => Math.random() - 0.5).slice(0, n)
+    setSample(picked)
+    toast(n + ' visit' + (n === 1 ? '' : 's') + ' drawn for re-inspection.')
+  }
+
+  return (<div className="page">
+    <div className="ptitle"><div><p className="eyebrow">Integrity</p><h2>Field conduct</h2></div>
+      <div className="ptools"><button className="btn small primary" onClick={drawSample}>Draw re-inspection sample</button></div>
+    </div>
+    <p className="page-lede">The team monitors together, so the checks that matter come from outside it: what the facility tells us, and visits picked at random to be checked again.</p>
+
+    {reported.length > 0 && (<div className="int-alert">
+      <h3>{reported.length} facilit{reported.length === 1 ? 'y has' : 'ies have'} reported a request for payment</h3>
+      <ul className="log-list">{reported.map((c, i) => (<li key={i}><span className="log-when">{(c.created_at || '').slice(0, 10)}</span><span className="log-msg"><strong>{c.facility_name}</strong>{c.area ? ' \u00b7 ' + c.area : ''}{c.notes ? ' \u2014 ' + c.notes : ''}</span></li>))}</ul>
+    </div>)}
+
+    <div className="mr-stats" style={{ gridTemplateColumns: 'repeat(6,1fr)', marginBottom: 16 }}>
+      <div className="mr-stat"><span className="v">{scored.length}</span><span className="l">Monitored</span></div>
+      <div className="mr-stat"><span className="v">{passRate == null ? '\u2013' : passRate + '%'}</span><span className="l">Pass rate</span></div>
+      <div className="mr-stat"><span className="v">{medMins == null ? '\u2013' : medMins}</span><span className="l">Median min</span></div>
+      <div className="mr-stat"><span className="v">{noEv}%</span><span className="l">No photos</span></div>
+      <div className="mr-stat"><span className="v">{askedCount}</span><span className="l">Asked</span></div>
+      <div className="mr-stat"><span className="v">{reported.length}</span><span className="l">Reported</span></div>
+    </div>
+
+    {sample && (<div className="settings-card" style={{ marginBottom: 16 }}>
+      <h3>Re-inspect these {sample.length}</h3>
+      <p className="hintline">Drawn at random. Send someone who was not on the original visit, ideally from outside the team, and compare what they find.</p>
+      <div className="frows">{sample.map(v => (<div className="frow" key={v.id}>
+        <div className="fmain"><span className="fname">{v.facility_name}</span><span className="fmeta">{v.area} &middot; visited {(v.arrival_time || '').slice(0, 10)} &middot; rated {ragText(v.overall_rating)}</span></div>
+      </div>))}</div>
+      <button className="linkbtn subtle" onClick={() => setSample(null)}>Clear</button>
+    </div>)}
+
+    <SectionHead eyebrow="Worth a second look" title={flagged.length + ' visit' + (flagged.length === 1 ? '' : 's') + ' raised something'} />
+    {loading ? <div className="skeleton skel-row" /> :
+      flagged.length === 0 ? <p className="empty">Nothing flagged. This fills up as the August round runs.</p> :
+        <div className="rep-rows">{flagged.slice(0, 60).map(c => (
+          <div className="rep-row" key={c.v.id}>
+            <div className="rep-main"><span className="fname">{c.v.facility_name}</span><span className="fmeta">{c.v.area} &middot; {(c.v.arrival_time || '').slice(0, 10)} &middot; {(c.v.team || []).map(m => m.name).join(', ') || 'team not recorded'}</span></div>
+            <div className="rep-mid">{c.v.score != null && <Chip rag={c.v.overall_rating} pct={c.v.score} />}</div>
+            <div className="int-flags">{c.flags.map((x, i) => <em key={i}>{x}</em>)}</div>
+          </div>))}</div>}
+    {flagged.length > 60 && <p className="hintline">Showing the first 60 of {flagged.length}.</p>}
+
+    {presentRows.length > 0 && (<>
+      <SectionHead eyebrow="Record" title="Who was present on flagged visits" />
+      <div className="hq-table">
+        <div className="hq-tr hq-th" style={{ gridTemplateColumns: '2fr 1fr' }}><span>Name</span><span>Flagged visits</span></div>
+        {presentRows.map(r => (<div className="hq-tr" key={r.name} style={{ gridTemplateColumns: '2fr 1fr' }}><span className="hq-name">{r.name}</span><span>{r.n}</span></div>))}
+      </div>
+      <p className="hintline">Everyone attends every visit, so this is a record rather than a comparison. It becomes meaningful as the roster changes.</p>
+    </>)}
+  </div>)
+}
+
+/* ---------- settings (HQ) ---------- */
+function SettingsPage({ user, identity, facilities }) {
+  const [s, setS] = useState(getSettings())
+  const [remBusy, setRemBusy] = useState(false); const [remMsg, setRemMsg] = useState('')
+  const set = (k, v) => setS(p => ({ ...p, [k]: v }))
+  function save() { saveSettings(s); toast('Settings saved.') }
+  async function sendNow() {
+    saveSettings(s); setRemBusy(true); setRemMsg('')
+    try {
+      const vs = await VIS.list()
+      const out = await runReminders(vs, facilities, user && user.id)
+      setRemMsg(out.length ? out.length + ' reminder' + (out.length === 1 ? '' : 's') + ' sent and logged.' : 'Nothing due. No reminders needed.')
+      toast(out.length ? out.length + ' reminders sent.' : 'Nothing due right now.')
+    } catch (e) { setRemMsg('Could not send reminders.') } finally { setRemBusy(false) }
+  }
+  return (<div className="page">
+    <div className="ptitle"><div><p className="eyebrow">Settings</p><h2>Customer service & defaults</h2></div></div>
+    <div className="settings-card">
+      <h3>Customer service contact</h3>
+      <p className="hintline">When a visit is completed, customer service is alerted here so they can call the facility. Automated send uses the connected SMS, WhatsApp or email provider.</p>
+      <div className="fgrid two">
+        <label className="field sm"><span>Email</span><input value={s.cs_email || ''} onChange={e => set('cs_email', e.target.value)} placeholder="care@example.com" /></label>
+        <label className="field sm"><span>Phone (SMS)</span><input value={s.cs_phone || ''} onChange={e => set('cs_phone', e.target.value)} placeholder="0803..." /></label>
+        <label className="field sm"><span>WhatsApp</span><input value={s.cs_whatsapp || ''} onChange={e => set('cs_whatsapp', e.target.value)} placeholder="234..." /></label>
+        <label className="field sm"><span>Default re-inspection window</span><select value={s.default_reinspection || '2 weeks'} onChange={e => set('default_reinspection', e.target.value)}>{REINSPECT.map(r => <option key={r} value={r}>{r}</option>)}</select></label>
+      </div>
+      <button className="btn primary" onClick={save}>Save settings</button>
+    </div>
+
+    <div className="settings-card" style={{ marginTop: 16 }}>
+      <h3>Re-inspection reminders</h3>
+      <p className="hintline">Sent 7 days before a deadline, on the day, and once overdue. Each reminder goes out only once and is kept in the notification log.</p>
+      <div className="fgrid two">
+        <label className="field sm"><span>Team Lead email</span><input value={s.lead_email || ''} onChange={e => set('lead_email', e.target.value)} placeholder="solomon@realmsconsulting.com" /></label>
+        <label className="field sm"><span>Team Lead phone (SMS)</span><input value={s.lead_phone || ''} onChange={e => set('lead_phone', e.target.value)} placeholder="0803..." /></label>
+      </div>
+      <label className="ai-check"><input type="checkbox" checked={!!s.notify_facility} onChange={e => set('notify_facility', e.target.checked)} /> Also remind the facility on its registered number</label>
+      <div className="cta-row" style={{ marginTop: 12 }}>
+        <button className="btn primary" onClick={save}>Save settings</button>
+        <button className="btn ghost" onClick={sendNow} disabled={remBusy}>{remBusy ? 'Sending\u2026' : 'Send due reminders now'}</button>
+      </div>
+      {remMsg && <p className="hintline">{remMsg}</p>}
+    </div>
+    <div className="settings-card" style={{ marginTop: 16 }}>
+      <h3>AI translations</h3>
+      <p className="hintline">Generate first-draft Yorùbá, Hausa and Igbo for the website strings, to give a native speaker to review before use. Downloads a JSON file.</p>
+      <AIButton label="Generate translations" build={() => { const en = {}; Object.keys(TR).forEach(k => { en[k] = TR[k].en }); return { system: 'You are a professional Nigerian translator. Translate the given English UI strings into Yoruba (yo), Hausa (ha) and Igbo (ig). Return ONLY JSON of the form {"yo":{key:translation},"ha":{...},"ig":{...}} using the same keys. Natural, concise, suitable for a professional healthcare firm.', prompt: JSON.stringify(en), max_tokens: 2000 } }} onText={txt => { try { download('realms-translations.json', txt.replace(/```json|```/g, '').trim(), 'application/json'); toast('Translations generated and downloaded for review.') } catch (e) { toast('Could not save the file.', 'warn') } }} />
+    </div>
+  </div>)
+}
+
+/* ---------- HQ access gate ---------- */
+function PendingAccess({ kind, user, facilities, identity, onSignOut, onBack }) {
+  const isProp = kind === 'facility_proprietor'
+  const [sent, setSent] = useState(false)
+  const [fid, setFid] = useState(''); const [q, setQ] = useState(''); const [busy, setBusy] = useState(false)
+  const matches = q.trim().length < 2 ? [] : (facilities || []).filter(f => matchQ(f, q)).slice(0, 8)
+  useEffect(() => { let live = true; if (!isProp) return; (async () => { try { const r = await ACC.mine(user && user.id, 'facility_proprietor'); if (live && r) setSent(true) } catch (e) {} })(); return () => { live = false } }, [isProp])
+  async function requestProp() {
+    if (!fid) { toast('Find and choose your facility first.', 'warn'); return }
+    setBusy(true)
+    try {
+      const f = (facilities || []).find(x => x.id === fid)
+      await ACC.request({ user_id: user.id, email: user.email, name: user.name || '', role: 'facility_proprietor', facility_id: fid, facility_name: f ? f.name : '' })
+      setSent(true)
+      try { sendNotify({ channel: 'email', to: getSettings().cs_email || CONTACT.email, subject: 'Facility access request', message: (user.name || user.email) + ' has requested proprietor access to ' + (f ? f.name : 'a facility') + ' on Realms Field.' }) } catch (e) {}
+    } catch (e) { toast('Could not send that request.', 'err') } finally { setBusy(false) }
+  }
+  if (isProp && !sent) {
+    return (<div className="page role-page">
+      <div className="pending-card anim" style={{ textAlign: 'left' }}>
+        <h2 style={{ textAlign: 'center' }}>Which facility is yours?</h2>
+        <p style={{ textAlign: 'center' }}>Find your facility and request access. RHSC will confirm you before your reports are shown.</p>
+        <SearchBox value={q} onChange={v => { setQ(v); setFid('') }} placeholder="Type your facility name" />
+        {matches.length > 0 && <div className="frows" style={{ marginTop: 10 }}>{matches.map(f => (
+          <button className={'frow pickable' + (fid === f.id ? ' picked' : '')} key={f.id} onClick={() => setFid(f.id)}>
+            <div className="fmain"><span className="fname">{f.name}</span><span className="fmeta">{[f.category, f.area].filter(Boolean).join(' \u00b7 ')}</span></div>
+            <span className="mini">{fid === f.id ? 'Chosen' : 'Choose'}</span>
+          </button>))}</div>}
+        {q.trim().length >= 2 && matches.length === 0 && <p className="empty sm">No match. Check the spelling, or contact RHSC.</p>}
+        <div className="cta-row center" style={{ marginTop: 16 }}>
+          <button className="btn ghost" onClick={onBack}>Back</button>
+          <button className="btn primary" onClick={requestProp} disabled={busy || !fid}>{busy ? 'Sending\u2026' : 'Request access'}</button>
+        </div>
+      </div>
+    </div>)
+  }
+  return (<div className="page role-page">
+    <div className="pending-card anim">
+      <span className="pending-ic"><Ico name="lock" size={26} /></span>
+      <h2>{isProp ? 'Your facility access is awaiting confirmation' : 'Your HQ access is awaiting approval'}</h2>
+      <p>{isProp
+        ? 'RHSC will confirm that you represent this facility. Once approved you will see your own monitoring reports and corrective actions.'
+        : 'RHSC HQ sees every facility, report and setting, so it is granted by the executive office. Your request has gone to ' + OWNER_EMAIL + '.'}</p>
+      <p className="hintline">You will be let straight in once it is approved. Sign in again after you hear back.</p>
+      <div className="cta-row center">
+        <button className="btn ghost" onClick={onBack}>Choose a different role</button>
+        <button className="btn primary" onClick={onSignOut}>Sign out</button>
+      </div>
+    </div>
+  </div>)
+}
+function AccessRequestsPage({ identity, user, onChange }) {
+  return (<div className="page">
+    <div className="ptitle"><div><p className="eyebrow">Administration</p><h2>Access requests</h2></div></div>
+    <p className="page-lede">People asking to join the RHSC workspace or claim a facility. Approve or decline each below — the count in the menu clears as you work through them.</p>
+    <AccessPanel identity={identity} user={user} onChange={onChange} bare />
+  </div>)
+}
+function AccessPanel({ identity, user, onChange, bare }) {
+  const [rows, setRows] = useState([]); const [busy, setBusy] = useState('')
+  async function refresh() { try { const r = await ACC.list(); setRows(r); if (onChange) onChange() } catch (e) {} }
+  useEffect(() => { refresh() }, [])
+  async function decide(r, status) {
+    setBusy(r.id)
+    try { await ACC.decide(r.id, status, (identity && identity.name) || 'Executive office'); await refresh(); toast(status === 'approved' ? 'HQ access granted.' : 'Request declined.') }
+    catch (e) { toast('Could not save that decision.', 'err') } finally { setBusy('') }
+  }
+  const pending = rows.filter(r => r.status === 'pending')
+  function canDecide(r) { return r.role === 'rhsc_hq' ? isOwner(user) : true }
+  return (<div className="settings-card" style={{ marginTop: 16 }}>
+    <h3>Access requests</h3>
+    <p className="hintline">Only the executive office can admit an RHSC HQ user. Facility proprietors can be confirmed by HQ.</p>
+    {rows.length === 0 ? <p className="empty sm">No requests yet.</p> :
+      <div className="frows">{rows.map(r => (
+        <div className="frow" key={r.id}>
+          <div className="fmain"><span className="fname">{r.name || r.email}</span><span className="fmeta">{r.email} &middot; {r.role === 'rhsc_hq' ? 'RHSC HQ' : 'Proprietor' + (r.facility_name ? ', ' + r.facility_name : '')} &middot; {(r.created_at || '').slice(0, 10)}</span></div>
+          <div className="factions">
+            <span className={'appr-chip ' + (r.status === 'approved' ? 'approved' : r.status === 'denied' ? 'returned' : 'pending')}>{r.status === 'approved' ? 'Approved' : r.status === 'denied' ? 'Declined' : 'Pending'}</span>
+            {canDecide(r) && r.status !== 'approved' && <button className="mini ok" onClick={() => decide(r, 'approved')} disabled={busy === r.id}>Approve</button>}
+            {canDecide(r) && r.status !== 'denied' && <button className="mini danger" onClick={() => decide(r, 'denied')} disabled={busy === r.id}>Decline</button>}
+            {!canDecide(r) && <span className="hintline">Executive office only</span>}
+          </div>
+        </div>))}</div>}
+    {pending.length > 0 && <p className="hintline">{pending.length} awaiting your decision.</p>}
+  </div>)
+}
+
+/* ---------- approvals (Team Lead sign-off before HEFAMAA) ---------- */
+function needsApproval(v) { return (v.status === 'debriefed') || !!(v.debrief && v.debrief.first_visit) || !!(v.assessment && v.assessment.ruid) }
+function approvalState(v) { return (v.approval && v.approval.status) || 'pending' }
+function ApprovalsPage({ userId, identity, role }) {
+  const [visits, setVisits] = useState([])
+  const [q, setQ] = useState(''); const [filter, setFilter] = useState('pending')
+  const [busy, setBusy] = useState('')
+  const [noteFor, setNoteFor] = useState(null); const [note, setNote] = useState('')
+  const origin = (typeof window !== 'undefined' && window.location) ? window.location.origin : ''
+  const canApprove = role === 'team_leader' || role === 'rhsc_hq'
+  async function refresh() { try { setVisits(await VIS.list()) } catch (e) {} }
+  useEffect(() => { refresh() }, [])
+  const pool = visits.filter(needsApproval)
+  const rows = pool.filter(v => (filter === 'all' || approvalState(v) === filter) && matchQ(v, q))
+  const counts = { pending: pool.filter(v => approvalState(v) === 'pending').length, approved: pool.filter(v => approvalState(v) === 'approved').length, returned: pool.filter(v => approvalState(v) === 'returned').length }
+  async function decide(v, status) {
+    setBusy(v.id)
+    const approval = { status, by: (identity && identity.name) || 'Team Lead', at: new Date().toISOString(), note: status === 'returned' ? note.trim() : '' }
+    try {
+      await VIS.update(v.id, { approval })
+      setVisits(vs => vs.map(x => x.id === v.id ? { ...x, approval } : x))
+      setNoteFor(null); setNote('')
+      toast(status === 'approved' ? 'Report approved for submission.' : 'Returned to the monitor.')
+    } catch (e) { toast('Could not save that decision.', 'err') } finally { setBusy('') }
+  }
+  async function decideAll() {
+    const targets = rows.filter(v => approvalState(v) !== 'approved')
+    if (!targets.length) { toast('Nothing here to approve.'); return }
+    setBusy('all'); let ok = 0
+    for (const v of targets) {
+      const approval = { status: 'approved', by: (identity && identity.name) || 'Team Lead', at: new Date().toISOString(), note: '' }
+      try { await VIS.update(v.id, { approval }); setVisits(vs => vs.map(x => x.id === v.id ? { ...x, approval } : x)); ok++ } catch (e) {}
+    }
+    setBusy(''); toast('Approved ' + ok + ' report' + (ok === 1 ? '' : 's') + ' for submission.')
+  }
+  return (<div className="page">
+    <div className="ptitle"><div><p className="eyebrow">Approvals</p><h2>{counts.pending} awaiting sign-off</h2></div>
+      <div className="ptools">
+        <SearchBox value={q} onChange={setQ} placeholder="Search…" />
+        <select className="sel" value={filter} onChange={e => setFilter(e.target.value)}>
+          <option value="pending">Pending ({counts.pending})</option>
+          <option value="approved">Approved ({counts.approved})</option>
+          <option value="returned">Returned ({counts.returned})</option>
+          <option value="all">All</option>
+        </select>
+        {canApprove && <button className="btn small primary" onClick={decideAll} disabled={busy === 'all'}>{busy === 'all' ? 'Approving…' : 'Approve all shown'}</button>}
+      </div>
+    </div>
+    <p className="page-lede">Every report is signed off by the Team Lead before it goes to HEFAMAA. Only approved reports appear in the weekly submission.</p>
+    {rows.length === 0 ? <p className="empty">Nothing here.</p> :
+      <div className="rep-rows">{rows.map(v => { const st = approvalState(v); return (
+        <div className="rep-row" key={v.id}>
+          <div className="rep-main"><span className="fname">{v.facility_name}</span><span className="fmeta">{v.area} &middot; {(v.visit_date || v.arrival_time || v.created_at || '').slice(0, 10)}{v.team && v.team[0] ? ' \u00b7 ' + v.team[0].name : ''}</span></div>
+          <div className="rep-mid">
+            {v.score != null ? <Chip rag={v.overall_rating} pct={v.score} /> : hasFirstAssessment(v) && <span className="appr-chip">First assessment</span>}
+            <span className={'appr-chip ' + st}>{st === 'approved' ? 'Approved' : st === 'returned' ? 'Returned' : 'Pending'}</span>
+            {v.approval && v.approval.by && st !== 'pending' && <span className="fmeta">{v.approval.by}, {(v.approval.at || '').slice(0, 10)}</span>}
+          </div>
+          <div className="rep-actions">
+            <button className="mini" onClick={() => safePrint(hasFirstAssessment(v) ? 'Monitoring Report' : 'Inspection Report', () => hasFirstAssessment(v) ? buildMonitoringReport(v, origin) : buildInspectionReport(v, v.debrief || deriveDebrief(v), origin))}>Review</button>
+            {canApprove && st !== 'approved' && <button className="mini ok" onClick={() => decide(v, 'approved')} disabled={busy === v.id}>Approve</button>}
+            {canApprove && st !== 'returned' && <button className="mini danger" onClick={() => { setNoteFor(noteFor === v.id ? null : v.id); setNote('') }}>Return</button>}
+          </div>
+          {noteFor === v.id && <div className="fu-form">
+            <label className="field sm"><span>What needs fixing?</span><input value={note} onChange={e => setNote(e.target.value)} placeholder="e.g. photo missing on waste segregation" /></label>
+            <button className="btn small danger" onClick={() => decide(v, 'returned')} disabled={busy === v.id}>Return to monitor</button>
+          </div>}
+          {st === 'returned' && v.approval && v.approval.note && <p className="hintline">Returned: {v.approval.note}</p>}
+        </div>) })}</div>}
+  </div>)
+}
+
+/* ---------- reports (Stage 7) & analytics (Stage 8) ---------- */
+function download(name, content, type) {
+  const blob = new Blob([content], { type }); const url = URL.createObjectURL(blob)
+  const a = document.createElement('a'); a.href = url; a.download = name; document.body.appendChild(a); a.click(); document.body.removeChild(a)
+  setTimeout(() => URL.revokeObjectURL(url), 1000)
+}
+function csvCell(v) { const s = String(v == null ? '' : v); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s }
+function exportVisitsCSV(rows) {
+  const header = ['Facility', 'Area', 'Date', 'Status', 'Score', 'Rating', 'Remediation deadline', 'Re-inspection']
+  const lines = [header].concat(rows.map(v => [v.facility_name, v.area, (v.arrival_time || v.created_at || '').slice(0, 10), v.status, v.score == null ? '' : v.score, v.overall_rating || '', (v.debrief && v.debrief.remediation_deadline) || '', (v.debrief && v.debrief.reinspection) || '']))
+  download('realms-visits.csv', lines.map(l => l.map(csvCell).join(',')).join('\n'), 'text/csv')
+}
+function xmlCell(v) { return String(v == null ? '' : v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;') }
+function exportVisitsXLS(rows) {
+  const head = ['Facility', 'Area', 'Date', 'Status', 'Score', 'Rating', 'Remediation deadline', 'Re-inspection']
+  const body = rows.map(v => '<tr>' + [v.facility_name, v.area, (v.arrival_time || v.created_at || '').slice(0, 10), v.status, v.score == null ? '' : v.score, v.overall_rating || '', (v.debrief && v.debrief.remediation_deadline) || '', (v.debrief && v.debrief.reinspection) || ''].map(c => '<td>' + xmlCell(c) + '</td>').join('') + '</tr>').join('')
+  const html = '<html><head><meta charset="utf-8"></head><body><table border="1"><tr>' + head.map(h => '<th>' + h + '</th>').join('') + '</tr>' + body + '</table></body></html>'
+  download('realms-visits.xls', html, 'application/vnd.ms-excel')
+}
+function exportVisitsPDF(rows, origin) {
+  const body = rows.map(v => '<tr><td>' + xmlCell(v.facility_name) + '</td><td>' + xmlCell(v.area) + '</td><td>' + (v.arrival_time || v.created_at || '').slice(0, 10) + '</td><td>' + ragText(v.overall_rating) + '</td><td>' + (v.score == null ? '' : v.score + '%') + '</td></tr>').join('')
+  const inner = docHead(origin) + '<h1>Monitoring summary</h1><p class="muted">' + rows.length + ' visit' + (rows.length === 1 ? '' : 's') + '</p><table><tr><th>Facility</th><th>Area</th><th>Date</th><th>Outcome</th><th>Score</th></tr>' + body + '</table>'
+  printDoc('Monitoring Summary', inner)
+}
+function buildDailyPDF(rows, origin) {
+  const today = new Date().toISOString().slice(0, 10)
+  const todays = rows.filter(v => (v.arrival_time || v.created_at || '').slice(0, 10) === today)
+  const byArea = {}; todays.forEach(v => { const a = v.area || 'Unassigned'; byArea[a] = (byArea[a] || 0) + 1 })
+  const areaLine = Object.keys(byArea).map(a => a + ' (' + byArea[a] + ')').join(', ') || 'none'
+  const body = todays.map(v => '<tr><td>' + xmlCell(v.facility_name) + '</td><td>' + xmlCell(v.area) + '</td><td>' + ragText(v.overall_rating) + '</td><td>' + (v.score == null ? '' : v.score + '%') + '</td></tr>').join('')
+  const inner = docHead(origin) + '<h1>Daily monitoring report</h1><p class="muted">' + today + ' &middot; ' + todays.length + ' facility' + (todays.length === 1 ? '' : 'ies') + ' monitored</p><p><strong>By area:</strong> ' + areaLine + '</p><table><tr><th>Facility</th><th>Area</th><th>Outcome</th><th>Score</th></tr>' + body + '</table>'
+  printDoc('Daily Report', inner)
+}
+function waLink(phone, body) { const p = String(phone || '').replace(/[^0-9]/g, ''); return 'https://wa.me/' + p + '?text=' + encodeURIComponent(body) }
+function mailtoLink(subject, body, to) { return 'mailto:' + encodeURIComponent(to || '') + '?subject=' + encodeURIComponent(subject) + '&body=' + encodeURIComponent(body) }
+function smsLink(phone, body) { return 'sms:' + (phone || '') + '?&body=' + encodeURIComponent(body) }
+function daysUntil(d) { if (!d) return null; const ms = new Date(d + 'T00:00:00').getTime() - Date.now(); return Math.ceil(ms / 86400000) }
+
+function NotifyPanel({ v, summary }) {
+  const [email, setEmail] = useState('')
+  const [st, setSt] = useState({})
+  const phone = (v.person_in_charge && v.person_in_charge.phone) || ''
+  const smsMsg = 'RHSC: monitoring completed at ' + v.facility_name + '. A summary and any required actions will follow.'
+  async function send(channel) {
+    setSt(s => ({ ...s, [channel]: 'sending' }))
+    const payload = channel === 'sms' ? { channel: 'sms', to: phone, message: smsMsg }
+      : channel === 'whatsapp' ? { channel: 'whatsapp', to: phone, message: smsMsg }
+        : { channel: 'email', to: email, subject: 'RHSC monitoring outcome: ' + v.facility_name, message: summary(v) }
+    const r = await sendNotify(payload)
+    setSt(s => ({ ...s, [channel]: r.ok ? 'sent' : (r.reason || 'failed') }))
+  }
+  function lbl(x) { return x === 'sending' ? 'Sending\u2026' : x === 'sent' ? 'Sent' : x ? ('Not sent: ' + x) : '' }
+  return (<div className="notify">
+    <div className="notify-row">
+      <button className="mini" onClick={() => send('sms')} disabled={!phone}>Send SMS</button>
+      <a className="mini ghosted" href={smsLink(phone, smsMsg)}>open SMS app</a>
+      <span className="nstat">{lbl(st.sms)}</span>
+    </div>
+    <div className="notify-row">
+      <button className="mini" onClick={() => send('whatsapp')} disabled={!phone}>Send WhatsApp</button>
+      <a className="mini ghosted" href={waLink(phone, smsMsg)} target="_blank" rel="noreferrer">open WhatsApp</a>
+      <span className="nstat">{lbl(st.whatsapp)}</span>
+    </div>
+    <div className="notify-row">
+      <input className="ninput" type="email" placeholder="email address" value={email} onChange={e => setEmail(e.target.value)} />
+      <button className="mini" onClick={() => send('email')} disabled={!email}>Send email</button>
+      <a className="mini ghosted" href={mailtoLink('RHSC monitoring outcome: ' + v.facility_name, summary(v), email)}>open mail app</a>
+      <span className="nstat">{lbl(st.email)}</span>
+    </div>
+    <span className="hintline">Automated send uses the connected provider; if none is configured, use the open-app links. See the guide.</span>
+  </div>)
+}
+
+function ReportsPage({ facilities, userId, scope, role }) {
+  const [visits, setVisits] = useState([])
+  const [area, setArea] = useState('all'); const [status, setStatus] = useState('all')
+  const [notifyId, setNotifyId] = useState(null)
+  const [q, setQ] = useState('')
+  const [loading, setLoading] = useState(true)
+  const [aiSummary, setAiSummary] = useState('')
+  const today = new Date(); const weekAgo = new Date(Date.now() - 6 * 86400000)
+  const [from, setFrom] = useState(weekAgo.toISOString().slice(0, 10))
+  const [to, setTo] = useState(today.toISOString().slice(0, 10))
+  useEffect(() => { VIS.list().then(v => { setVisits(v); setLoading(false) }).catch(() => setLoading(false)) }, [])
+  const origin = (typeof window !== 'undefined' && window.location) ? window.location.origin : ''
+  const readOnly = role === 'rhsc_hq' || role === 'hefamaa_reviewer'
+  const scopedVisits = scope && scope !== 'all' ? visits.filter(v => (v.area || 'Unassigned') === scope) : visits
+  const areas = Array.from(new Set(scopedVisits.map(v => v.area || 'Unassigned'))).sort()
+  const rows = scopedVisits.filter(v => (area === 'all' || (v.area || 'Unassigned') === area) && (status === 'all' || v.status === status) && matchQ(v, q))
+  const due = scopedVisits.filter(v => v.debrief && v.debrief.remediation_deadline).map(v => ({ v, date: v.debrief.remediation_deadline, days: daysUntil(v.debrief.remediation_deadline) })).sort((a, b) => (a.date < b.date ? -1 : 1))
+  function inRange(v) { const d = (v.visit_date || (v.assessment && v.assessment.date) || v.arrival_time || v.created_at || '').slice(0, 10); return d && d >= from && d <= to }
+  const rangePool = scopedVisits.filter(v => needsApproval(v) && inRange(v))
+  const batch = rangePool.filter(v => approvalState(v) === 'approved')
+  const pendingCount = rangePool.length - batch.length
+
+  function doc(v, kind) { const d = v.debrief || deriveDebrief(v); if (kind === 'report') printDoc('Monitoring Report', buildReport(v, d, origin)); else printDoc('Compliance Letter', buildLetter(v, d, origin)) }
+  function summary(v) { return v.facility_name + ' (' + v.area + '): outcome ' + ragText(v.overall_rating) + (v.score != null ? ' ' + v.score + '%' : '') + ', visit ' + (v.arrival_time || v.created_at || '').slice(0, 10) + '.' }
+
+  return (<div className="page">
+    <div className="ptitle"><div><p className="eyebrow">Reports{readOnly ? ' \u00b7 view only' : ''}</p><h2>{rows.length} visit{rows.length === 1 ? '' : 's'}</h2></div>
+      <div className="ptools">
+        <SearchBox value={q} onChange={setQ} placeholder="Search…" />
+        <select className="sel" value={area} onChange={e => setArea(e.target.value)}><option value="all">All areas</option>{areas.map(a => <option key={a} value={a}>{a}</option>)}</select>
+        <select className="sel" value={status} onChange={e => setStatus(e.target.value)}><option value="all">All statuses</option><option value="engaged">Engaged</option><option value="monitored">Monitored</option><option value="debriefed">Debriefed</option></select>
+        <button className="btn small ghost" onClick={() => exportVisitsCSV(rows)}>CSV</button>
+        <button className="btn small ghost" onClick={() => exportVisitsXLS(rows)}>Excel</button>
+        <button className="btn small ghost" onClick={() => exportVisitsPDF(rows, origin)}>PDF</button>
+        <button className="btn small primary" onClick={() => buildDailyPDF(rows, origin)}>Daily report</button>
+        <button className="btn small ghost" onClick={() => { const fr = rows.filter(hasFirstAssessment); if (!fr.length) { toast('No first-assessment reports in this view.', 'warn'); return } printDoc('First-assessment monitoring reports', buildMonitoringBatch(fr, origin)) }}>1st-assessment pack</button>
+        <AIButton className="btn small ghost" label="AI summary" build={() => { const agg = rows.map(v => ({ facility: v.facility_name, area: v.area, rating: v.overall_rating, score: v.score, status: v.status })); return { system: 'You are the RHSC monitoring analyst. Write a brief executive summary (4 to 6 sentences) of these monitoring results for HEFAMAA leadership: coverage, overall compliance picture, notable areas or facilities needing attention. Use only the data given.', prompt: JSON.stringify(agg), max_tokens: 500 } }} onText={txt => setAiSummary(txt)} />
+      </div>
+    </div>
+    {aiSummary && <div className="ai-panel"><h4><span className="ai-spark">✦</span> AI executive summary</h4><p className="ai-text">{aiSummary}</p><button className="linkbtn subtle" onClick={() => setAiSummary('')}>Dismiss</button></div>}
+
+    <div className="submit-panel">
+      <div className="submit-head"><h3>Weekly HEFAMAA submission</h3><span className="hintline">Approved inspection reports only, as one PDF to email to the agency.</span></div>
+      <div className="submit-row">
+        <label className="field sm inline"><span>From</span><input type="date" value={from} onChange={e => setFrom(e.target.value)} /></label>
+        <label className="field sm inline"><span>To</span><input type="date" value={to} onChange={e => setTo(e.target.value)} /></label>
+        <span className="chip green">{batch.length} approved</span>
+        <button className="btn small primary" onClick={() => { if (!batch.length) { toast('No approved reports in that range.', 'warn'); return } printDoc('HEFAMAA submission ' + from + ' to ' + to, buildWeeklyBatch(batch, origin, from, to)) }}>Build submission PDF</button>
+        <a className="btn small ghost" href={mailtoLink('HEFAMAA submission: ' + from + ' to ' + to + ' (Realms Consulting)', 'Dear HEFAMAA,\n\nPlease find attached the inspection reports for ' + from + ' to ' + to + ', covering ' + batch.length + ' facilities monitored by REALMS Healthcare Services Consulting Limited.\n\nKind regards,\nREALMS Healthcare Services Consulting Limited', '')}>Email to HEFAMAA</a>
+      </div>
+      {pendingCount > 0 && <p className="warnline">{pendingCount} report{pendingCount === 1 ? '' : 's'} in this range still await Team Lead approval and are not included.</p>}
+    </div>
+
+    {due.length > 0 && (<div className="dsec"><h3>Re-inspections due</h3>
+      <div className="frows">{due.map(({ v, date, days }) => (
+        <div className="frow" key={v.id}><div className="fmain"><span className="fname">{v.facility_name}</span><span className="fmeta">{v.area} &middot; due {date}</span></div>
+          <span className={'chip ' + (days != null && days < 0 ? 'red' : days != null && days <= 7 ? 'amber' : 'none')}>{days == null ? '' : days < 0 ? Math.abs(days) + ' days overdue' : 'in ' + days + ' days'}</span></div>
+      ))}</div>
+    </div>)}
+
+    {loading ? <div>{[0, 1, 2, 3].map(i => <div key={i} className="skeleton skel-row" />)}</div> :
+      rows.length === 0 ? <p className="empty">No visits match these filters.</p> :
+      <div className="rep-rows">{rows.map(v => (
+        <div className="rep-row" key={v.id}>
+          <div className="rep-main"><span className="fname">{v.facility_name}</span><span className="fmeta">{v.area} &middot; {(v.arrival_time || v.created_at || '').slice(0, 10)}</span></div>
+          <div className="rep-mid">{v.score != null ? <Chip rag={v.overall_rating} pct={v.score} /> : <span className={'chip ' + (v.status || 'engaged')}>{v.status === 'monitored' ? 'Assessed' : v.status === 'debriefed' ? 'Debriefed' : 'Engaged'}</span>}{v.debrief && v.debrief.closure_recommended && <span className="risk-badge high">Closure</span>}{v.debrief && v.debrief.escalated && <span className="risk-badge high">Escalated</span>}{v.debrief && v.debrief.genesys_interest && <span className="risk-badge low">Genesys</span>}{needsApproval(v) && <span className={'appr-chip ' + approvalState(v)}>{approvalState(v) === 'approved' ? 'Approved' : approvalState(v) === 'returned' ? 'Returned' : 'Pending'}</span>}</div>
+          <div className="rep-actions">
+            {hasFirstAssessment(v) ? <>
+              <button className="mini primary" onClick={() => safePrint('Monitoring Report', () => buildMonitoringReport(v, origin))}>Monitoring report</button>
+              <button className="mini" onClick={() => safePrint('Inspection Report', () => buildInspectionReport(v, v.debrief || deriveDebrief(v), origin))}>Inspection</button>
+            </> : <>
+              <button className="mini" onClick={() => safePrint('Monitoring Report', () => buildReport(v, v.debrief || deriveDebrief(v), origin))}>Report</button>
+              <button className="mini" onClick={() => safePrint('Compliance Letter', () => buildLetter(v, v.debrief || deriveDebrief(v), origin))}>Letter</button>
+              <button className="mini" onClick={() => safePrint('Inspection Report', () => buildInspectionReport(v, v.debrief || deriveDebrief(v), origin))}>Inspection</button>
+              <button className="mini" onClick={() => safePrint('HEFAMAA Form', () => buildHefamaaDoc(v, origin))}>HEFAMAA</button>
+            </>}
+            {!readOnly && <button className="mini" onClick={() => setNotifyId(notifyId === v.id ? null : v.id)}>Notify</button>}
+          </div>
+          {!readOnly && notifyId === v.id && <NotifyPanel v={v} summary={summary} />}
+        </div>
+      ))}</div>}
+  </div>)
+}
+
+function HeatMap({ points }) {
+  const ref = useRef(null); const obj = useRef(null); const layer = useRef(null)
+  useEffect(() => {
+    if (!ref.current || obj.current) return
+    const m = L.map(ref.current, { scrollWheelZoom: false }).setView([6.5244, 3.3792], 10)
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '\u00a9 OpenStreetMap contributors' }).addTo(m)
+    layer.current = L.layerGroup().addTo(m); obj.current = m; setTimeout(() => m.invalidateSize(), 200)
+    return () => { m.remove(); obj.current = null }
+  }, [])
+  useEffect(() => {
+    const m = obj.current, lg = layer.current; if (!m || !lg) return
+    m.invalidateSize(); lg.clearLayers(); const col = { green: '#2E7D46', amber: '#C77D0A', red: '#B4442E', unscored: '#B9AEC9', none: '#9C86B8' }
+    points.forEach(p => { L.circleMarker([p.lat, p.lng], { radius: 9, color: '#fff', weight: 2, fillColor: col[p.rag || 'none'], fillOpacity: .9 }).bindPopup('<strong>' + p.name + '</strong><br>' + (p.rag === 'unscored' ? 'Visited, not scored' : p.rag ? ragText(p.rag) : 'Not assessed')).addTo(lg) })
+    if (points.length) { try { m.fitBounds(points.map(p => [p.lat, p.lng]), { padding: [40, 40], maxZoom: 13 }) } catch (e) {} }
+  }, [points])
+  return <div className="map-frame"><div ref={ref} className="leaflet-holder" /></div>
+}
+
+function StatCard({ value, label }) {
+  const isNum = typeof value === 'number'
+  const num = isNum ? value : (typeof value === 'string' && /^\d+%?$/.test(value) ? parseInt(value, 10) : null)
+  const suffix = typeof value === 'string' && value.endsWith('%') ? '%' : ''
+  const n = useCountUp(num == null ? 0 : num)
+  return (<div className="an-card"><span className="an-v">{num == null ? value : (n + suffix)}</span><span className="an-l">{label}</span></div>)
+}
+function Donut({ data }) {
+  const total = data.reduce((s, d) => s + d.value, 0) || 1
+  const R = 54, C = 2 * Math.PI * R; let off = 0
+  return (<div className="donut">
+    <svg viewBox="0 0 140 140" className="donut-svg">
+      <circle cx="70" cy="70" r={R} fill="none" stroke="#EDE7F4" strokeWidth="18" />
+      {data.map((d, i) => { const dash = d.value / total * C; const el = (<circle key={i} cx="70" cy="70" r={R} fill="none" stroke={d.color} strokeWidth="18" strokeDasharray={dash + ' ' + (C - dash)} strokeDashoffset={-off} transform="rotate(-90 70 70)" />); off += dash; return el })}
+      <text x="70" y="67" textAnchor="middle" className="donut-num">{total}</text>
+      <text x="70" y="85" textAnchor="middle" className="donut-lab">assessed</text>
+    </svg>
+    <div className="donut-legend">{data.map((d, i) => (<div key={i} className="dl"><span className="dot" style={{ background: d.color }} />{d.label}<em>{d.value}</em></div>))}</div>
+  </div>)
+}
+function Ring({ pct, label }) {
+  const R = 48, C = 2 * Math.PI * R; const dash = (pct == null ? 0 : pct) / 100 * C; const disp = pct == null ? '-' : pct + '%'
+  return (<div className="ring">
+    <svg viewBox="0 0 120 120" className="ring-svg">
+      <circle cx="60" cy="60" r={R} fill="none" stroke="#EDE7F4" strokeWidth="12" />
+      <circle cx="60" cy="60" r={R} fill="none" stroke="#6D4B8E" strokeWidth="12" strokeLinecap="round" strokeDasharray={dash + ' ' + (C - dash)} transform="rotate(-90 60 60)" />
+      <text x="60" y="58" textAnchor="middle" className="ring-num">{disp}</text>
+      <text x="60" y="77" textAnchor="middle" className="ring-lab">green</text>
+    </svg>
+    <span className="ring-cap">{label}</span>
+  </div>)
+}
+function monthLabel(m) { try { return new Date(m + '-01T00:00:00').toLocaleString('en', { month: 'short' }) } catch (e) { return m } }
+function riskLevel(s) { return s >= 4 ? 'High' : s >= 2 ? 'Medium' : 'Low' }
+function LineChart({ points }) {
+  const W = 560, H = 180, pad = 30
+  if (!points.length) return <p className="empty sm">Not enough data yet.</p>
+  const max = Math.max(100, ...points.map(p => p.value)); const min = 0; const n = points.length
+  const x = i => n === 1 ? W / 2 : pad + i * (W - 2 * pad) / (n - 1)
+  const y = v => H - pad - (v - min) / (max - min) * (H - 2 * pad)
+  const d = points.map((p, i) => (i ? 'L' : 'M') + x(i).toFixed(1) + ' ' + y(p.value).toFixed(1)).join(' ')
+  const area = d + ' L' + x(n - 1).toFixed(1) + ' ' + (H - pad) + ' L' + x(0).toFixed(1) + ' ' + (H - pad) + ' Z'
+  return (<svg viewBox={'0 0 ' + W + ' ' + H} className="line-chart">
+    <line x1={pad} y1={H - pad} x2={W - pad} y2={H - pad} stroke="#EDE7F4" />
+    <path d={area} fill="#6D4B8E" opacity="0.08" />
+    <path d={d} fill="none" stroke="#6D4B8E" strokeWidth="2.5" strokeLinejoin="round" />
+    {points.map((p, i) => (<g key={i}><circle cx={x(i)} cy={y(p.value)} r="4" fill="#6D4B8E" /><text x={x(i)} y={H - pad + 16} textAnchor="middle" className="lc-x">{p.label}</text><text x={x(i)} y={y(p.value) - 10} textAnchor="middle" className="lc-v">{p.value}</text></g>))}
+  </svg>)
+}
+function CountVal({ n }) { const v = useCountUp(typeof n === 'number' ? n : 0); return <>{typeof n === 'number' ? v : n}</> }
+function DonutInteractive({ data, active, onPick }) {
+  const total = data.reduce((s, d) => s + d.value, 0) || 1; const R = 54, C = 2 * Math.PI * R; let off = 0
+  return (<div className="donut">
+    <svg viewBox="0 0 140 140" className="donut-svg">
+      <circle cx="70" cy="70" r={R} fill="none" stroke="#EDE7F4" strokeWidth="18" />
+      {data.map((d, i) => { const dash = d.value / total * C; const dim = active !== 'all' && active !== d.key; const el = (<circle key={i} cx="70" cy="70" r={R} fill="none" stroke={d.color} strokeWidth={active === d.key ? 22 : 18} strokeDasharray={dash + ' ' + (C - dash)} strokeDashoffset={-off} transform="rotate(-90 70 70)" opacity={dim ? 0.28 : 1} style={{ cursor: 'pointer', transition: '.2s' }} onClick={() => onPick(d.key)} />); off += dash; return el })}
+      <text x="70" y="67" textAnchor="middle" className="donut-num">{total}</text>
+      <text x="70" y="85" textAnchor="middle" className="donut-lab">assessed</text>
+    </svg>
+    <div className="donut-legend">{data.map((d, i) => (<button key={i} className={'dl' + (active === d.key ? ' on' : '')} onClick={() => onPick(d.key)}><span className="dot" style={{ background: d.color }} />{d.label}<em>{d.value}</em></button>))}</div>
+  </div>)
+}
+function AnalyticsBody({ facilities, onOpen, role }) {
+  const [visits, setVisits] = useState([])
+  const [calls, setCalls] = useState([])
+  const [access, setAccess] = useState([])
+  const [ragF, setRagF] = useState('all')
+  const [areaF, setAreaF] = useState('all')
+  const [range, setRange] = useState('all')
+  const [q, setQ] = useState('')
+  useEffect(() => { VIS.list().then(setVisits).catch(() => {}) }, [])
+  useEffect(() => { CALLS.list().then(setCalls).catch(() => {}) }, [])
+  useEffect(() => { ACC.list().then(setAccess).catch(() => {}) }, [])
+  const go = tab => { if (onOpen && tab) onOpen(tab) }
+  const tabsFor = ROLE_TABS[role] || []
+  const vis = visits
+  const vdate = v => (v.visit_date || (v.assessment && v.assessment.date) || v.arrival_time || v.created_at || '')
+  const areasList = Array.from(new Set(facilities.map(f => f.area || 'Unassigned'))).sort()
+
+  const latestByFac = {}; vis.forEach(v => { const id = v.facility_id || ('n:' + (v.facility_name || '')); if (!id) return; if (!latestByFac[id] || vdate(v) > vdate(latestByFac[id])) latestByFac[id] = v })
+  const current = Object.values(latestByFac)
+  const rated = current.filter(v => v.score != null)
+  const unscored = current.filter(v => v.score == null && ((v.assessment && v.assessment.visited_unscored) || v.overall_rating === 'unscored'))
+  const avg = rated.length ? Math.round(rated.reduce((a, v) => a + v.score, 0) / rated.length) : null
+  const compliant = rated.filter(v => v.overall_rating === 'green').length
+  const complianceRate = rated.length ? Math.round(compliant / rated.length * 100) : null
+  const coverage = facilities.length ? Math.round((rated.length + unscored.length) / facilities.length * 100) : null
+  const rag = { green: 0, amber: 0, red: 0 }; rated.forEach(v => { if (rag[v.overall_rating] != null) rag[v.overall_rating]++ })
+
+  const called = new Set(calls.map(c => c.visit_id))
+  const awaitingCalls = vis.filter(v => v.status === 'debriefed' && !(v.debrief && v.debrief.first_visit) && !called.has(v.id)).length
+  const seconds = vis.filter(v => v.round === 2 || v.status === 'second' || (v.debrief && v.debrief.second_visit))
+  const secondFac = new Set(seconds.map(v => v.facility_id))
+  const firstBase = {}; vis.forEach(v => { if ((v.debrief && v.debrief.first_visit) || (v.assessment && v.assessment.ruid)) { const id = v.facility_id; if (id && !firstBase[id]) firstBase[id] = v } })
+  const secondDue = Object.keys(firstBase).filter(id => !secondFac.has(id)).length
+  const accessPending = access.filter(r => r.status === 'pending').length
+  const needsAttention = rated.filter(v => v.overall_rating === 'red' || v.overall_rating === 'amber').length
+
+  const ragOf = v => v.score != null ? v.overall_rating : (((v.assessment && v.assessment.visited_unscored) || v.overall_rating === 'unscored') ? 'unscored' : null)
+  const explore = current
+    .map(v => ({ v, f: facilities.find(f => f.id === v.facility_id) || { name: v.facility_name, area: v.area } }))
+    .filter(({ v }) => ragF === 'all' || ragOf(v) === ragF)
+    .filter(({ f, v }) => areaF === 'all' || (f.area || v.area || 'Unassigned') === areaF)
+    .filter(({ v }) => matchQ(v, q))
+    .sort((a, b) => (a.v.score == null ? 999 : a.v.score) - (b.v.score == null ? 999 : b.v.score))
+
+  const latest = {}; vis.forEach(v => { const id = v.facility_id; if (!id) return; if (!latest[id] || vdate(v) > vdate(latest[id])) latest[id] = v })
+  const points = facilities.filter(hasCoords)
+    .filter(f => areaF === 'all' || (f.area || 'Unassigned') === areaF)
+    .map(f => ({ lat: f.lat, lng: f.lng, name: f.name, rag: latest[f.id] ? (latest[f.id].score != null ? latest[f.id].overall_rating : 'unscored') : null }))
+    .filter(p => ragF === 'all' || (p.rag || 'none') === ragF)
+
+  const byMonth = {}; rated.forEach(v => { const m = vdate(v).slice(0, 7); if (!m) return; (byMonth[m] = byMonth[m] || []).push(v.score) })
+  let months = Object.keys(byMonth).sort(); if (range !== 'all') months = months.slice(-parseInt(range, 10))
+  const trend = months.map(m => ({ label: monthLabel(m), value: Math.round(byMonth[m].reduce((a, b) => a + b, 0) / byMonth[m].length) }))
+
+  const reins = { total: seconds.length, improved: 0, declined: 0, same: 0, resolved: 0, recTotal: 0 }
+  seconds.forEach(v => { const im = v.improvement || {}; if (im.verdict === 'Improved') reins.improved++; else if (im.verdict === 'Declined') reins.declined++; else reins.same++; reins.resolved += im.resolved || 0; reins.recTotal += im.recTotal || 0 })
+
+  const perf = {}; vis.forEach(v => { (v.team || []).forEach(t => { const k = t.name; if (!k) return; const m = perf[k] = perf[k] || { name: k, role: t.role, visits: 0, sum: 0, scored: 0 }; m.visits++; if (v.score != null) { m.sum += v.score; m.scored++ } }) })
+  const monitors = Object.values(perf).map(m => ({ ...m, avg: m.scored ? Math.round(m.sum / m.scored) : null })).sort((a, b) => b.visits - a.visits).slice(0, 6)
+
+  const now = Date.now()
+  const risk = facilities.map(f => { const lv = latest[f.id]; let s = 0; if (lv) { if (lv.overall_rating === 'red') s += 3; else if (lv.overall_rating === 'amber') s += 2; else if (!lv.overall_rating) s += 1 } else s += 1; const dl = lv && lv.debrief && lv.debrief.remediation_deadline; if (dl && new Date(dl + 'T00:00:00').getTime() < now) s += 2; return { f, s, rag: lv ? lv.overall_rating : null } }).sort((a, b) => b.s - a.s)
+  const topRisk = risk.filter(r => r.s >= 2).slice(0, 6)
+
+  const byArea = {}; vis.forEach(v => { const a = v.area || 'Unassigned'; byArea[a] = (byArea[a] || 0) + 1 })
+  const areaRows = Object.keys(byArea).sort().map(a => ({ a, n: byArea[a] })); const maxArea = Math.max(1, ...areaRows.map(r => r.n))
+
+  const summary = rated.length
+    ? coverage + '% of the estate assessed \u00b7 ' + complianceRate + '% green' + (needsAttention ? ' \u00b7 ' + needsAttention + ' need attention' : '') + (awaitingCalls ? ' \u00b7 ' + awaitingCalls + ' awaiting a follow-up call' : '')
+    : 'No assessments recorded yet. Load or capture visits to see the picture here.'
+
+  const kpis = [
+    { l: 'Facilities', v: facilities.length, tab: 'facilities', tone: 'p', show: true },
+    { l: 'Assessed', v: rated.length + unscored.length, tab: 'facilities', tone: 'p', show: true },
+    { l: 'Need attention', v: needsAttention, tab: 'reports', tone: 'r', show: tabsFor.includes('reports') },
+    { l: 'Awaiting calls', v: awaitingCalls, tab: 'followups', tone: 'a', show: tabsFor.includes('followups') },
+    { l: 'Second visits due', v: secondDue, tab: 'secondassessment', tone: 'p', show: tabsFor.includes('secondassessment') },
+    { l: 'Access requests', v: accessPending, tab: 'access', tone: 'r', show: tabsFor.includes('access') }
+  ].filter(k => k.show)
+
+  const ragChips = [['all', 'All', rated.length + unscored.length], ['green', 'Green', rag.green], ['amber', 'Amber', rag.amber], ['red', 'Red', rag.red], ['unscored', 'Not scored', unscored.length]]
+  const donutData = [{ label: 'Green', value: rag.green, color: '#2E7D46', key: 'green' }, { label: 'Amber', value: rag.amber, color: '#C77D0A', key: 'amber' }, { label: 'Red', value: rag.red, color: '#B4442E', key: 'red' }, { label: 'Not scored', value: unscored.length, color: '#B9AEC9', key: 'unscored' }]
+  const legend = [['green', 'Green', rag.green], ['amber', 'Amber', rag.amber], ['red', 'Red', rag.red], ['unscored', 'Not scored', unscored.length]]
+
+  return (<>
+    <div className="dash-hero">
+      <div className="dash-hero-ring"><Ring pct={complianceRate} label={avg == null ? 'No scores yet' : 'Avg score ' + avg + '%'} /></div>
+      <div className="dash-hero-body">
+        <p className="dash-hero-sum">{summary}</p>
+        <div className="dash-hero-cov">
+          <div className="cov-bar"><div className="cov-fill" style={{ width: (coverage || 0) + '%' }} /></div>
+          <span className="cov-cap">{rated.length + unscored.length} of {facilities.length} facilities visited</span>
+        </div>
+        <div className="dash-hero-legend">{legend.map(([k, l, n]) => (<span key={k} className={'hero-leg ' + k}><span className="hr-dot" />{l}<em>{n}</em></span>))}</div>
+      </div>
+    </div>
+
+    <div className="dash-kpis">{kpis.map(k => (
+      <button key={k.l} className={'dash-kpi tone-' + k.tone} onClick={() => go(k.tab)}>
+        <span className="dk-v"><CountVal n={k.v} /></span><span className="dk-l">{k.l}</span><span className="dk-go">Open {'\u2192'}</span>
+      </button>))}
+    </div>
+
+    <div className="an-panel">
+      <div className="dash-exp-head"><h3>Compliance by facility</h3><SearchBox value={q} onChange={setQ} placeholder="Search facilities…" /></div>
+      <div className="dash-exp">
+        <div className="dash-exp-donut">
+          {(rated.length + unscored.length) === 0 ? <p className="empty sm">No assessments yet.</p> : <DonutInteractive data={donutData} active={ragF} onPick={k => setRagF(f => f === k ? 'all' : k)} />}
+        </div>
+        <div className="dash-exp-list">
+          <div className="dash-exp-filters">
+            <div className="fu-segs sm wrap">{ragChips.map(([k, l, n]) => <button key={k} className={'fu-seg' + (ragF === k ? ' on' : '')} onClick={() => setRagF(k)}>{l}{n ? <span className="fu-seg-n">{n}</span> : null}</button>)}</div>
+            <select className="dash-area-sel" value={areaF} onChange={e => setAreaF(e.target.value)}><option value="all">All areas</option>{areasList.map(a => <option key={a} value={a}>{a}</option>)}</select>
+          </div>
+          {explore.length === 0 ? <p className="empty sm">No facilities match these filters.</p> :
+            <ul className="dash-flist">{explore.slice(0, 60).map(({ v, f }, i) => (
+              <li key={i} onClick={() => go('facilities')}>
+                <span className="df-name">{f.name || v.facility_name}<em>{f.area || v.area || 'Unassigned'}</em></span>
+                {v.score != null ? <Chip rag={v.overall_rating} pct={v.score} /> : <span className="chip amber">Not scored</span>}
+              </li>))}</ul>}
+          {explore.length > 60 && <p className="hintline">Showing 60 of {explore.length}. Refine with search or filters.</p>}
+        </div>
+      </div>
+    </div>
+
+    <div className="an-panel">
+      <div className="dash-exp-head"><h3>Compliance trend</h3>
+        <div className="fu-segs sm">{[['6', '6m'], ['12', '12m'], ['all', 'All']].map(([k, l]) => <button key={k} className={'fu-seg' + (range === k ? ' on' : '')} onClick={() => setRange(k)}>{l}</button>)}</div>
+      </div>
+      {trend.length === 0 ? <p className="empty sm">No scored visits in this range.</p> : <LineChart points={trend} />}
+    </div>
+
+    <div className="an-panel">
+      <h3>Re-inspection outcomes</h3>
+      <p className="hintline">Movement between the first visit and a follow-up assessment. The headline figures above already reflect each facility's most recent visit; this panel shows the change.</p>
+      {reins.total === 0
+        ? <p className="empty sm">No re-inspections recorded yet. As second assessments are completed, the improved / no-change / declined split will appear here.</p>
+        : <>
+          <div className="reins-row">
+            <div className="reins-stat"><span className="reins-v g">{reins.improved}</span><span className="reins-l">Improved</span></div>
+            <div className="reins-stat"><span className="reins-v a">{reins.same}</span><span className="reins-l">No change</span></div>
+            <div className="reins-stat"><span className="reins-v r">{reins.declined}</span><span className="reins-l">Declined</span></div>
+            <div className="reins-stat"><span className="reins-v">{reins.total}</span><span className="reins-l">Re-inspected</span></div>
+          </div>
+          {reins.recTotal > 0 && <p className="hintline">{reins.resolved} of {reins.recTotal} first-visit recommendations resolved across re-inspected facilities.</p>}
+        </>}
+    </div>
+
+    <div className="an-two">
+      <div className="an-panel"><h3>Team performance</h3>
+        {monitors.length === 0 ? <p className="empty sm">No visits yet.</p> : <div className="perf">{monitors.map(m => {
+          const rg = m.avg == null ? null : m.avg >= 80 ? 'green' : m.avg >= 50 ? 'amber' : 'red'
+          return (<div className="perf-row" key={m.name}><span className="perf-name">{m.name}<em>{m.role}</em></span><span className="perf-stat">{m.visits} visit{m.visits === 1 ? '' : 's'}</span><Chip rag={rg} pct={m.avg == null ? null : m.avg} /></div>)
+        })}</div>}
+      </div>
+      <div className="an-panel"><h3>Facilities needing attention</h3>
+        {topRisk.length === 0 ? <p className="empty sm">Nothing flagged.</p> : <div className="risk">{topRisk.map(r => (
+          <div className="risk-row" key={r.f.id} onClick={() => go('facilities')} style={{ cursor: 'pointer' }}><span className="risk-name">{r.f.name}<em>{r.f.area || 'Unassigned'}</em></span><span className={'risk-badge ' + riskLevel(r.s).toLowerCase()}>{riskLevel(r.s)} risk</span></div>
+        ))}</div>}
+      </div>
+    </div>
+
+    <div className="an-panel"><h3>Visits by area</h3>
+      <p className="hintline">Tap a bar to filter the facility list above.</p>
+      {areaRows.length === 0 ? <p className="empty sm">No visits yet.</p> : <div className="bars">{areaRows.map(r => (
+        <div className={'bar-row click' + (areaF === r.a ? ' on' : '')} key={r.a} onClick={() => setAreaF(a => a === r.a ? 'all' : r.a)}><span className="bar-lab">{r.a}</span><div className="bar-track"><div className="bar-fill" style={{ width: (r.n / maxArea * 100) + '%' }} /></div><span className="bar-n">{r.n}</span></div>
+      ))}</div>}
+    </div>
+
+    <div className="an-panel"><h3>Geographic outcomes</h3>
+      <p className="hintline">Each facility is coloured by its most recent visit outcome{ragF !== 'all' || areaF !== 'all' ? ' (filtered)' : ''}. Grey means not yet assessed.</p>
+      {points.length === 0 ? <p className="empty sm">No mapped facilities match.</p> : <HeatMap points={points} />}
+    </div>
+  </>)
+}
+
+/* ---------- bars ---------- */
+function useCountUp(target, ms = 900) {
+  const [n, setN] = useState(0)
+  useEffect(() => {
+    if (typeof target !== 'number' || isNaN(target)) { setN(target); return }
+    let raf, start
+    const step = (t) => { if (!start) start = t; const p = Math.min(1, (t - start) / ms); setN(Math.round(target * (1 - Math.pow(1 - p, 3)))); if (p < 1) raf = requestAnimationFrame(step) }
+    raf = requestAnimationFrame(step)
+    return () => cancelAnimationFrame(raf)
+  }, [target])
+  return n
+}
+function TabIcon({ id }) {
+  const p = {
+    dashboard: 'M4 13h6V4H4v9zm0 7h6v-5H4v5zm10 0h6V11h-6v9zm0-16v5h6V4h-6z',
+    facilities: 'M5 21h14M7 21V7l5-4 5 4v14M10 21v-4h4v4',
+    map: 'M9 4 3 6v15l6-2 6 2 6-2V4l-6 2-6-2zM9 4v15M15 6v15',
+    engage: 'M12 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM5 20c0-3.5 3-6 7-6s7 2.5 7 6',
+    monitor: 'M5 3h14v14H5zM8 9l2 2 4-5M8 13h6M9 21h6',
+    debrief: 'M6 3h12v18l-6-3-6 3zM9 8h6M9 12h4',
+    secondassessment: 'M4 8a8 8 0 0113-6M20 4v4h-4M20 16a8 8 0 01-13 6M4 20v-4h4M9 12l2 2 4-4',
+    assign: 'M8 6h11M8 12h11M8 18h11M4 6h.01M4 12h.01M4 18h.01',
+    reports: 'M7 3h7l5 5v13H7zM14 3v5h5M9 13h6M9 17h6',
+    analytics: 'M4 20V11M10 20V4M16 20v-7M22 20H2',
+    myfacility: 'M5 21h14M7 21V7l5-4 5 4v14M10 13h4M10 17h4',
+    followups: 'M4 4h5l2 5-3 2a12 12 0 006 6l2-3 5 2v5a2 2 0 01-2 2A16 16 0 014 6a2 2 0 012-2',
+    settings: 'M12 15a3 3 0 100-6 3 3 0 000 6zM19 12a7 7 0 00-.1-1l2-1.6-2-3.4-2.4 1a7 7 0 00-1.7-1l-.3-2.6H9.5l-.3 2.6a7 7 0 00-1.7 1l-2.4-1-2 3.4L3.1 11a7 7 0 000 2l-2 1.6 2 3.4 2.4-1a7 7 0 001.7 1l.3 2.6h4.9l.3-2.6a7 7 0 001.7-1l2.4 1 2-3.4-2-1.6a7 7 0 00.1-1z',
+    assistant: 'M12 3l2 5 5 2-5 2-2 5-2-5-5-2 5-2zM19 15l1 2.5L22 19l-2 1-1 2.5-1-2.5L16 19l2-1z',
+    approvals: 'M9 12l2 2 4-4M12 3l7 4v5c0 4.5-3 8.3-7 9-4-.7-7-4.5-7-9V7z',
+    integrity: 'M12 3l7 4v5c0 4.5-3 8.3-7 9-4-.7-7-4.5-7-9V7zM12 8v4M12 15h.01',
+    access: 'M10 11a4 4 0 100-8 4 4 0 000 8zM3 21v-1a7 7 0 019.5-6.5M15 18l2 2 4-4'
+  }[id] || 'M4 4h16v16H4z'
+  return (<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d={p} /></svg>)
+}
+function SiteBar({ tab, setTab, onSignIn, lang, setLang, t }) {
+  return (<header className="bar">
+    <button className="wordmark" onClick={() => setTab('home')} aria-label="REALMS home"><img className="mark" src="/rhsc-mark.png" alt="RHSC" /><span className="wm-text"><strong>REALMS</strong><em>Healthcare Services Consulting</em></span></button>
+    <nav className="tabs" aria-label="Primary">{SITE_TABS.map(tb => (<button key={tb.id} className={'tab' + (tab === tb.id ? ' active' : '')} onClick={() => setTab(tb.id)}>{t('nav_' + tb.id)}</button>))}</nav>
+    <div className="bar-right">
+      <select className="langsel" value={lang} onChange={e => setLang(e.target.value)} aria-label="Language">{LANGS.map(l => <option key={l.code} value={l.code}>{l.label}</option>)}</select>
+      <button className="signin" onClick={onSignIn}>{t('cta_signin')}</button>
+    </div>
+  </header>)
+}
+function TopBarApp({ identity, realRole, viewAsName, onViewAs, onEditName, onSignOut, onToggleNav }) {
+  const isHQ = realRole === 'rhsc_hq'
+  return (<header className="topbar">
+    <div className="tb-left">
+      <button className="navtoggle" onClick={onToggleNav} aria-label="Menu"><svg viewBox="0 0 24 24" stroke="currentColor" fill="none" strokeWidth="2"><path d="M4 7h16M4 12h16M4 17h16" /></svg></button>
+      <img className="mark" src="/rhsc-mark.png" alt="RHSC" />
+      <span className="tb-name">REALMS FIELD</span>
+      {isHQ && (<div className="ws"><label>View as</label>
+        <select value={viewAsName} onChange={e => onViewAs(e.target.value)}>
+          <option value="">My view (HQ)</option>
+          {VIEW_USERS.map(u => <option key={u.name} value={u.name}>{u.name + ' \u00b7 ' + ((roleById(u.role) || {}).label || '')}</option>)}
+        </select>
+      </div>)}
+    </div>
+    <div className="tb-right"><button className="who" onClick={onEditName} title="Edit your name">{identity.first}</button><button className="signin" onClick={onSignOut}>Sign out</button></div>
+  </header>)
+}
+function Sidebar({ role, appTab, setAppTab, collapsed, setCollapsed, open, setOpen, badges }) {
+  const r = roleById(role); const tabs = ROLE_TABS[role] || ['dashboard']
+  return (<>
+    <div className={'scrim' + (open ? ' show' : '')} onClick={() => setOpen(false)} />
+    <aside className={'sidebar' + (collapsed ? ' collapsed' : '') + (open ? ' open' : '')}>
+      <div className="sb-head"><span className="sb-role">{r ? r.label : 'Workspace'}</span></div>
+      <nav className="sb-nav">{tabs.map(t => { const n = badges && badges[t]; return (
+        <button key={t} className={'sb-item' + (appTab === t ? ' active' : '')} onClick={() => { setAppTab(t); setOpen(false) }} title={TAB_LABEL[t] + (n ? ' (' + n + ' waiting)' : '')}>
+          <span className="sb-ico"><TabIcon id={t} />{n ? <span className="sb-badge">{n > 99 ? '99+' : n}</span> : null}</span><span className="sb-lab">{TAB_LABEL[t]}</span>{n ? <span className="sb-badge-lab">{n > 99 ? '99+' : n}</span> : null}
+        </button>
+      ) })}</nav>
+      <button className="sb-collapse" onClick={() => setCollapsed(c => !c)} title="Collapse menu">
+        <svg viewBox="0 0 24 24" stroke="currentColor" fill="none" strokeWidth="2"><path d={collapsed ? 'M9 6l6 6-6 6' : 'M15 6l-6 6 6 6'} /></svg><span className="sb-lab">Collapse</span>
+      </button>
+    </aside>
+  </>)
+}
+
+/* ---------- root ---------- */
+export default function App() {
+  const [tab, setTab] = useState('home')
+  const [view, setView] = useState('site')
+  const [user, setUser] = useState(null)
+  const [role, setRole] = useState(null)
+  const [hqPending, setHqPending] = useState(false)
+  const [pendKind, setPendKind] = useState('rhsc_hq')
+  const [myFacility, setMyFacility] = useState(null)
+  const [appTab, setAppTab] = useState('dashboard')
+  const [badges, setBadges] = useState({})
+  const [facs, setFacs] = useState([])
+  async function refreshBadges() {
+    try { const rows = await ACC.list(); setBadges(b => ({ ...b, access: rows.filter(r => r.status === 'pending').length })) } catch (e) {}
+    try {
+      const [vs, cl] = await Promise.all([VIS.list(), CALLS.list()])
+      const called = new Set(cl.map(c => c.visit_id))
+      const awaiting = vs.filter(v => v.status === 'debriefed' && !(v.debrief && v.debrief.first_visit) && !called.has(v.id)).length
+      setBadges(b => ({ ...b, followups: awaiting }))
+    } catch (e) {}
+  }
+  useEffect(() => {
+    if (!user || !role) { setBadges({}); return }
+    const t = ROLE_TABS[role] || []
+    if (!t.includes('access') && !t.includes('followups')) return
+    let live = true; const run = () => { if (live) refreshBadges() }
+    run(); const iv = setInterval(run, 60000)
+    return () => { live = false; clearInterval(iv) }
+  }, [user, role, appTab])
+  const [navCollapsed, setNavCollapsed] = useState(false)
+  const [navOpen, setNavOpen] = useState(false)
+  const [viewAs, setViewAs] = useState(null)
+  const [dbError, setDbError] = useState('')
+  const [lang, setLang] = useState(() => { try { return localStorage.getItem('realms_lang') || 'en' } catch (e) { return 'en' } })
+  function changeLang(l) { setLang(l); try { localStorage.setItem('realms_lang', l) } catch (e) {} }
+  const seedTriedRef = useRef(false)
+
+  useEffect(() => {
+    let forceOut = false
+    try { if (!localStorage.getItem('realms_reauth_v3')) { localStorage.setItem('realms_reauth_v3', '1'); localStorage.removeItem('realms_demo_user'); localStorage.removeItem('realms_demo_role'); forceOut = true } } catch (e) {}
+    if (MODE === 'supabase') {
+      let subscription
+      try {
+        if (forceOut) { try { supabase.auth.signOut() } catch (e) {} }
+        const res = supabase.auth.onAuthStateChange((_e, s) => {
+          if (s && s.user) { setUser({ email: s.user.email, id: s.user.id, name: (s.user.user_metadata && s.user.user_metadata.full_name) || '' }); loadRole(s.user.id, { email: s.user.email }); setView('app') }
+          else { setUser(null); setRole(null); setViewAs(null); setView(prev => (prev === 'app' ? 'site' : prev)) }
+        })
+        subscription = res.data.subscription
+      } catch (e) { /* site still renders */ }
+      return () => { if (subscription) subscription.unsubscribe() }
+    } else {
+      if (forceOut) return
+      try {
+        const raw = localStorage.getItem('realms_demo_user'); const dr = localStorage.getItem('realms_demo_role')
+        if (raw) { setUser(JSON.parse(raw)); if (dr) setRole(dr); setView('app') }
+      } catch (e) { /* ignore */ }
+    }
+  }, [])
+
+  // load facilities whenever we enter the app with a role
+  useEffect(() => { if (view === 'app' && user && role) reloadFacs() }, [view, role])
+  // reminders: run once a day, quietly, when an oversight role opens the app
+  useEffect(() => {
+    if (!(view === 'app' && user && (role === 'rhsc_hq' || role === 'team_leader'))) return
+    const today = new Date().toISOString().slice(0, 10)
+    let last = ''
+    try { last = localStorage.getItem('realms_reminders_run') || '' } catch (e) {}
+    if (last === today) return
+    let live = true
+    const t = setTimeout(async () => {
+      try {
+        const vs = await VIS.list()
+        const out = await runReminders(vs, facs, user.id)
+        if (!live) return
+        try { localStorage.setItem('realms_reminders_run', today) } catch (e) {}
+        if (out.length) toast(out.length + ' re-inspection reminder' + (out.length === 1 ? '' : 's') + ' sent.')
+      } catch (e) {}
+    }, 4000)
+    return () => { live = false; clearTimeout(t) }
+  }, [view, role, facs.length])
+
+  async function reloadFacs() {
+    setDbError('')
+    let list = []
+    try { list = await FAC.list() } catch (e) { setDbError((e && e.message) || 'Could not read the database.'); setFacs([]); return }
+    let noSeed = false; try { noSeed = !!localStorage.getItem('realms_no_seed') } catch (e) {}
+    if (MODE === 'demo' && list.length === 0 && !seedTriedRef.current && !noSeed) {
+      seedTriedRef.current = true
+      const res = await seedSampleData(user && user.id)
+      try { list = await FAC.list() } catch (e) {}
+      if (list.length === 0 && res && res.error) setDbError(res.error)
+    }
+    setFacs(list)
+  }
+  async function loadSample() {
+    setDbError(''); seedTriedRef.current = true
+    const res = await seedSampleData(user && user.id)
+    try {
+      const list = await FAC.list(); setFacs(list)
+      if (list.length === 0 && res && res.error) setDbError(res.error)
+      else if (res && res.error) { setDbError('Facilities loaded, but the visit records failed: ' + res.error); toast('Facilities loaded, but visit records failed. See the message on the dashboard.', 'err') }
+      else if (list.length) toast(list.length + ' live facilities loaded.')
+    }
+    catch (e) { setDbError((e && e.message) || 'Could not read the database.') }
+  }
+  async function clearAll() {
+    if (!(await confirmAction('This removes ALL facilities, visits and assignments. It cannot be undone.', { title: 'Clear all data', ok: 'Clear everything', danger: true }))) return
+    try { await clearAllData() } catch (e) {}
+    try { localStorage.setItem('realms_no_seed', '1') } catch (e) {}
+    seedTriedRef.current = true; setFacs([]); setDbError(''); toast('All data cleared.')
+  }
+  function editName() {
+    const n = window.prompt('Your name (only your first name is used to greet you)', (user && user.name) || '')
+    if (n == null) return; const nm = n.trim(); if (!nm) return
+    setUser(u => ({ ...(u || {}), name: nm }))
+    if (MODE === 'supabase') { try { supabase.auth.updateUser({ data: { full_name: nm } }) } catch (e) {} }
+    else { try { const raw = JSON.parse(localStorage.getItem('realms_demo_user') || '{}'); localStorage.setItem('realms_demo_user', JSON.stringify({ ...raw, name: nm })) } catch (e) {} }
+  }
+  function doViewAs(name) {
+    if (!name) { setViewAs(null); setAppTab('dashboard'); return }
+    const u = VIEW_USERS.find(x => x.name === name); if (u) { setViewAs(u); setAppTab('dashboard') }
+  }
+
+  async function loadRole(uid, u) {
+    if (MODE !== 'supabase') return
+    try {
+      const { data } = await supabase.from('kv').select('v').eq('user_id', uid).eq('k', 'role').maybeSingle()
+      const r = data && data.v ? (typeof data.v === 'string' ? data.v : data.v.role) : null
+      if (!r) return
+      if (r === 'rhsc_hq' && !isOwner(u)) {
+        let req = null
+        try { req = await ACC.mine(uid, 'rhsc_hq') } catch (e) {}
+        if (!req) {
+          // Role was saved before the gate existed. Raise the request now, so it reaches the executive office.
+          try { req = await ACC.request({ user_id: uid, email: (u && u.email) || '', name: (u && u.name) || '', role: 'rhsc_hq' }) } catch (e) {}
+          try { sendNotify({ channel: 'email', to: OWNER_EMAIL, subject: 'HQ access request', message: ((u && (u.name || u.email)) || 'A user') + ' has requested RHSC HQ access on Realms Field.' }) } catch (e) {}
+        }
+        if (!req || req.status !== 'approved') { setPendKind('rhsc_hq'); setHqPending(true); setRole(null); return }
+      }
+      if (r === 'facility_proprietor') {
+        let req = null
+        try { req = await ACC.mine(uid, 'facility_proprietor') } catch (e) {}
+        if (!req || req.status !== 'approved') { setPendKind('facility_proprietor'); setHqPending(true); setRole(null); return }
+        setMyFacility(req.facility_id || null)
+      }
+      setHqPending(false); setRole(r)
+    } catch (e) { /* role picker will show */ }
+  }
+  async function pickRole(id) {
+    if (MODE === 'supabase' && user) { try { await supabase.from('kv').upsert({ user_id: user.id, k: 'role', v: id, updated_at: new Date().toISOString() }) } catch (e) {} }
+    else localStorage.setItem('realms_demo_role', id)
+    if (id === 'rhsc_hq' && user && !isOwner(user)) {
+      try { await ACC.request({ user_id: user.id, email: user.email, name: user.name || '', role: 'rhsc_hq' }) } catch (e) {}
+      setPendKind('rhsc_hq'); setHqPending(true); setRole(null)
+      try { sendNotify({ channel: 'email', to: OWNER_EMAIL, subject: 'HQ access request', message: (user.name || user.email) + ' has requested RHSC HQ access on Realms Field.' }) } catch (e) {}
+      return
+    }
+    if (id === 'facility_proprietor' && user) { setPendKind('facility_proprietor'); setHqPending(true); setRole(null); return }
+    setHqPending(false); setRole(id); setAppTab('dashboard')
+  }
+  function afterAuth(u) { setUser(u); setView('app') }
+  async function signOut() {
+    if (MODE === 'supabase') { try { await supabase.auth.signOut() } catch (e) {} }
+    else { localStorage.removeItem('realms_demo_user'); localStorage.removeItem('realms_demo_role') }
+    setUser(null); setRole(null); setHqPending(false); setViewAs(null); setView('site'); setTab('home'); setAppTab('dashboard')
+  }
+
+  const identity = user ? identityFor(user.email, user.name) : { name: 'Staff', first: 'Staff', title: '' }
+  const t = makeT(lang)
+  const effRole = viewAs ? viewAs.role : role
+  const effId = viewAs ? { name: viewAs.name, first: viewAs.name.split(' ')[0], title: '', photo: '' } : identity
+  const canEdit = CAN_EDIT.includes(effRole)
+
+  let body
+  if (view === 'auth') body = <AuthPanel onDone={afterAuth} onCancel={() => setView('site')} />
+  else if (view === 'app' && user) {
+    if (hqPending) body = <PendingAccess kind={pendKind} user={user} facilities={facs} identity={identity} onSignOut={signOut} onBack={() => setHqPending(false)} />
+    else if (!role) body = <RolePicker identity={identity} onPick={pickRole} onSignOut={signOut} />
+    else if (appTab === 'facilities') body = <FacilitiesPage list={facs} canEdit={canEdit} userId={user.id} reload={reloadFacs} />
+    else if (appTab === 'map') body = <MapRoutePage list={facs} role={effRole} userId={user.id} />
+    else if (appTab === 'engage') body = <EngagePage list={facs} identity={effId} role={effRole} userId={user.id} />
+    else if (appTab === 'monitor') body = <MonitorPage userId={user.id} />
+    else if (appTab === 'debrief') body = <DebriefPage userId={user.id} facilities={facs} />
+    else if (appTab === 'secondassessment') body = <SecondAssessmentPage facilities={facs} identity={effId} userId={user.id} role={effRole} />
+    else if (appTab === 'reports') body = <ReportsPage facilities={facs} userId={user.id} role={effRole} />
+    else if (appTab === 'myfacility') body = <ProprietorPage facilityId={myFacility} facilities={facs} />
+    else if (appTab === 'followups') body = <FollowUpsPage userId={user.id} identity={identity} facilities={facs} onChange={refreshBadges} />
+    else if (appTab === 'settings') body = <SettingsPage user={user} identity={identity} facilities={facs} />
+    else if (appTab === 'assistant') body = <AssistantPage facilities={facs} />
+    else if (appTab === 'approvals') body = <ApprovalsPage userId={user.id} identity={effId} role={effRole} />
+    else if (appTab === 'integrity') body = <IntegrityPage facilities={facs} />
+    else if (appTab === 'access') body = <AccessRequestsPage identity={effId} user={user} onChange={refreshBadges} />
+    else if (appTab === 'assign') body = <AssignPage list={facs} userId={user.id} />
+    else body = <Dashboard identity={effId} role={effRole} onOpen={setAppTab} facilities={facs} onSeed={loadSample} onClear={clearAll} dbError={dbError} />
+  } else {
+    body = tab === 'home' ? <HomePage onSignIn={() => setView('auth')} go={setTab} t={t} />
+      : tab === 'services' ? <ServicesPage go={setTab} />
+      : tab === 'monitoring' ? <MonitoringPage onSignIn={() => setView('auth')} go={setTab} />
+      : tab === 'about' ? <AboutPage />
+      : tab === 'leadership' ? <LeadershipPage go={setTab} />
+      : <ContactPage />
+  }
+
+  const showAppShell = view === 'app' && user && role
+  const showAuthBare = view === 'auth'
+
+  if (showAppShell) {
+    return (<div className="realms app-mode">
+      <style>{css}</style>
+      <Overlays />
+      <TopBarApp identity={effId} realRole={role} viewAsName={viewAs ? viewAs.name : ''} onViewAs={doViewAs} onEditName={editName} onSignOut={signOut} onToggleNav={() => setNavOpen(o => !o)} />
+      {viewAs && (<div className="viewas-bar">Viewing as {viewAs.name} &middot; {(roleById(viewAs.role) || {}).label}<button onClick={() => doViewAs('')}>Return to my view</button></div>)}
+      <div className="shell">
+        <Sidebar role={effRole} appTab={appTab} setAppTab={setAppTab} collapsed={navCollapsed} setCollapsed={setNavCollapsed} open={navOpen} setOpen={setNavOpen} badges={badges} />
+        <main className="app-main">{body}</main>
+      </div>
+    </div>)
+  }
+
+  return (<div className="realms">
+    <style>{css}</style>
+    <Overlays />
+    {!showAuthBare && <SiteBar tab={tab} setTab={(t2) => { setView('site'); setTab(t2) }} onSignIn={() => setView('auth')} lang={lang} setLang={changeLang} t={t} />}
+    <main id="top" className={showAuthBare ? 'main-auth' : ''}>{body}</main>
+    {!showAuthBare && (<footer className="foot"><div className="foot-inner">
+      <div className="foot-brand"><img className="foot-mark" src="/rhsc-mark.png" alt="RHSC" /><span>REALMS Healthcare Services Consulting Limited</span></div>
+      <p className="foot-tag">{t('tagline')}</p>
+    </div></footer>)}
+    {!showAuthBare && <SiteAssistant />}
+  </div>)
+}
+
+function SiteAssistant() {
+  const [open, setOpen] = useState(false)
+  const [msgs, setMsgs] = useState([{ role: 'assistant', text: 'Hello! I can help with questions about RHSC — our services, HEFAMAA monitoring, or booking a consultation. How can I help?' }])
+  const [input, setInput] = useState(''); const [busy, setBusy] = useState(false)
+  const boxRef = useRef(null)
+  useEffect(() => { if (boxRef.current) boxRef.current.scrollTop = boxRef.current.scrollHeight }, [msgs, open])
+  const SYS = 'You are the website assistant for REALMS Healthcare Services Consulting Limited (RHSC), a Lagos healthcare consulting firm and licensed HEFAMAA facility-monitoring operator. Services: strategy and advisory; quality and accreditation; facility monitoring and accreditation (HEFAMAA); training and capacity building; health financing; and digital health via the Genesys EMR. Office: 21 Fatai Arobieke Street, off Admiralty Way, Lekki Phase 1, Lagos. Answer briefly and warmly, help visitors understand the services and encourage booking a consultation on the Contact page. If asked something outside RHSC, gently redirect. Never invent specific prices, names or regulatory rulings.'
+  async function send() {
+    const q = input.trim(); if (!q || busy) return
+    const next = msgs.concat([{ role: 'user', text: q }]); setMsgs(next); setInput(''); setBusy(true)
+    const convo = next.map(m => (m.role === 'user' ? 'Visitor: ' : 'Assistant: ') + m.text).join('\n')
+    const r = await askAI({ system: SYS, prompt: convo + '\nAssistant:', max_tokens: 500 })
+    setBusy(false)
+    setMsgs(m => m.concat([{ role: 'assistant', text: r.ok ? r.text : (r.reason === 'ai_not_configured' ? 'The assistant is not enabled yet. Please use the Contact page and our team will respond.' : 'Sorry, I could not respond just now. Please try the Contact page.') }]))
+  }
+  return (<>
+    <button className="assistant-fab" onClick={() => setOpen(o => !o)} aria-label="Ask RHSC">{open ? '\u00d7' : 'Ask RHSC'}</button>
+    {open && (<div className="assistant-panel">
+      <div className="assistant-head"><span>Ask RHSC</span><button className="linkbtn subtle" onClick={() => setOpen(false)}>Close</button></div>
+      <div className="assistant-msgs" ref={boxRef}>{msgs.map((m, i) => <div key={i} className={'amsg ' + m.role}>{m.text}</div>)}{busy && <div className="amsg assistant typing">&hellip;</div>}</div>
+      <div className="assistant-input"><input value={input} onChange={e => setInput(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') send() }} placeholder="Type your question" /><button className="btn primary" onClick={send} disabled={busy}>Send</button></div>
+    </div>)}
+  </>)
+}
+function AssistantPage({ facilities }) {
+  const [visits, setVisits] = useState([])
+  const [msgs, setMsgs] = useState([{ role: 'assistant', text: 'Ask about your monitoring data: coverage, outcomes, overdue re-inspections, facilities needing attention, trends by area, and more.' }])
+  const [input, setInput] = useState(''); const [busy, setBusy] = useState(false)
+  const boxRef = useRef(null)
+  useEffect(() => { VIS.list().then(setVisits).catch(() => {}) }, [])
+  useEffect(() => { if (boxRef.current) boxRef.current.scrollTop = boxRef.current.scrollHeight }, [msgs])
+  function dataSummary() {
+    const byArea = {}, byStatus = {}, byRag = {}
+    visits.forEach(v => { const a = v.area || 'Unassigned'; byArea[a] = (byArea[a] || 0) + 1; byStatus[v.status || 'engaged'] = (byStatus[v.status || 'engaged'] || 0) + 1; if (v.overall_rating) byRag[v.overall_rating] = (byRag[v.overall_rating] || 0) + 1 })
+    const due = visits.filter(v => v.debrief && v.debrief.remediation_deadline).map(v => ({ facility: v.facility_name, area: v.area, due: v.debrief.remediation_deadline }))
+    const recent = visits.slice(0, 40).map(v => ({ facility: v.facility_name, area: v.area, date: (v.arrival_time || v.created_at || '').slice(0, 10), status: v.status, rating: v.overall_rating, score: v.score }))
+    return JSON.stringify({ facilities: facilities.length, areas: Array.from(new Set(facilities.map(f => f.area || 'Unassigned'))), visits: visits.length, byArea, byStatus, byRag, due, recent })
+  }
+  async function send() {
+    const q = input.trim(); if (!q || busy) return
+    const next = msgs.concat([{ role: 'user', text: q }]); setMsgs(next); setInput(''); setBusy(true)
+    const sys = 'You are the RHSC operations analyst. Answer questions using ONLY the JSON monitoring data provided. Be concise, use concrete numbers, and if the data does not contain the answer say so plainly. RAG ratings: green = compliant, amber = partial, red = serious gaps.'
+    const convo = next.map(m => (m.role === 'user' ? 'Q: ' : 'A: ') + m.text).join('\n')
+    const r = await askAI({ system: sys, prompt: 'DATA:\n' + dataSummary() + '\n\n' + convo + '\nA:', max_tokens: 700 })
+    setBusy(false)
+    setMsgs(m => m.concat([{ role: 'assistant', text: r.ok ? r.text : (r.reason === 'ai_not_configured' ? 'AI is not set up yet. Add ANTHROPIC_API_KEY in Vercel to enable it.' : 'Could not respond. Please try again.') }]))
+  }
+  return (<div className="page">
+    <div className="ptitle"><div><p className="eyebrow">AI</p><h2>Data assistant</h2></div></div>
+    <div className="chat-wrap">
+      <div className="chat-msgs" ref={boxRef}>{msgs.map((m, i) => <div key={i} className={'cmsg ' + m.role}>{m.text}</div>)}{busy && <div className="cmsg assistant">&hellip;</div>}</div>
+      <div className="chat-input"><input value={input} onChange={e => setInput(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') send() }} placeholder="e.g. Which areas have the most red facilities?" /><button className="btn primary" onClick={send} disabled={busy}>Ask</button></div>
+    </div>
+    <p className="hintline">Answers are generated from your monitoring data. Verify before acting.</p>
+  </div>)
+}
+
+const css = `
+.realms { --ink:#3A2B54; --p:#6D4B8E; --p-deep:#574277; --p-mid:#7E63A0; --v:#A98FC4; --lav1:#F6F3FA; --lav2:#EDE7F4; --line:#E4DCEE; --white:#ffffff; --e1:0 1px 2px rgba(58,21,96,.05); --e2:0 4px 14px rgba(58,21,96,.07); --e3:0 14px 40px rgba(58,21,96,.11); --r-sm:10px; --r-md:14px; --r-lg:18px; --tap:44px; color:var(--ink); min-height:100vh; display:flex; flex-direction:column; }
+.realms h1,.realms h2,.realms h3 { font-weight:600; letter-spacing:.01em; margin:0; }
+.realms p { margin:0; }
+.realms a { color:inherit; text-decoration:none; }
+.realms img { display:block; max-width:100%; }
+.realms button { font-family:inherit; cursor:pointer; }
+.realms .eyebrow { font-size:12px; letter-spacing:.2em; text-transform:uppercase; color:var(--v); font-weight:600; margin:0 0 14px; }
+.realms .accent { color:var(--p); }
+.realms :focus-visible { outline:2.5px solid var(--p); outline-offset:3px; border-radius:6px; }
+@keyframes fadeUp { from { opacity:0; transform:translateY(16px); } to { opacity:1; transform:none; } }
+.realms .anim { animation: fadeUp .6s ease both; }
+@media (prefers-reduced-motion: reduce){ .realms .anim { animation:none; } }
+
+.realms .bar { position:sticky; top:0; z-index:1000; display:grid; grid-template-columns:1fr minmax(0,auto) 1fr; align-items:center; gap:16px; padding:12px clamp(18px,4vw,56px); background:rgba(255,255,255,.94); backdrop-filter:blur(8px); border-bottom:1px solid var(--line); }
+.realms .wordmark { display:flex; align-items:center; gap:12px; background:none; border:0; padding:0; justify-self:start; }
+.realms .bar-right { justify-self:end; display:flex; align-items:center; gap:10px; }
+.realms .bar .mark { height:42px; width:auto; }
+.realms .wm-text { display:flex; flex-direction:column; line-height:1.05; text-align:left; }
+.realms .wm-text strong { font-size:18px; letter-spacing:.14em; color:var(--p-deep); }
+.realms .wm-text em { font-style:normal; font-size:10px; letter-spacing:.12em; text-transform:uppercase; color:#8A7AA6; }
+.realms .nav { display:flex; align-items:center; gap:12px; }
+.realms .tabs { display:flex; align-items:center; gap:4px; background:var(--lav1); border:1px solid var(--line); border-radius:30px; padding:4px; }
+.realms .tab { border:0; background:none; color:#5A4C74; font-size:14.5px; padding:8px 15px; border-radius:22px; transition:.16s; white-space:nowrap; }
+.realms .tab:hover { color:var(--p); }
+.realms .tab.active { background:#fff; color:var(--p-deep); box-shadow:0 2px 8px rgba(122,52,168,.14); font-weight:600; }
+.realms .signin { padding:9px 18px; border:1.5px solid var(--p); background:none; border-radius:24px; color:var(--p); font-weight:500; font-size:14.5px; transition:.16s; }
+.realms .signin:hover { background:var(--p); color:#fff; }
+.realms .app-bar .who { font-size:14.5px; color:#5A4C74; }
+
+.realms main { flex:1; }
+.realms .page { max-width:1800px; margin:0 auto; padding:clamp(28px,4vw,54px) clamp(18px,4vw,56px) clamp(40px,5vw,70px); min-height:56vh; }
+.realms .section-head { text-align:center; max-width:720px; margin:0 auto clamp(26px,3.4vw,44px); }
+.realms .section-head h2 { font-size:clamp(28px,3.3vw,40px); color:var(--p-deep); }
+.realms .btn { display:inline-block; font-size:16px; padding:14px 26px; border-radius:30px; font-weight:500; transition:.16s; border:0; }
+.realms .btn.small { font-size:14px; padding:10px 18px; }
+.realms .btn.primary { background:var(--p); color:#fff; }
+.realms .btn.primary:hover { background:var(--p-deep); }
+.realms .btn.primary:disabled { opacity:.55; cursor:default; }
+.realms .btn.ghost { border:1.5px solid var(--line); color:var(--p); background:#fff; }
+.realms .btn.ghost:hover { border-color:var(--v); background:var(--lav1); }
+.realms .btn.wide { width:100%; }
+
+.realms .hero { display:grid; grid-template-columns:1.12fr .88fr; gap:44px; align-items:center; }
+.realms .hero h1 { font-size:clamp(36px,5vw,62px); line-height:1.05; color:var(--p-deep); margin-bottom:20px; }
+.realms .lede { font-size:clamp(16px,1.4vw,19px); line-height:1.6; color:#54466E; max-width:38ch; }
+.realms .cta-row { display:flex; flex-wrap:wrap; gap:14px; margin:28px 0 20px; }
+.realms .tagline { font-style:italic; color:#8A7AA6; font-size:15px; }
+.realms .hero-art { display:flex; justify-content:center; }
+.realms .art-panel { width:min(400px,86vw); border-radius:26px; padding:clamp(24px,3.5vw,42px); background:radial-gradient(circle at 50% 30%, var(--lav1), var(--lav2)); box-shadow:0 26px 64px rgba(122,52,168,.16); border:1px solid #EBDCF8; }
+.realms .home-strip { display:flex; justify-content:center; flex-wrap:wrap; gap:clamp(28px,7vw,88px); margin-top:clamp(30px,4vw,52px); text-align:center; }
+.realms .mini-stat { text-align:center; padding:20px 12px; background:var(--lav1); border:1px solid var(--line); border-radius:14px; }
+.realms .mini-value { display:block; font-size:34px; font-weight:700; color:var(--p); line-height:1; margin-bottom:8px; }
+.realms .mini-label { font-size:12.5px; color:#5A4C74; }
+
+.realms .wave-wrap { position:relative; max-width:1100px; margin:0 auto; }
+.realms .wave { position:absolute; top:34px; left:0; width:100%; height:90px; pointer-events:none; opacity:.6; }
+.realms .stages { list-style:none; margin:0; padding:0; display:grid; grid-template-columns:repeat(4,1fr); gap:26px; }
+.realms .stage { text-align:center; padding:0 6px; }
+.realms .stage-n { font-size:14px; letter-spacing:.18em; color:var(--v); font-weight:700; }
+.realms .stage .dot { display:block; width:15px; height:15px; margin:18px auto 20px; border-radius:50%; background:#fff; border:3px solid var(--p); box-shadow:0 0 0 6px var(--lav1); }
+.realms .stage h3 { font-size:21px; color:var(--p-deep); margin-bottom:10px; }
+.realms .stage p { font-size:14.5px; line-height:1.58; color:#5A4C74; }
+
+.realms .pillars { display:grid; grid-template-columns:1fr 1fr; gap:22px; }
+.realms .pillar { background:#fff; border:1px solid var(--line); border-radius:16px; padding:28px 28px 32px; transition:.2s; }
+.realms .pillar:hover { box-shadow:0 18px 44px rgba(122,52,168,.12); border-color:var(--v); transform:translateY(-3px); }
+.realms .pillar-rule { display:block; width:44px; height:4px; border-radius:3px; background:linear-gradient(90deg,var(--p),var(--v)); margin-bottom:18px; }
+.realms .pillar h3 { font-size:21px; color:var(--p-deep); margin-bottom:11px; }
+.realms .pillar p { font-size:15px; line-height:1.6; color:#4A3B66; }
+
+.realms .mandate-grid { display:grid; grid-template-columns:1fr 1fr; gap:32px; font-size:clamp(16px,1.3vw,18px); line-height:1.68; color:#4A3B66; margin-bottom:clamp(30px,4vw,48px); }
+.realms .principles { display:grid; grid-template-columns:repeat(3,1fr); gap:26px; }
+.realms .principle { border-top:3px solid var(--p); padding-top:18px; }
+.realms .principle h3 { font-size:18px; color:var(--p-deep); margin-bottom:9px; }
+.realms .principle p { font-size:14.5px; line-height:1.58; color:#4A3B66; }
+
+.realms .enquiry-card { max-width:900px; margin:0 auto; background:linear-gradient(135deg,var(--p),var(--p-mid)); color:#fff; border-radius:22px; padding:clamp(30px,4vw,48px); display:grid; grid-template-columns:1.1fr 1fr; gap:30px; align-items:center; }
+.realms .enquiry-card h2 { font-size:clamp(24px,3vw,32px); margin-bottom:10px; }
+.realms .enquiry-copy p { color:#F1E5FB; font-size:16px; line-height:1.55; }
+.realms .contacts { list-style:none; margin:0; padding:0; display:grid; gap:12px; }
+.realms .contacts li { display:flex; flex-direction:column; }
+.realms .contacts span { font-size:11px; letter-spacing:.16em; text-transform:uppercase; color:#E1CCF6; }
+.realms .contacts em { font-style:normal; font-size:16px; }
+
+.realms .main-auth { display:flex; align-items:center; justify-content:center; padding:clamp(24px,5vw,60px) 18px; }
+.realms .auth-shell { width:100%; display:flex; justify-content:center; }
+.realms .auth-card { width:min(430px,94vw); background:#fff; border:1px solid var(--line); border-radius:20px; padding:clamp(28px,4vw,40px); box-shadow:0 24px 60px rgba(122,52,168,.14); text-align:center; }
+.realms .auth-mark { height:56px; width:auto; margin:0 auto 16px; }
+.realms .auth-card h2 { font-size:22px; color:var(--p-deep); margin-bottom:6px; }
+.realms .auth-sub { color:#7A6A93; font-size:14.5px; margin-bottom:22px; }
+.realms .field { display:block; text-align:left; margin-bottom:14px; }
+.realms .field.sm { margin-bottom:0; }
+.realms .field span { display:block; font-size:12px; letter-spacing:.08em; text-transform:uppercase; color:#7A6A93; margin-bottom:6px; }
+.realms .field input, .realms .field select { width:100%; font-family:inherit; font-size:15px; padding:11px 13px; border:1.5px solid var(--line); border-radius:12px; color:var(--ink); background:#fff; }
+.realms .field input:focus, .realms .field select:focus { outline:none; border-color:var(--p); }
+.realms .auth-msg { background:var(--lav1); color:var(--p-deep); border:1px solid var(--line); border-radius:10px; padding:10px 12px; font-size:14px; margin-bottom:14px; }
+.realms .auth-msg.block { max-width:none; margin:0 0 16px; }
+.realms .linkbtn { display:block; width:100%; background:none; border:0; color:var(--p); font-size:14.5px; padding:12px 0 2px; }
+.realms .linkbtn:hover { text-decoration:underline; }
+.realms .linkbtn.subtle { color:#8A7AA6; font-size:13.5px; }
+.realms .linkbtn.center { max-width:200px; margin:20px auto 0; }
+.realms .demo-note { margin-top:16px; font-size:12.5px; color:#8A7AA6; font-style:italic; }
+
+.realms .role-page { min-height:64vh; }
+.realms .role-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:18px; max-width:900px; margin:0 auto; }
+.realms .role-card { text-align:left; background:#fff; border:1.5px solid var(--line); border-radius:18px; padding:24px 22px; display:flex; flex-direction:column; gap:10px; transition:.18s; }
+.realms .role-card:hover { border-color:var(--p); box-shadow:0 18px 44px rgba(122,52,168,.14); transform:translateY(-3px); }
+.realms .role-icon { width:46px; height:46px; border-radius:12px; background:var(--lav1); color:var(--p); display:grid; place-items:center; }
+.realms .role-icon svg { width:26px; height:26px; }
+.realms .role-label { font-size:19px; font-weight:600; color:var(--p-deep); }
+.realms .role-blurb { font-size:14px; line-height:1.5; color:#5A4C74; }
+
+.realms .dash-head { border-bottom:1px solid var(--line); padding-bottom:22px; margin-bottom:22px; }
+.realms .dash-hello { display:flex; align-items:center; gap:18px; }
+.realms .dash-icon { width:58px; height:58px; border-radius:14px; background:linear-gradient(135deg,var(--p),var(--p-mid)); color:#fff; display:grid; place-items:center; }
+.realms .dash-icon svg { width:30px; height:30px; }
+.realms .dash-head h2 { font-size:clamp(24px,3vw,32px); color:var(--p-deep); }
+.realms .dash-title { color:#7A6A93; font-size:14.5px; margin-top:2px; }
+.realms .dash-intro { color:#5A4C74; font-size:16px; margin-bottom:24px; }
+.realms .tool-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:16px; }
+.realms .tool-card { text-align:left; display:flex; align-items:center; justify-content:space-between; gap:12px; background:#fff; border:1px solid var(--line); border-radius:14px; padding:20px; transition:.16s; }
+.realms .tool-card.live:hover { border-color:var(--p); box-shadow:0 12px 30px rgba(122,52,168,.12); transform:translateY(-2px); }
+.realms .tool-card:disabled { opacity:.75; cursor:default; }
+.realms .tool-name { font-size:16px; color:var(--p-deep); font-weight:500; }
+.realms .tool-stage { font-size:11.5px; letter-spacing:.06em; text-transform:uppercase; color:var(--v); background:var(--lav1); border:1px solid var(--line); border-radius:20px; padding:4px 10px; white-space:nowrap; }
+.realms .tool-stage.ready { color:#fff; background:var(--p); border-color:var(--p); }
+
+.realms .ptitle { position:sticky; top:0; z-index:20; display:flex; align-items:flex-end; justify-content:space-between; gap:16px; flex-wrap:wrap; margin:-8px 0 18px; padding:14px 0 12px; background:linear-gradient(180deg,var(--lav1) 70%,rgba(246,243,250,0)); backdrop-filter:blur(6px); }
+.realms .ptitle h2 { font-size:26px; letter-spacing:-.015em; }
+.realms .ptitle h2 { font-size:clamp(22px,2.6vw,30px); color:var(--p-deep); }
+.realms .ptools { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+.realms .sel { font-family:inherit; font-size:14px; padding:10px 14px; border:1.5px solid var(--line); border-radius:22px; background:#fff; color:var(--ink); }
+.realms .hintline { font-size:13px; color:#8A7AA6; margin-bottom:12px; }
+.realms .warnline { font-size:13.5px; color:#9A5B12; background:#FBF3E6; border:1px solid #F0D9B5; border-radius:10px; padding:10px 12px; margin-bottom:14px; }
+.realms .empty { color:#8A7AA6; font-style:italic; padding:24px 0; text-align:center; }
+.realms .empty.sm { padding:12px 0; text-align:left; }
+
+.realms .addform { background:var(--lav1); border:1px solid var(--line); border-radius:16px; padding:20px; margin-bottom:20px; }
+.realms .fgrid { display:grid; grid-template-columns:repeat(3,1fr); gap:14px; margin-bottom:16px; }
+.realms .fgrid.two { grid-template-columns:1fr 1fr; }
+
+.realms .cluster { margin-bottom:20px; }
+.realms .cluster-head { display:flex; align-items:center; gap:10px; margin-bottom:10px; }
+.realms .area-dot { width:12px; height:12px; border-radius:50%; }
+.realms .cluster-head h3 { font-size:17px; color:var(--p-deep); }
+.realms .cluster-count { font-size:12px; color:#8A7AA6; background:var(--lav1); border:1px solid var(--line); border-radius:20px; padding:2px 10px; }
+.realms .frows { display:grid; gap:8px; }
+.realms .frow { display:flex; align-items:center; justify-content:space-between; gap:12px; background:#fff; border:1px solid var(--line); border-radius:12px; padding:14px 16px; }
+.realms .fmain { display:flex; flex-direction:column; }
+.realms .fname { font-size:15.5px; color:var(--p-deep); font-weight:500; }
+.realms .fmeta { font-size:13px; color:#7A6A93; }
+.realms .factions { display:flex; align-items:center; gap:8px; }
+.realms .pin.ok { color:#5FA35A; }
+.realms .pin.no { font-size:12px; color:#B08; opacity:.6; }
+.realms .mini { font-family:inherit; font-size:12.5px; padding:6px 12px; border-radius:18px; border:1px solid var(--line); background:#fff; color:var(--p); }
+.realms .mini:hover { border-color:var(--p); }
+.realms .mini.danger { color:#B4442E; }
+
+.realms .map-page .map-frame { border:1px solid var(--line); border-radius:16px; overflow:hidden; }
+.realms .leaflet-holder { height:min(60vh,540px); width:100%; }
+.realms .route-list { list-style:none; margin:18px 0 0; padding:0; display:grid; gap:8px; }
+.realms .route-list li { display:flex; align-items:center; gap:12px; background:#fff; border:1px solid var(--line); border-radius:12px; padding:12px 14px; }
+.realms .route-list .rn { width:26px; height:26px; border-radius:50%; background:var(--p); color:#fff; display:grid; place-items:center; font-size:13px; font-weight:700; }
+.realms .planner { margin-top:26px; }
+.realms .planner-controls { display:flex; flex-wrap:wrap; align-items:center; gap:12px; margin-bottom:14px; }
+.realms .field.inline { flex-direction:row; align-items:center; gap:8px; }
+.realms .field.inline input { width:70px; }
+.realms input[type=date] { width:180px !important; min-width:180px !important; flex:0 0 auto; box-sizing:border-box; }
+@media (pointer:coarse){ .realms input[type=date] { width:200px !important; min-width:200px !important; font-size:16px; } }
+.realms .plan-days { display:grid; grid-template-columns:repeat(auto-fill,minmax(280px,1fr)); gap:14px; }
+.realms .plan-day { background:#fff; border:1px solid var(--line); border-left:3px solid var(--p); border-radius:12px; padding:14px 16px; }
+.realms .plan-day-head { display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:8px; }
+.realms .plan-day-head h4 { color:var(--p-deep); font-size:15px; margin:0; flex:1; }
+.realms .plan-count { font-size:11.5px; color:#8A7AA6; background:var(--lav2); border-radius:10px; padding:2px 9px; }
+.realms .plan-list { margin:0; padding-left:20px; }
+.realms .plan-list li { font-size:13px; color:#4A3B66; margin-bottom:5px; }
+.realms .plan-list .pf-name { font-weight:500; color:#3A2B54; }
+.realms .plan-list em { display:block; font-style:normal; color:#8A7AA6; font-size:12px; }
+
+/* ===== Map & Route, redesigned ===== */
+.realms .mr-page { max-width:1800px; }
+.realms .mr-grid { display:grid; grid-template-columns:minmax(0,1.55fr) minmax(340px,1fr); gap:18px; align-items:start; }
+.realms .mr-mapcol { position:sticky; top:84px; }
+.realms .mr-mapcol .map-frame { border-radius:var(--r-lg); overflow:hidden; border:1px solid var(--line); box-shadow:var(--e2); }
+.realms .mr-mapcol .leaflet-holder { height:min(66vh,620px); }
+.realms .mr-legend { display:flex; align-items:center; flex-wrap:wrap; gap:14px; padding:10px 4px 0; font-size:12.5px; color:#5A4C74; }
+.realms .lg-item { display:inline-flex; align-items:center; gap:7px; }
+.realms .lg-dot { width:9px; height:9px; border-radius:50%; display:inline-block; }
+.realms .mr-side { display:flex; flex-direction:column; gap:12px; min-width:0; }
+.realms .mr-tabs { width:100%; }
+.realms .mr-tabs .segb { flex:1; }
+.realms .area-seg { flex-wrap:wrap; }
+.realms .area-seg .segb { display:inline-flex; align-items:center; gap:7px; }
+.realms .seg-n { font-size:11px; font-weight:600; background:var(--lav2); color:var(--p-deep); border-radius:9px; padding:1px 7px; font-variant-numeric:tabular-nums; }
+.realms .area-seg .segb.on .seg-n { background:rgba(255,255,255,.24); color:#fff; }
+@media (max-width:620px){ .realms .area-seg { width:100%; } .realms .area-seg .segb { flex:1; justify-content:center; } }
+.realms .mr-card { background:#fff; border:1px solid var(--line); border-radius:var(--r-lg); padding:16px; box-shadow:var(--e1); }
+.realms .mr-controls { display:grid; gap:10px; margin-bottom:12px; }
+.realms .mr-two { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+.realms .mr-days { display:grid; gap:8px; }
+.realms .mr-day { background:#fff; border:1px solid var(--line); border-radius:var(--r-md); overflow:hidden; transition:border-color .15s ease, box-shadow .15s ease; }
+.realms .mr-day.open { border-color:var(--p); box-shadow:var(--e2); }
+.realms .mr-day-head { width:100%; display:flex; align-items:center; gap:12px; padding:12px 14px; background:none; border:0; cursor:pointer; text-align:left; min-height:var(--tap); }
+.realms .mr-day-n { flex:0 0 auto; width:28px; height:28px; border-radius:50%; background:var(--lav2); color:var(--p-deep); display:grid; place-items:center; font-size:13px; font-weight:700; }
+.realms .mr-day.open .mr-day-n { background:var(--p); color:#fff; }
+.realms .mr-day-t { flex:1; min-width:0; display:flex; flex-direction:column; }
+.realms .mr-day-t strong { font-size:14px; color:#3A2B54; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.realms .mr-day-t em { font-style:normal; font-size:12px; color:#8A7AA6; }
+.realms .mr-day-c { color:var(--v); font-size:18px; line-height:1; }
+.realms .mr-day-body { padding:0 14px 14px; border-top:1px solid var(--lav2); }
+.realms .mr-day-body .plan-list { margin-top:12px; max-height:320px; overflow-y:auto; }
+.realms .mr-day-actions { display:flex; gap:8px; margin:12px 0 0; }
+.realms .pf-tel { color:var(--p-mid) !important; }
+/* second assessment */
+.realms .sa-list { margin-top:12px; display:flex; flex-direction:column; gap:10px; }
+.realms .sa-item { border:1px solid var(--line); border-radius:var(--r-lg); background:#fff; overflow:hidden; box-shadow:var(--e1); }
+.realms .sa-item.open { border-color:var(--p); }
+.realms .sa-head { width:100%; display:flex; align-items:center; gap:12px; padding:13px 16px; background:none; border:0; cursor:pointer; text-align:left; }
+.realms .sa-head.static { cursor:default; }
+.realms .sa-name { flex:1 1 auto; display:flex; flex-direction:column; min-width:0; }
+.realms .sa-name strong { font-size:15px; color:#3A2B54; }
+.realms .sa-name em { font-style:normal; font-size:12.5px; color:#8A7AA6; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.realms .sa-meta { display:flex; align-items:center; gap:8px; font-size:12.5px; color:#6B5B87; flex:0 0 auto; }
+.realms .sa-tog { flex:0 0 auto; font-size:13px; font-weight:600; color:var(--p); padding:4px 12px; border:1.5px solid var(--lav2); border-radius:999px; }
+.realms .sa-body { padding:4px 16px 16px; border-top:1px solid var(--lav2); }
+.realms .sa-cmp { display:grid; grid-template-columns:1fr 1fr; gap:16px; margin:12px 0; }
+.realms .sa-col h4 { margin:0 0 10px; font-size:12px; letter-spacing:.08em; text-transform:uppercase; color:var(--p-deep); }
+.realms .sa-basecol { background:var(--lav1,#F7F3FC); border-radius:12px; padding:12px 14px; }
+.realms .sa-row { display:flex; gap:8px; padding:5px 0; border-bottom:1px dashed var(--lav2); font-size:13px; }
+.realms .sa-row:last-child { border-bottom:0; }
+.realms .sa-lab { flex:0 0 42%; color:#7A6A93; }
+.realms .sa-val { flex:1 1 auto; color:#3A2B54; }
+.realms .sa-recs { margin:6px 0 4px; }
+.realms .sa-recs h4 { margin:0 0 8px; font-size:12px; letter-spacing:.08em; text-transform:uppercase; color:var(--p-deep); }
+.realms .sa-rec { display:flex; align-items:flex-start; gap:10px; padding:8px 0; border-bottom:1px dashed var(--lav2); }
+.realms .sa-rec-t { flex:1 1 auto; font-size:13px; color:#4A3B66; }
+.realms .sa-rec-pills { flex:0 0 auto; display:flex; gap:4px; }
+.realms .sa-pill { font-size:11.5px; padding:5px 10px; border-radius:999px; border:1.5px solid var(--line); background:#fff; color:#8A7AA6; cursor:pointer; touch-action:manipulation; min-height:34px; }
+.realms .sa-pill.on.g { background:#E7F5EC; border-color:#3E9B5F; color:#256B3E; }
+.realms .sa-pill.on.a { background:#FBF1DE; border-color:#C98A1E; color:#8A5D0E; }
+.realms .sa-pill.on.r { background:#FBE9E7; border-color:#C0503C; color:#8A2E1E; }
+.realms .sa-improve { display:flex; align-items:center; justify-content:space-between; gap:12px; margin:12px 0; padding:12px 14px; background:var(--lav1,#F7F3FC); border-radius:12px; }
+.realms .sa-improve-l { font-size:12px; letter-spacing:.06em; text-transform:uppercase; color:#7A6A93; }
+.realms .sa-improve-r { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+.realms .sa-verdict { font-size:12.5px; font-weight:700; padding:4px 12px; border-radius:999px; }
+.realms .sa-verdict.g { background:#E7F5EC; color:#256B3E; }
+.realms .sa-verdict.a { background:#FBF1DE; color:#8A5D0E; }
+.realms .sa-verdict.r { background:#FBE9E7; color:#8A2E1E; }
+.realms .sa-delta { font-size:12px; font-variant-numeric:tabular-nums; padding:3px 9px; border-radius:999px; background:#fff; border:1px solid var(--line); color:#5A4B76; }
+.realms .sa-delta.g { color:#256B3E; border-color:#B7E0C4; }
+.realms .sa-delta.r { color:#8A2E1E; border-color:#EBC3BB; }
+@media (max-width:820px){ .realms .sa-cmp { grid-template-columns:1fr; } .realms .sa-head { flex-wrap:wrap; } .realms .sa-meta { width:100%; } }
+.realms .mr-stats { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; }
+.realms .mr-stat { background:#fff; border:1px solid var(--line); border-radius:var(--r-sm); padding:12px 8px; text-align:center; }
+.realms .mr-stat .v { display:block; font-family:Lora,serif; font-size:20px; font-weight:700; color:var(--p-deep); font-variant-numeric:tabular-nums; }
+.realms .mr-stat .l { display:block; font-size:10.5px; color:#8A7AA6; text-transform:uppercase; letter-spacing:.05em; margin-top:2px; }
+.realms .mr-side .hq-tr { grid-template-columns:2fr 1fr 1fr 1fr; font-size:12.5px; padding:9px 12px; }
+@media (max-width:1100px){
+  .realms .mr-grid { grid-template-columns:1fr; }
+  .realms .mr-mapcol { position:static; }
+  .realms .mr-mapcol .leaflet-holder { height:44vh; }
+}
+.realms .appr-chip { font-size:11.5px; border-radius:10px; padding:2px 9px; border:1px solid; }
+.realms .appr-chip.pending { background:#FBF3E6; color:#9A5B12; border-color:#F0D9B5; }
+.realms .appr-chip.approved { background:#E6F4EA; color:#2E7D46; border-color:#BFE3CB; }
+.realms .appr-chip.returned { background:#FBE9E6; color:#B4442E; border-color:#F0C9BF; }
+.realms .mini.ok { border-color:#BFE3CB; color:#2E7D46; }
+.realms .mini.warn { border-color:#F0D9B5; color:#9A5B12; background:#FBF3E6; }
+.realms .mini.ok:hover { background:#E6F4EA; }
+.realms .submit-panel { background:#fff; border:1px solid var(--line); border-left:3px solid var(--p); border-radius:12px; padding:16px 18px; margin-bottom:18px; }
+.realms .submit-head { margin-bottom:12px; }
+.realms .submit-head h3 { color:var(--p-deep); font-size:16px; margin-bottom:2px; }
+.realms .submit-row { display:flex; flex-wrap:wrap; align-items:center; gap:10px; }
+.realms .plan-assign { display:flex; flex-wrap:wrap; gap:8px; margin-top:10px; padding-top:10px; border-top:1px solid var(--lav2); }
+.realms .plan-assign .sel { font-size:13px; padding:6px 10px; }
+.realms .myday { background:var(--lav1); border:1px solid var(--line); border-left:3px solid var(--p); border-radius:12px; padding:14px 16px; margin-bottom:20px; }
+.realms .myday-head { display:flex; align-items:center; justify-content:space-between; margin-bottom:10px; }
+.realms .myday-head h3 { color:var(--p-deep); font-size:16px; margin:0; }
+.realms .pending-card { max-width:520px; margin:0 auto; text-align:center; background:#fff; border:1px solid var(--line); border-radius:18px; padding:38px 32px; box-shadow:0 12px 34px rgba(58,21,96,.08); }
+.realms .pending-ic { display:grid; place-items:center; width:60px; height:60px; border-radius:50%; background:var(--lav2); color:var(--p-deep); margin:0 auto 16px; }
+.realms .pending-card h2 { color:var(--p-deep); font-size:22px; margin-bottom:10px; }
+.realms .pending-card p { color:#5A4C74; margin-bottom:8px; }
+.realms .cta-row.center { justify-content:center; }
+.realms .int-alert { background:#FBE9E6; border:1px solid #F0C9BF; border-left:3px solid #B4442E; border-radius:var(--r-md); padding:14px 16px; margin-bottom:16px; }
+.realms .int-alert h3 { color:#B4442E; font-size:15px; margin-bottom:8px; }
+.realms .int-alert .log-list { border:none; }
+.realms .int-tr { grid-template-columns:1.6fr .6fr .8fr .8fr .8fr .7fr 1.6fr; }
+.realms .int-flag { background:#FFFBF3; }
+.realms .int-flags { display:flex; flex-wrap:wrap; gap:4px; }
+.realms .int-flags em { font-style:normal; font-size:11px; background:#FBF3E6; color:#9A5B12; border:1px solid #F0D9B5; border-radius:9px; padding:2px 7px; }
+.realms .frow.picked { border-color:var(--p); background:var(--lav2); }
+.realms .fchips { display:flex; flex-wrap:wrap; gap:6px; margin-top:6px; }
+.realms .reg-chip, .realms .state-chip { font-size:11px; border-radius:9px; padding:2px 8px; border:1px solid; }
+.realms .reg-chip.ok { background:#E6F4EA; color:#2E7D46; border-color:#BFE3CB; }
+.realms .reg-chip.prog { background:#FBF3E6; color:#9A5B12; border-color:#F0D9B5; }
+.realms .reg-chip.no { background:#FBE9E6; color:#B4442E; border-color:#F0C9BF; }
+.realms .state-chip { background:var(--lav2); color:var(--p-deep); border-color:var(--line); }
+.realms .state-chip.dead { background:#F1EFF4; color:#8A7AA6; }
+.realms .state-chip.find { background:#EAF2FB; color:#2E6B8A; border-color:#C9DEF0; }
+.realms .fremark { display:block; margin-top:5px; font-size:12px; color:#8A7AA6; font-style:italic; }
+.realms .list-tools-row { display:flex; flex-wrap:wrap; gap:10px; align-items:center; }
+.realms .numfield .num-row { display:flex; align-items:stretch; border:1px solid var(--line); border-radius:10px; overflow:hidden; background:#fff; }
+.realms .num-btn { flex:0 0 auto; width:46px; min-height:46px; border:0; background:var(--lav1); color:var(--p-deep); font-size:20px; line-height:1; cursor:pointer; touch-action:manipulation; -webkit-tap-highlight-color:transparent; }
+.realms .num-btn:active { background:var(--lav2); }
+.realms .num-btn:disabled { color:#C9BEDA; cursor:default; }
+.realms .num-in { flex:1; min-width:0; width:100%; border:0; text-align:center; font-family:inherit; font-size:16px; font-variant-numeric:tabular-nums; color:var(--ink); background:#fff; min-height:46px; padding:0 4px; }
+.realms .num-in:focus { outline:none; box-shadow:inset 0 0 0 2px var(--lav2); }
+.realms .num-hint { display:block; font-style:normal; font-size:11.5px; color:#8A7AA6; margin-top:4px; }
+
+/* ===== tablets =====
+   Two things break forms on iPad specifically. Any input under 16px makes Safari
+   zoom the whole page on focus, which throws the layout and feels like the field
+   is fighting you. And taps carry a highlight flash and a delay unless told not to. */
+@media (pointer: coarse) {
+  .realms input, .realms select, .realms textarea,
+  .realms .sel, .realms .searchbox, .realms .hef-input, .realms .num-in { font-size:16px; }
+  .realms button, .realms .btn, .realms .mini, .realms .segb, .realms .num-btn, .realms .tab, .realms a.mini {
+    touch-action:manipulation; -webkit-tap-highlight-color:transparent;
+  }
+  .realms .field.sm span { font-size:12.5px; }
+  /* A sticky header plus a blur is expensive on Safari and can leave artefacts. */
+  .realms .ptitle { backdrop-filter:none; background:var(--lav1); }
+}
+@media (pointer: coarse) and (max-width:1100px) {
+  .realms .mr-two { grid-template-columns:1fr 1fr; gap:12px; }
+  .realms .mr-card { padding:18px; }
+  .realms .plan-assign { flex-direction:column; align-items:stretch; }
+  .realms .plan-assign .sel, .realms .plan-assign .btn { width:100%; }
+}
+.realms .band-note { text-align:center; max-width:720px; margin:16px auto 0; font-size:14px; color:#5A4C74; }
+
+/* ===== UI upscale: tablet-first field ergonomics + depth ===== */
+.realms .frow, .realms .rep-row, .realms .fu-card, .realms .saved-card { border-radius:var(--r-md); box-shadow:var(--e1); transition:box-shadow .18s ease, border-color .18s ease, transform .18s ease; }
+.realms .frow:hover, .realms .rep-row:hover, .realms .fu-card:hover { box-shadow:var(--e2); border-color:var(--v); }
+.realms .frow.pickable:hover { transform:translateY(-1px); }
+.realms .mini { min-height:36px; border-radius:9px; padding:7px 13px; font-weight:500; transition:.15s; }
+.realms .btn.small { min-height:40px; border-radius:22px; }
+.realms .sel, .realms .searchbox, .realms .field input, .realms .field select, .realms .field textarea, .realms .hef-input { min-height:42px; border-radius:10px; transition:border-color .15s ease, box-shadow .15s ease; }
+.realms .sel:focus, .realms .field input:focus, .realms .field select:focus, .realms .field textarea:focus { outline:none; border-color:var(--p); box-shadow:0 0 0 3px var(--lav2); }
+.realms .cluster { margin-bottom:26px; }
+.realms .cluster-head { position:sticky; top:64px; z-index:5; background:var(--lav1); padding:8px 0; margin-bottom:8px; border-bottom:1px solid var(--lav2); }
+.realms .cluster-head h3 { font-size:15px; letter-spacing:-.01em; }
+.realms .cluster-count { background:#fff; border:1px solid var(--line); border-radius:11px; padding:2px 9px; font-size:11.5px; color:#8A7AA6; }
+.realms .an-card, .realms .settings-card, .realms .submit-panel, .realms .chat-wrap, .realms .plan-day, .realms .hq-table, .realms .enquiry { box-shadow:var(--e1); }
+.realms .settings-card, .realms .submit-panel { border-radius:var(--r-lg); }
+.realms .seg { border-radius:10px; }
+.realms .segb { min-height:var(--tap); padding:9px 18px; font-size:13.5px; }
+.realms .chkpill { min-height:40px; }
+.realms .rag-btn, .realms .ragb { min-height:var(--tap); }
+.realms .side-item, .realms .sidebar a, .realms .sidebar button { min-height:var(--tap); }
+.realms .hef-sec > summary { min-height:48px; }
+.realms .hef-sec { border-radius:var(--r-sm); }
+.realms .hef-wrap, .realms .fu-card { border-radius:var(--r-lg); }
+
+/* tablet: two-up analytics, roomier rows, larger type */
+@media (min-width:760px) and (max-width:1180px){
+  .realms .an-cards { grid-template-columns:repeat(3,1fr); }
+  .realms .frow, .realms .rep-row { padding:16px 18px; }
+  .realms .fname { font-size:15.5px; }
+  .realms .mini { min-height:40px; padding:9px 15px; font-size:13.5px; }
+  .realms .hef-fields { padding:16px; gap:16px; }
+  .realms .plan-days { grid-template-columns:1fr 1fr; }
+}
+@media (hover:none){
+  .realms .mini { min-height:var(--tap); }
+  .realms .frow:hover, .realms .rep-row:hover { transform:none; }
+}
+
+.realms .route-list em { margin-left:auto; font-style:normal; font-size:13px; color:#8A7AA6; }
+
+.realms .assign-grid { display:grid; grid-template-columns:1.3fr 1fr; gap:24px; }
+.realms .assign-form, .realms .assign-saved { background:#fff; border:1px solid var(--line); border-radius:16px; padding:20px; }
+.realms .pick-label { font-size:12px; letter-spacing:.08em; text-transform:uppercase; color:#7A6A93; margin:14px 0 8px; }
+.realms .pick-list { display:grid; gap:6px; max-height:260px; overflow:auto; margin-bottom:8px; }
+.realms .pick-row { display:flex; align-items:center; gap:10px; font-size:14.5px; padding:8px 10px; border:1px solid var(--line); border-radius:10px; }
+.realms .pick-row .nocoord { margin-left:auto; font-style:normal; font-size:11px; color:#B08; opacity:.7; }
+.realms .saved-card { border:1px solid var(--line); border-radius:12px; padding:12px 14px; margin-bottom:10px; }
+.realms .saved-card strong { color:var(--p-deep); margin-right:8px; }
+.realms .saved-card span { font-size:13px; color:#7A6A93; }
+.realms .saved-card em { display:block; font-style:normal; font-size:12.5px; color:#8A7AA6; margin-top:2px; }
+.realms .saved-card p { font-size:13px; color:#5A4C74; margin-top:4px; }
+
+.realms .foot { background:#4C3B66; color:#EADAF7; padding:clamp(32px,4vw,52px) clamp(18px,4vw,56px); }
+.realms .foot-inner { max-width:1800px; margin:0 auto; text-align:center; display:grid; gap:8px; justify-items:center; }
+.realms .foot-brand { display:flex; align-items:center; justify-content:center; gap:12px; font-size:15px; color:#fff; }
+.realms .foot-mark { height:32px; width:auto; }
+.realms .foot p { font-size:14px; }
+.realms .foot-tag { font-style:italic; color:#CDA9EC; margin-top:4px; }
+
+@media (max-width:920px){
+  .realms .hero { grid-template-columns:1fr; text-align:center; }
+  .realms .lede { max-width:none; margin:0 auto; }
+  .realms .cta-row { justify-content:center; }
+  .realms .hero-art { order:-1; }
+  .realms .home-strip { grid-template-columns:1fr 1fr; }
+  .realms .stages { grid-template-columns:1fr 1fr; gap:32px; }
+  .realms .wave { display:none; }
+  .realms .pillars, .realms .mandate-grid, .realms .principles { grid-template-columns:1fr; }
+  .realms .enquiry-card { grid-template-columns:1fr; text-align:center; }
+  .realms .contacts { justify-items:center; }
+  .realms .role-grid, .realms .tool-grid { grid-template-columns:1fr 1fr; }
+  .realms .fgrid { grid-template-columns:1fr 1fr; }
+  .realms .assign-grid { grid-template-columns:1fr; }
+}
+@media (max-width:900px){
+  .realms .bar { display:flex; flex-wrap:wrap; justify-content:space-between; }
+  .realms .bar .tabs { order:3; width:100%; max-width:100%; justify-self:auto; overflow-x:auto; -webkit-overflow-scrolling:touch; }
+  .realms .bar-right { justify-self:auto; }
+  .realms .home-strip { grid-template-columns:1fr; }
+  .realms .stages, .realms .role-grid, .realms .tool-grid, .realms .fgrid, .realms .fgrid.two { grid-template-columns:1fr; }
+}
+
+.realms .stepper { list-style:none; display:flex; gap:8px; padding:0; margin:0 0 22px; flex-wrap:wrap; }
+.realms .stepper .stp { display:flex; align-items:center; gap:8px; font-size:13.5px; color:#8A7AA6; background:var(--lav1); border:1px solid var(--line); border-radius:22px; padding:7px 14px; }
+.realms .stepper .stp span { width:22px; height:22px; border-radius:50%; background:#fff; border:1px solid var(--line); display:grid; place-items:center; font-size:12px; font-weight:700; color:#8A7AA6; }
+.realms .stepper .stp.on { color:var(--p-deep); border-color:var(--p); background:#fff; font-weight:600; }
+.realms .stepper .stp.on span { background:var(--p); color:#fff; border-color:var(--p); }
+.realms .stepper .stp.done span { background:var(--v); color:#fff; border-color:var(--v); }
+.realms .frow.pickable { width:100%; text-align:left; cursor:pointer; }
+.realms .frow.pickable:hover { border-color:var(--p); }
+.realms .engage-card { background:#fff; border:1px solid var(--line); border-radius:16px; padding:24px; max-width:640px; }
+.realms .fbig { font-size:22px; color:var(--p-deep); margin:6px 0 4px; }
+.realms .fsub { color:#7A6A93; font-size:14px; margin-bottom:16px; }
+.realms .ci-row { display:flex; justify-content:space-between; padding:12px 0; border-top:1px solid var(--line); font-size:15px; }
+.realms .ci-row span { color:#7A6A93; }
+.realms .ci-row em { font-style:normal; color:var(--p-deep); }
+.realms .btnrow { display:flex; gap:10px; flex-wrap:wrap; margin-top:18px; }
+.realms .engage-present { display:grid; grid-template-columns:1.1fr .9fr; gap:22px; align-items:start; }
+.realms .letter { background:#fff; border:1px solid var(--line); border-radius:16px; padding:26px; box-shadow:0 10px 30px rgba(122,52,168,.08); }
+.realms .letter-head { display:flex; align-items:center; gap:12px; border-bottom:2px solid var(--lav2); padding-bottom:14px; margin-bottom:14px; }
+.realms .letter-head img { height:44px; }
+.realms .letter-head strong { display:block; font-size:12.5px; letter-spacing:.04em; color:var(--p-deep); }
+.realms .letter-head span { font-size:11.5px; color:#8A7AA6; }
+.realms .letter-meta { display:flex; justify-content:space-between; font-size:12.5px; color:#8A7AA6; margin-bottom:16px; }
+.realms .letter-to { font-size:14px; line-height:1.5; margin-bottom:14px; color:#4A3B66; }
+.realms .letter-sub { margin-bottom:12px; color:var(--p-deep); }
+.realms .letter p { font-size:14px; line-height:1.6; color:#4A3B66; margin-bottom:12px; }
+.realms .letter-sign { margin-top:18px; font-size:14px; color:var(--p-deep); }
+.realms .letter-sign span { color:#8A7AA6; font-size:13px; }
+.realms .idcards { display:grid; gap:10px; margin-bottom:12px; }
+.realms .idwrap { display:flex; align-items:center; gap:8px; }
+.realms .idcard { flex:1; display:flex; align-items:center; gap:12px; background:linear-gradient(135deg,#fff,var(--lav1)); border:1px solid var(--line); border-left:4px solid var(--p); border-radius:12px; padding:12px 14px; }
+.realms .idmark { height:36px; }
+.realms .idbody { display:flex; flex-direction:column; }
+.realms .idname { font-size:15px; font-weight:600; color:var(--p-deep); }
+.realms .idrole { font-size:13px; color:#5A4C74; }
+.realms .idorg { font-size:10.5px; letter-spacing:.08em; text-transform:uppercase; color:#9C86B8; margin-top:2px; }
+.realms .addmember { display:flex; gap:8px; margin-bottom:16px; }
+.realms .addmember input { flex:1; font-family:inherit; font-size:13.5px; padding:9px 11px; border:1.5px solid var(--line); border-radius:10px; min-width:0; }
+.realms .script { margin:0 0 4px; background:var(--lav1); border-left:3px solid var(--v); border-radius:0 10px 10px 0; padding:14px 16px; font-style:italic; color:#4A3B66; font-size:14px; line-height:1.6; }
+.realms .greet { display:flex; align-items:flex-start; gap:10px; margin:18px 0 4px; font-size:14.5px; color:#4A3B66; }
+.realms .greet input { margin-top:3px; }
+.realms .engage-done { text-align:center; max-width:520px; margin:6vh auto 0; }
+.realms .done-badge { display:inline-block; background:#E6F4EA; color:#2E7D46; border:1px solid #BFE3CB; border-radius:20px; padding:5px 16px; font-size:12.5px; letter-spacing:.08em; text-transform:uppercase; margin-bottom:16px; }
+.realms .engage-done h2 { font-size:28px; color:var(--p-deep); margin-bottom:8px; }
+.realms .engage-done .muted { color:#8A7AA6; margin:8px 0 20px; }
+@media (max-width:920px){ .realms .engage-present { grid-template-columns:1fr; } }
+
+.realms .net { font-size:11.5px; letter-spacing:.06em; text-transform:uppercase; padding:5px 12px; border-radius:20px; border:1px solid var(--line); }
+.realms .net.on { color:#2E7D46; background:#E6F4EA; border-color:#BFE3CB; }
+.realms .net.off { color:#B4442E; background:#FBE9E6; border-color:#F0C9BF; }
+.realms .chip { display:inline-block; font-size:12px; letter-spacing:.04em; padding:4px 12px; border-radius:20px; border:1px solid var(--line); white-space:nowrap; }
+.realms .chip.green { color:#2E7D46; background:#E6F4EA; border-color:#BFE3CB; }
+.realms .chip.amber { color:#9A5B12; background:#FBF3E6; border-color:#F0D9B5; }
+.realms .chip.red { color:#B4442E; background:#FBE9E6; border-color:#F0C9BF; }
+.realms .chip.none, .realms .chip.engaged, .realms .chip.monitored { color:#7A6A93; background:var(--lav1); }
+.realms .mon-list { display:grid; gap:10px; }
+.realms .mon-row { display:flex; align-items:center; justify-content:space-between; gap:12px; background:#fff; border:1px solid var(--line); border-radius:12px; padding:14px 16px; text-align:left; cursor:pointer; }
+.realms .mon-row:hover { border-color:var(--p); }
+.realms .mon-right { display:flex; align-items:center; gap:12px; }
+.realms .mon-head { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; flex-wrap:wrap; border-bottom:1px solid var(--line); padding-bottom:16px; margin-bottom:18px; }
+.realms .mon-head h2 { font-size:clamp(22px,2.6vw,28px); color:var(--p-deep); margin-top:6px; }
+.realms .mon-head-r { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+.realms .rated { font-size:12.5px; color:#8A7AA6; }
+.realms .mcat { border:1px solid var(--line); border-radius:14px; padding:16px 18px; margin-bottom:14px; background:#fff; }
+.realms .mcat-head { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:12px; }
+.realms .mcat-head h3 { font-size:17px; color:var(--p-deep); }
+.realms .mitems { display:grid; gap:14px; }
+.realms .mitem { border-top:1px solid var(--lav2); padding-top:12px; }
+.realms .mitem:first-child { border-top:0; padding-top:0; }
+.realms .mitem-top { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+.realms .mlabel { font-size:15px; color:#3A2B54; }
+.realms .rag { display:flex; gap:6px; }
+.realms .ragb { width:34px; height:34px; border-radius:9px; border:1.5px solid var(--line); background:#fff; font-weight:700; font-size:13px; color:#8A7AA6; }
+.realms .ragb.green.on { background:#2E7D46; border-color:#2E7D46; color:#fff; }
+.realms .ragb.amber.on { background:#C77D0A; border-color:#C77D0A; color:#fff; }
+.realms .ragb.red.on { background:#B4442E; border-color:#B4442E; color:#fff; }
+.realms .mnote { width:100%; font-family:inherit; font-size:14px; padding:8px 11px; border:1.5px solid var(--line); border-radius:10px; margin-top:10px; resize:vertical; color:var(--ink); }
+.realms .mnote:focus { outline:none; border-color:var(--p); }
+.realms .evrow { display:flex; align-items:center; gap:8px; margin-top:10px; flex-wrap:wrap; }
+.realms .ev-btn { font-size:12.5px; padding:7px 13px; border:1px solid var(--line); border-radius:18px; background:#fff; color:var(--p); cursor:pointer; }
+.realms .ev-btn:hover { border-color:var(--p); }
+.realms .ev-btn input { display:none; }
+.realms .ev-btn.recording { background:#FBE9E6; color:#B4442E; border-color:#F0C9BF; }
+.realms .geotag { font-size:11.5px; color:#2E7D46; }
+.realms .evstrip { display:flex; gap:10px; flex-wrap:wrap; margin-top:12px; }
+.realms .evthumb { position:relative; }
+.realms .evthumb img { width:64px; height:64px; object-fit:cover; border-radius:8px; border:1px solid var(--line); }
+.realms .evthumb audio { height:34px; }
+.realms .evx { position:absolute; top:-8px; right:-8px; width:20px; height:20px; border-radius:50%; border:0; background:#B4442E; color:#fff; font-size:13px; line-height:1; cursor:pointer; }
+.realms .mon-actions { display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin-top:20px; }
+.realms .save-note { font-size:13px; color:#8A7AA6; font-style:italic; }
+@media (max-width:680px){ .realms .mitem-top { flex-direction:column; align-items:flex-start; gap:8px; } }
+
+.realms .dsec { border:1px solid var(--line); border-radius:14px; padding:18px; margin-bottom:14px; background:#fff; }
+.realms .dsec h3 { font-size:17px; color:var(--p-deep); margin-bottom:12px; }
+.realms .dstr { margin:0; padding-left:20px; }
+.realms .dstr li { font-size:14.5px; color:#3A2B54; margin-bottom:5px; }
+.realms .gap { border-top:1px solid var(--lav2); padding-top:12px; margin-top:12px; }
+.realms .gap:first-child { border-top:0; padding-top:0; margin-top:0; }
+.realms .gap-top { display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:10px; }
+.realms .gap-label { font-size:15px; color:#3A2B54; }
+.realms .chkfield .inl { display:flex; align-items:center; gap:8px; font-size:14.5px; color:#4A3B66; padding:11px 0; }
+.realms .sigwrap { display:flex; flex-direction:column; align-items:flex-start; gap:8px; }
+.realms .sigpad { width:100%; max-width:600px; height:170px; border:1.5px dashed var(--line); border-radius:12px; background:#fff; touch-action:none; cursor:crosshair; }
+
+.realms .rep-rows { display:grid; gap:10px; }
+.realms .rep-row { display:flex; align-items:center; gap:12px; flex-wrap:wrap; background:#fff; border:1px solid var(--line); border-radius:12px; padding:14px 16px; }
+.realms .rep-main { display:flex; flex-direction:column; flex:1 1 200px; }
+.realms .rep-actions { display:flex; gap:8px; flex-wrap:wrap; }
+.realms .notify { flex-basis:100%; display:flex; align-items:center; gap:10px; flex-wrap:wrap; border-top:1px solid var(--lav2); margin-top:6px; padding-top:12px; }
+.realms .notify .hintline { margin:0; }
+.realms .an-cards { display:grid; grid-template-columns:repeat(6,1fr); gap:12px; margin-bottom:20px; }
+.realms .an-card { position:relative; overflow:hidden; background:#fff; border:1px solid var(--line); border-radius:var(--r-md); padding:18px 16px; text-align:left; box-shadow:var(--e1); transition:box-shadow .18s ease, transform .18s ease; }
+.realms .an-card:hover { box-shadow:var(--e2); transform:translateY(-2px); }
+.realms .an-card::before { content:''; position:absolute; left:0; top:0; bottom:0; width:3px; background:linear-gradient(180deg,var(--p),var(--v)); }
+.realms .an-v { display:block; font-family:Lora,serif; font-size:30px; font-weight:700; color:var(--p-deep); line-height:1; margin-bottom:6px; letter-spacing:-.02em; font-variant-numeric:tabular-nums; }
+.realms .an-l { font-size:11.5px; color:#8A7AA6; text-transform:uppercase; letter-spacing:.06em; }
+.realms .an-two { display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-bottom:16px; }
+.realms .an-panel { background:#fff; border:1px solid var(--line); border-radius:14px; padding:18px; margin-bottom:16px; }
+.realms .an-panel h3 { font-size:16px; color:var(--p-deep); margin-bottom:14px; }
+.realms .bars { display:grid; gap:12px; }
+.realms .bar-row { display:flex; align-items:center; gap:12px; }
+.realms .bar-lab { width:110px; font-size:13.5px; color:#5A4C74; flex-shrink:0; }
+.realms .bar-track { flex:1; height:14px; background:var(--lav1); border-radius:8px; overflow:hidden; }
+.realms .bar-fill { height:100%; background:linear-gradient(90deg,var(--p),var(--v)); border-radius:8px; }
+.realms .bar-fill.green { background:#2E7D46; } .realms .bar-fill.amber { background:#C77D0A; } .realms .bar-fill.red { background:#B4442E; }
+.realms .bar-n { width:34px; text-align:right; font-size:13.5px; color:var(--p-deep); font-weight:600; }
+@media (max-width:920px){ .realms .an-cards { grid-template-columns:repeat(3,1fr); } .realms .an-two { grid-template-columns:1fr; } }
+@media (max-width:560px){ .realms .an-cards { grid-template-columns:1fr 1fr; } }
+
+.realms .app-bar .tabs { overflow-x:auto; max-width:min(64vw,760px); scrollbar-width:thin; }
+.realms .notify { flex-basis:100%; display:flex; flex-direction:column; gap:8px; border-top:1px solid var(--lav2); margin-top:6px; padding-top:12px; }
+.realms .notify-row { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+.realms .ninput { font-family:inherit; font-size:13px; padding:8px 11px; border:1.5px solid var(--line); border-radius:10px; min-width:180px; }
+.realms .ninput:focus { outline:none; border-color:var(--p); }
+.realms .mini.ghosted { color:#8A7AA6; border-style:dashed; }
+.realms .nstat { font-size:12.5px; color:#7A6A93; font-style:italic; }
+
+/* ===== app shell: top bar + left sidebar ===== */
+.realms.app-mode { display:flex; flex-direction:column; min-height:100vh; }
+.realms .topbar { position:sticky; top:0; z-index:1000; display:flex; align-items:center; justify-content:space-between; gap:16px; padding:10px clamp(14px,3vw,28px); background:linear-gradient(90deg,#4C3B66,#574277); color:#fff; }
+.realms .tb-left, .realms .tb-right { display:flex; align-items:center; gap:14px; }
+.realms .topbar .mark { height:34px; background:#fff; border-radius:8px; padding:2px; }
+.realms .tb-name { font-size:16px; letter-spacing:.14em; font-weight:600; }
+.realms .navtoggle { display:none; background:rgba(255,255,255,.15); border:0; color:#fff; width:38px; height:38px; border-radius:10px; align-items:center; justify-content:center; }
+.realms .navtoggle svg { width:20px; height:20px; }
+.realms .ws { display:flex; align-items:center; gap:8px; margin-left:8px; background:rgba(255,255,255,.14); padding:4px 10px 4px 12px; border-radius:24px; }
+.realms .ws label { font-size:11px; letter-spacing:.1em; text-transform:uppercase; color:#E7D8F6; }
+.realms .ws select { font-family:inherit; font-size:14px; background:#fff; color:var(--p-deep); border:0; border-radius:16px; padding:6px 10px; }
+.realms .topbar .who { font-size:14.5px; color:#F1E5FB; }
+.realms .topbar .signin { border:1.5px solid rgba(255,255,255,.5); color:#fff; background:none; }
+.realms .topbar .signin:hover { background:#fff; color:var(--p-deep); }
+.realms .shell { flex:1; display:flex; align-items:flex-start; }
+.realms .sidebar { position:sticky; top:56px; align-self:flex-start; width:214px; flex-shrink:0; height:calc(100vh - 56px); background:#fff; border-right:1px solid var(--line); display:flex; flex-direction:column; padding:14px 12px; transition:width .18s ease; }
+.realms .sidebar.collapsed { width:66px; }
+.realms .sb-head { padding:6px 10px 12px; }
+.realms .sb-role { font-size:11px; letter-spacing:.12em; text-transform:uppercase; color:var(--v); font-weight:600; }
+.realms .sidebar.collapsed .sb-head { opacity:0; height:0; padding:0; }
+.realms .sb-nav { display:flex; flex-direction:column; gap:4px; flex:1; overflow-y:auto; }
+.realms .sb-item { display:flex; align-items:center; gap:12px; padding:10px 12px; border:0; background:none; border-radius:10px; color:#5A4C74; font-size:14.5px; text-align:left; width:100%; transition:.14s; }
+.realms .sb-item:hover { background:var(--lav1); color:var(--p); }
+.realms .sb-item.active { background:linear-gradient(90deg,var(--p),var(--p-mid)); color:#fff; box-shadow:0 6px 16px rgba(122,52,168,.24); }
+.realms .sb-ico { width:22px; height:22px; flex-shrink:0; display:grid; place-items:center; position:relative; }
+.realms .sb-ico svg { width:20px; height:20px; }
+.realms .sb-badge-lab { margin-left:auto; min-width:20px; height:20px; padding:0 6px; border-radius:10px; background:#B4442E; color:#fff; font-size:11.5px; font-weight:700; display:inline-flex; align-items:center; justify-content:center; font-variant-numeric:tabular-nums; }
+.realms .sb-item.active .sb-badge-lab { background:#fff; color:var(--p); }
+.realms .sb-badge { display:none; position:absolute; top:-6px; left:12px; min-width:16px; height:16px; padding:0 4px; border-radius:8px; background:#B4442E; color:#fff; font-size:10px; font-weight:700; align-items:center; justify-content:center; font-variant-numeric:tabular-nums; box-shadow:0 0 0 2px #fff; }
+.realms .sidebar.collapsed .sb-badge { display:inline-flex; }
+.realms .sidebar.collapsed .sb-badge-lab { display:none; }
+.realms .sidebar.collapsed .sb-lab { display:none; }
+.realms .sidebar.collapsed .sb-item { justify-content:center; padding:11px; }
+.realms .sb-collapse { display:flex; align-items:center; gap:12px; padding:10px 12px; border:0; border-top:1px solid var(--line); background:none; color:#8A7AA6; font-size:13.5px; margin-top:8px; }
+.realms .sb-collapse svg { width:18px; height:18px; }
+.realms .sidebar.collapsed .sb-collapse { justify-content:center; }
+.realms .scrim { display:none; }
+.realms .app-main { flex:1; min-width:0; }
+.realms .app-main .page { min-height:auto; }
+@media (max-width:820px){
+  .realms .navtoggle { display:flex; }
+  .realms .ws { display:none; }
+  .realms .sidebar { position:fixed; top:0; left:0; height:100vh; z-index:1200; transform:translateX(-100%); box-shadow:0 0 40px rgba(0,0,0,.2); width:230px; }
+  .realms .sidebar.open { transform:none; }
+  .realms .sidebar.collapsed { width:230px; }
+  .realms .sidebar.collapsed .sb-lab, .realms .sidebar.collapsed .sb-head { display:block; opacity:1; height:auto; }
+  .realms .sb-collapse { display:none; }
+  .realms .scrim.show { display:block; position:fixed; inset:0; background:rgba(30,15,49,.4); z-index:1100; }
+}
+
+/* dashboard banner + quick stats */
+.realms .dash-banner { position:relative; border-radius:18px; overflow:hidden; margin-bottom:16px; min-height:180px; display:flex; align-items:flex-end; }
+.realms .dash-banner img { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; }
+.realms .dash-banner-in { position:relative; display:flex; align-items:center; gap:18px; padding:22px 24px; width:100%; background:linear-gradient(90deg,rgba(58,21,96,.86),rgba(58,21,96,.25)); color:#fff; }
+.realms .dash-banner .dash-icon { background:rgba(255,255,255,.18); color:#fff; }
+.realms .dash-banner h2 { color:#fff; font-size:clamp(24px,3vw,32px); }
+.realms .dash-banner .eyebrow.light { color:#E7D8F6; }
+.realms .dash-sub { color:#EAD9FA; font-style:italic; font-size:14px; margin-top:2px; }
+.realms .dash-quick { display:grid; grid-template-columns:repeat(3,1fr); gap:14px; margin-bottom:20px; }
+.realms .dq { background:var(--lav1); border:1px solid var(--line); border-radius:14px; padding:16px; text-align:center; }
+.realms .dq-v { display:block; font-size:26px; font-weight:700; color:var(--p); }
+.realms .dq-l { font-size:12.5px; color:#5A4C74; }
+
+/* gallery */
+.realms .gallery { max-width:1800px; margin:0 auto; padding:clamp(30px,4vw,56px) clamp(18px,4vw,56px); }
+.realms .gallery-h { text-align:center; font-size:clamp(24px,3vw,34px); color:var(--p-deep); margin-bottom:26px; }
+.realms .gal-grid { display:grid; grid-template-columns:repeat(4,1fr); grid-auto-rows:150px; gap:14px; }
+.realms .gal { margin:0; position:relative; border-radius:16px; overflow:hidden; box-shadow:0 10px 26px rgba(58,21,96,.12); }
+.realms .gal.big { grid-column:span 2; grid-row:span 2; }
+.realms .gal img { width:100%; height:100%; object-fit:cover; transition:transform .5s ease; }
+.realms .gal:hover img { transform:scale(1.06); }
+.realms .gal figcaption { position:absolute; left:0; right:0; bottom:0; padding:22px 14px 10px; font-size:13px; color:#fff; background:linear-gradient(transparent,rgba(30,15,49,.8)); }
+
+/* impact band */
+.realms .impact { max-width:1800px; margin:10px auto 0; padding:0 clamp(18px,4vw,56px) clamp(40px,5vw,70px); display:grid; grid-template-columns:1fr 1fr; gap:0; }
+.realms .impact-copy { background:linear-gradient(135deg,var(--p-deep),var(--p-mid)); color:#fff; border-radius:20px 0 0 20px; padding:clamp(28px,4vw,48px); }
+.realms .impact-copy h2 { font-size:clamp(24px,3vw,32px); margin-bottom:12px; }
+.realms .impact-copy p { color:#F1E5FB; line-height:1.6; margin-bottom:20px; }
+.realms .impact-art { border-radius:0 20px 20px 0; overflow:hidden; }
+.realms .impact-art img { width:100%; height:100%; object-fit:cover; }
+
+/* pillar photos + about lead */
+.realms .pillar.photo { padding-top:0; overflow:hidden; }
+.realms .pillar-img { margin:-1px -28px 20px; height:300px; overflow:hidden; }
+.realms .pillar-img img { width:100%; height:100%; object-fit:cover; object-position:center top; }
+.realms .pillar.photo .pillar-rule { margin-left:28px; }
+.realms .pillar.photo h3, .realms .pillar.photo p { padding:0 2px; }
+.realms .about-lead { border-radius:18px; overflow:hidden; height:clamp(300px,42vw,470px); margin-bottom:24px; }
+.realms .about-lead img { width:100%; height:100%; object-fit:cover; object-position:center; }
+
+/* donut + ring */
+.realms .donut { display:flex; align-items:center; gap:20px; flex-wrap:wrap; }
+.realms .donut-svg { width:150px; height:150px; flex-shrink:0; }
+.realms .donut-num { font-size:26px; font-weight:700; fill:var(--p-deep); }
+.realms .donut-lab { font-size:10px; letter-spacing:.1em; text-transform:uppercase; fill:#8A7AA6; }
+.realms .donut-legend { display:grid; gap:8px; }
+.realms .dl { display:flex; align-items:center; gap:8px; font-size:14px; color:#4A3B66; }
+.realms .dl .dot { width:12px; height:12px; border-radius:3px; }
+.realms .dl em { font-style:normal; color:var(--p-deep); font-weight:600; margin-left:4px; }
+.realms .ring-panel { display:flex; flex-direction:column; }
+.realms .ring { display:flex; flex-direction:column; align-items:center; gap:8px; }
+.realms .ring-svg { width:140px; height:140px; }
+.realms .ring-num { font-size:24px; font-weight:700; fill:var(--p-deep); }
+.realms .ring-lab { font-size:10px; letter-spacing:.1em; text-transform:uppercase; fill:#8A7AA6; }
+.realms .ring-cap { font-size:13px; color:#7A6A93; text-align:center; }
+
+@media (max-width:820px){
+  .realms .gal-grid { grid-template-columns:1fr 1fr; grid-auto-rows:130px; }
+  .realms .gal.big { grid-column:span 2; grid-row:span 1; }
+  .realms .impact { grid-template-columns:1fr; }
+  .realms .impact-copy { border-radius:20px 20px 0 0; }
+  .realms .impact-art { border-radius:0 0 20px 20px; min-height:200px; }
+  .realms .dash-quick { grid-template-columns:1fr 1fr 1fr; }
+}
+
+.realms .topbar .who { background:none; border:0; cursor:pointer; }
+.realms .topbar .who:hover { text-decoration:underline; }
+.realms .viewas-bar { display:flex; align-items:center; justify-content:center; gap:12px; flex-wrap:wrap; background:#FBF3E6; color:#9A5B12; border-bottom:1px solid #F0D9B5; padding:8px 16px; font-size:13.5px; }
+.realms .viewas-bar button { background:#9A5B12; color:#fff; border:0; border-radius:16px; padding:5px 12px; font-size:12.5px; cursor:pointer; }
+.realms .seed-card { display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; background:var(--lav1); border:1px solid var(--line); border-radius:14px; padding:16px 18px; margin-bottom:16px; }
+.realms .seed-card strong { color:var(--p-deep); display:block; margin-bottom:2px; }
+.realms .seed-card span { color:#5A4C74; font-size:13.5px; }
+.realms .clear-row { display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; background:#FBF3E6; border:1px solid #F0D9B5; border-radius:12px; padding:12px 16px; margin:0 0 20px; font-size:13.5px; color:#9A5B12; }
+.realms .db-error { display:flex; flex-direction:column; gap:8px; align-items:flex-start; background:#FBE9E6; border:1px solid #F0C9BF; border-radius:14px; padding:16px 18px; margin-bottom:18px; color:#B4442E; }
+.realms .db-error strong { font-size:15px; }
+.realms .db-error span { font-size:13.5px; color:#8a4433; }
+.realms .db-error .db-msg { font-family:monospace; background:#fff; border:1px solid #F0C9BF; border-radius:8px; padding:6px 10px; color:#B4442E; word-break:break-word; max-width:100%; }
+.realms .dash-analytics { margin-bottom:6px; }
+.realms .line-chart { width:100%; height:auto; }
+.realms .lc-x { font-size:11px; fill:#8A7AA6; }
+.realms .lc-v { font-size:11px; fill:var(--p-deep); font-weight:600; }
+.realms .perf, .realms .risk { display:grid; gap:10px; }
+.realms .perf-row, .realms .risk-row { display:flex; align-items:center; justify-content:space-between; gap:10px; border-top:1px solid var(--lav2); padding-top:10px; }
+.realms .perf-row:first-child, .realms .risk-row:first-child { border-top:0; padding-top:0; }
+.realms .perf-name, .realms .risk-name { display:flex; flex-direction:column; font-size:14.5px; color:#3A2B54; }
+.realms .perf-name em, .realms .risk-name em { font-style:normal; font-size:12px; color:#8A7AA6; }
+.realms .perf-stat { font-size:13px; color:#5A4C74; margin-left:auto; margin-right:10px; }
+.realms .risk-badge { font-size:12px; padding:4px 12px; border-radius:20px; border:1px solid var(--line); white-space:nowrap; }
+.realms .risk-badge.high { background:#FBE9E6; color:#B4442E; border-color:#F0C9BF; }
+.realms .risk-badge.medium { background:#FBF3E6; color:#9A5B12; border-color:#F0D9B5; }
+.realms .risk-badge.low { background:#E6F4EA; color:#2E7D46; border-color:#BFE3CB; }
+
+/* ===== consulting site ===== */
+.realms .bar .nav { min-width:0; }
+.realms .bar .tabs { overflow-x:auto; max-width:100%; min-width:0; scrollbar-width:none; flex-wrap:nowrap; justify-self:center; }
+.realms .bar .tabs::-webkit-scrollbar { display:none; }
+.realms .bar .tab { white-space:nowrap; }
+.realms .page-lede { font-size:17px; color:#5A4C74; max-width:720px; margin:-8px auto 26px; text-align:center; }
+.realms .center { text-align:center; }
+.realms .home-services { max-width:1800px; margin:0 auto; padding:clamp(30px,4vw,56px) clamp(18px,4vw,56px); }
+.realms .svc-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:16px; margin-top:22px; }
+.realms .svc-card { background:#fff; border:1px solid var(--line); border-radius:16px; overflow:hidden; cursor:pointer; transition:.18s; display:flex; flex-direction:column; }
+.realms .svc-card:hover { transform:translateY(-4px); box-shadow:0 16px 34px rgba(58,21,96,.14); border-color:var(--v); }
+.realms .svc-img { height:300px; overflow:hidden; }
+.realms .svc-img img { width:100%; height:100%; object-fit:cover; object-position:center top; }
+.realms .svc-card h3 { font-size:17px; color:var(--p-deep); margin:16px 18px 6px; }
+.realms .svc-card p { font-size:13.5px; color:#5A4C74; margin:0 18px 12px; line-height:1.55; flex:1; }
+.realms .svc-more { font-size:13px; color:var(--p); font-weight:600; margin:0 18px 16px; }
+.realms .clients-band { max-width:1500px; margin:0 auto; padding:10px 18px 30px; text-align:center; }
+.realms .clients-row { display:flex; flex-wrap:wrap; gap:10px; justify-content:center; margin-top:14px; }
+.realms .client-chip { background:var(--lav1); border:1px solid var(--line); color:#4A3B66; border-radius:22px; padding:8px 16px; font-size:14px; }
+.realms .testi-band { max-width:1500px; margin:0 auto; padding:10px 18px 40px; }
+.realms .testi-grid { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+.realms .testi { margin:0; background:#fff; border:1px solid var(--line); border-left:3px solid var(--p); border-radius:14px; padding:22px 24px; }
+.realms .testi p { font-size:16px; color:#3A2B54; font-style:italic; margin-bottom:12px; }
+.realms .testi cite { font-style:normal; font-size:13px; color:#8A7AA6; }
+.realms .cta-band, .realms .cta-row.onlight { }
+.realms .cta-band { max-width:1500px; margin:34px auto 0; background:linear-gradient(135deg,var(--p-deep),var(--p-mid)); border-radius:20px; padding:clamp(28px,4vw,44px); text-align:center; color:#fff; }
+.realms .cta-band h2 { color:#fff; font-size:clamp(22px,3vw,30px); margin-bottom:14px; }
+.realms .cta-band p { color:#F1E5FB; margin-bottom:18px; }
+.realms .btn.ghost.onlight { border-color:rgba(255,255,255,.7); background:rgba(255,255,255,.16); color:#fff; }
+.realms .btn.ghost.onlight:hover { background:#fff; color:var(--p-deep); }
+.realms .mon-lead { display:grid; grid-template-columns:1.2fr 1fr; gap:24px; align-items:center; margin-bottom:30px; }
+.realms .mon-lead-copy p { color:#4A3B66; line-height:1.65; margin-bottom:12px; }
+.realms .mon-lead-art { border-radius:18px; overflow:hidden; }
+.realms .mon-lead-art img { width:100%; height:100%; object-fit:cover; }
+.realms .case-grid { display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-bottom:24px; }
+.realms .case { background:#fff; border:1px solid var(--line); border-radius:14px; padding:22px; }
+.realms .case h3 { color:var(--p-deep); font-size:17px; margin-bottom:8px; }
+.realms .case p { color:#5A4C74; font-size:14px; }
+.realms .certs { display:flex; flex-wrap:wrap; align-items:center; gap:10px; }
+.realms .certs-lab { font-size:12px; letter-spacing:.1em; text-transform:uppercase; color:var(--v); margin-right:6px; }
+.realms .cert-chip { background:var(--lav1); border:1px dashed var(--line); border-radius:10px; padding:8px 14px; font-size:13px; color:#5A4C74; }
+.realms .leaders { display:grid; grid-template-columns:repeat(3,1fr); gap:18px; margin-bottom:34px; }
+.realms .staff-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:18px; margin-bottom:30px; }
+.realms .lead-grid { grid-template-columns:1fr 1fr; max-width:860px; margin:0 auto; }
+.realms .staff.lead .staff-photo { width:72px; height:72px; }
+.realms .staff-photo img { width:100%; height:100%; object-fit:cover; border-radius:50%; }
+.realms .staff { background:#fff; border:1px solid var(--line); border-radius:16px; padding:22px; }
+.realms .staff.lead { border-color:var(--v); box-shadow:0 12px 30px rgba(58,21,96,.12); background:linear-gradient(180deg,#fff,var(--lav1)); }
+.realms .staff-top { display:flex; align-items:center; gap:14px; margin-bottom:12px; }
+.realms .staff-photo { width:60px; height:60px; flex-shrink:0; border-radius:50%; background:linear-gradient(135deg,var(--p),var(--v)); display:grid; place-items:center; }
+.realms .staff-photo span { color:#fff; font-size:20px; font-weight:700; letter-spacing:.03em; }
+.realms .staff-id h3 { color:var(--p-deep); font-size:17px; line-height:1.2; }
+.realms .staff-role { color:var(--p); font-size:13.5px; margin-top:3px; }
+.realms .staff-unit { color:#8A7AA6; font-size:12.5px; }
+.realms .staff-purpose { color:#5A4C74; font-size:14px; line-height:1.55; margin-bottom:8px; }
+.realms .staff-duties { margin:10px 0 0; padding-left:18px; display:grid; gap:5px; }
+.realms .staff-duties li { font-size:13.5px; color:#3A2B54; }
+@media (max-width:900px){ .realms .staff-grid { grid-template-columns:1fr 1fr; } }
+@media (max-width:560px){ .realms .staff-grid { grid-template-columns:1fr; } }
+.realms .insights { display:grid; grid-template-columns:repeat(3,1fr); gap:16px; margin-bottom:20px; }
+.realms .insight { background:#fff; border:1px solid var(--line); border-radius:16px; padding:22px; display:flex; flex-direction:column; gap:6px; }
+.realms .insight-tag { display:inline-block; align-self:flex-start; background:var(--lav2); color:var(--p-deep); font-size:11px; letter-spacing:.06em; text-transform:uppercase; padding:3px 10px; border-radius:12px; }
+.realms .insight-date { font-size:12px; color:#8A7AA6; }
+.realms .insight h3 { color:var(--p-deep); font-size:17px; margin:4px 0; }
+.realms .insight p { color:#5A4C74; font-size:14px; flex:1; }
+.realms .insight .svc-more { margin:6px 0 0; }
+.realms .contact-grid { display:grid; grid-template-columns:1.4fr 1fr; gap:20px; }
+.realms .contact-side { background:var(--lav1); border:1px solid var(--line); border-radius:16px; padding:24px; }
+.realms .contact-side h3 { color:var(--p-deep); margin-bottom:14px; }
+.realms .enquiry-card h2 { color:var(--p-deep); margin-bottom:16px; }
+.realms .pillar.clickable { cursor:pointer; }
+.realms .pillar.clickable:hover { border-color:var(--v); transform:translateY(-3px); }
+@media (max-width:900px){
+  .realms .svc-grid, .realms .leaders, .realms .team-dir, .realms .insights { grid-template-columns:1fr 1fr; }
+  .realms .testi-grid, .realms .case-grid, .realms .mon-lead, .realms .contact-grid { grid-template-columns:1fr; }
+}
+@media (max-width:560px){ .realms .svc-grid, .realms .leaders, .realms .team-dir, .realms .insights { grid-template-columns:1fr; } }
+
+.realms .mon-rules { font-size:12.5px; color:#8A5A12; background:#FBF3E6; border:1px solid #F0D9B5; border-radius:10px; padding:8px 12px; margin-bottom:14px; }
+.realms .mcat-r { display:flex; align-items:center; gap:8px; }
+.realms .need { font-size:11.5px; color:#B4442E; background:#FBE9E6; border:1px solid #F0C9BF; border-radius:12px; padding:3px 9px; white-space:nowrap; }
+.realms .ok { font-size:11.5px; color:#2E7D46; background:#E6F4EA; border:1px solid #BFE3CB; border-radius:12px; padding:3px 9px; }
+.realms .mitem.flag { border-left:3px solid #B4442E; padding-left:12px; margin-left:-12px; }
+.realms .ev-btn.urgent { border-color:#B4442E; color:#B4442E; }
+.realms .hintline.req { color:#B4442E; font-weight:600; }
+.realms .prop-list { display:grid; gap:14px; }
+.realms .prop-card { background:#fff; border:1px solid var(--line); border-radius:16px; padding:20px 22px; }
+.realms .prop-head { display:flex; align-items:center; justify-content:space-between; gap:12px; border-bottom:1px solid var(--lav2); padding-bottom:12px; margin-bottom:12px; }
+.realms .prop-sec { margin-bottom:12px; }
+.realms .prop-sec h4 { font-size:13px; letter-spacing:.04em; text-transform:uppercase; color:var(--v); margin-bottom:8px; }
+.realms .corr { margin:0; padding-left:18px; display:grid; gap:6px; }
+.realms .corr li { font-size:14px; color:#3A2B54; }
+.realms .corr em { color:#5A4C74; font-style:italic; }
+.realms .corr-tl { display:inline-block; margin-left:8px; font-size:11.5px; color:#9A5B12; background:#FBF3E6; border:1px solid #F0D9B5; border-radius:10px; padding:2px 8px; }
+.realms .prop-actions { margin-top:4px; }
+.realms .muted.sm { font-size:13.5px; color:#7A6A93; }
+.realms .profile-cat .prof-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:10px; margin-bottom:10px; }
+@media (max-width:560px){ .realms .profile-cat .prof-grid { grid-template-columns:1fr 1fr; } }
+.realms .langsel { font-family:inherit; font-size:13px; border:1px solid var(--line); border-radius:16px; padding:6px 10px; background:#fff; color:var(--p-deep); margin-right:2px; }
+.realms .langsel:focus { outline:none; border-color:var(--p); }
+.realms .list-tools { margin-bottom:14px; }
+.realms .searchbox { font-family:inherit; font-size:14px; width:100%; max-width:340px; border:1px solid var(--line); border-radius:22px; padding:9px 16px; background:#fff; color:var(--ink); }
+.realms .searchbox:focus { outline:none; border-color:var(--p); box-shadow:0 0 0 3px var(--lav2); }
+.realms .ptools .searchbox { max-width:200px; }
+.realms .fu-card { background:#fff; border:1px solid var(--line); border-radius:14px; padding:16px 18px; margin-bottom:10px; }
+.realms .fu-head { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+.realms .fu-right { display:flex; align-items:center; gap:10px; }
+.realms .fu-form { margin-top:12px; padding-top:12px; border-top:1px solid var(--lav2); }
+.realms .fu-calls { margin:10px 0 0; padding-left:18px; }
+.realms .fu-calls li { font-size:13px; color:#5A4C74; margin-bottom:4px; }
+.realms .log-list { list-style:none; margin:0 0 18px; padding:0; border:1px solid var(--line); border-radius:12px; overflow:hidden; }
+.realms .log-list li { display:flex; gap:12px; padding:9px 14px; font-size:13px; border-top:1px solid var(--lav2); }
+.realms .log-list li:first-child { border-top:none; }
+.realms .log-when { color:#8A7AA6; white-space:nowrap; font-variant-numeric:tabular-nums; }
+.realms .log-msg { color:#3A2B54; }
+
+/* --- follow-ups redesign --- */
+.realms .fu-flag { display:flex; gap:12px; align-items:flex-start; background:#FBE9E6; border:1px solid #F0C9BF; border-radius:var(--r-md); padding:13px 16px; margin:0 0 18px; font-size:14px; color:#7A2E1E; line-height:1.5; }
+.realms .fu-flag strong { color:#B4442E; }
+.realms .fu-flag-ic { flex:none; width:22px; height:22px; border-radius:50%; background:#B4442E; color:#fff; font-weight:700; display:flex; align-items:center; justify-content:center; font-size:14px; margin-top:1px; }
+.realms .fu-kpis { display:grid; grid-template-columns:repeat(4,1fr); gap:10px; margin:0 0 16px; }
+.realms .fu-kpi { text-align:left; padding:14px 16px; background:#fff; border:1.5px solid var(--line); border-radius:var(--r-md); cursor:pointer; transition:.16s; display:flex; flex-direction:column; gap:4px; }
+.realms .fu-kpi:hover { border-color:var(--v); box-shadow:var(--e1); }
+.realms .fu-kpi.on { border-color:var(--p); box-shadow:var(--e2); background:var(--lav1); }
+.realms .fu-kpi-v { font-size:28px; font-weight:700; line-height:1; color:var(--p-deep); font-variant-numeric:tabular-nums; }
+.realms .fu-kpi-l { font-size:12.5px; color:#7A6A93; }
+.realms .fu-kpi.amber .fu-kpi-v { color:#9A5B12; }
+.realms .fu-kpi.green .fu-kpi-v { color:#2E7D46; }
+.realms .fu-kpi.red .fu-kpi-v { color:#B4442E; }
+.realms .fu-toolbar { display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; margin:0 0 16px; }
+.realms .fu-segs { display:inline-flex; background:var(--lav2); border-radius:22px; padding:3px; gap:2px; }
+.realms .fu-segs.sm { margin-bottom:12px; }
+.realms .fu-seg { font-family:inherit; font-size:13px; padding:7px 15px; border:none; background:transparent; color:#6A5A87; border-radius:20px; cursor:pointer; display:inline-flex; align-items:center; gap:7px; transition:.15s; }
+.realms .fu-seg.on { background:#fff; color:var(--p-deep); font-weight:600; box-shadow:var(--e1); }
+.realms .fu-seg-n { font-size:11px; min-width:18px; height:18px; padding:0 5px; border-radius:9px; background:var(--v); color:#fff; display:inline-flex; align-items:center; justify-content:center; font-variant-numeric:tabular-nums; }
+.realms .fu-seg.on .fu-seg-n { background:var(--p); }
+.realms .fu-queue { display:grid; gap:12px; }
+.realms .fu-card2 { background:#fff; border:1px solid var(--line); border-left:3px solid var(--v); border-radius:var(--r-md); padding:15px 18px; box-shadow:var(--e1); transition:box-shadow .18s ease, border-color .18s ease; }
+.realms .fu-card2:hover { box-shadow:var(--e2); }
+.realms .fu-card2.awaiting { border-left-color:#D9A340; }
+.realms .fu-card2.called { border-left-color:#5FA35A; }
+.realms .fu-card2.escalated { border-left-color:#B4442E; background:linear-gradient(180deg,#FDF4F2,#fff 60%); }
+.realms .fu-c-top { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; }
+.realms .fu-c-id { display:flex; flex-direction:column; gap:2px; min-width:0; }
+.realms .fu-wait { display:inline-block; margin-left:8px; font-size:11.5px; font-weight:600; color:#9A5B12; background:#FBF3E6; border:1px solid #F0D9B5; padding:1px 8px; border-radius:11px; }
+.realms .fu-c-actions { display:flex; flex-wrap:wrap; gap:8px; margin-top:12px; }
+.realms a.mini.call { text-decoration:none; border-color:#BFE3CB; color:#2E7D46; background:#E6F4EA; font-weight:600; display:inline-flex; align-items:center; gap:5px; }
+.realms a.mini.call:hover { background:#d7eede; border-color:#9ED2AE; }
+.realms .mini.ghost { color:#6A5A87; font-variant-numeric:tabular-nums; }
+.realms .mini.disabled { color:#A89BBE; background:var(--lav1); border-style:dashed; cursor:default; }
+.realms .mini.on { border-color:var(--p); background:var(--lav1); }
+.realms .fu-timeline { list-style:none; margin:14px 0 0; padding:12px 0 0; border-top:1px solid var(--lav2); display:grid; gap:11px; }
+.realms .fu-timeline li { display:flex; gap:11px; align-items:flex-start; }
+.realms .fu-dot { flex:none; width:9px; height:9px; border-radius:50%; background:var(--v); margin-top:5px; box-shadow:0 0 0 3px var(--lav2); }
+.realms .fu-timeline li.flag .fu-dot { background:#B4442E; box-shadow:0 0 0 3px #F5D9D2; }
+.realms .fu-t-body { display:flex; flex-direction:column; gap:2px; min-width:0; }
+.realms .fu-t-head { display:flex; align-items:baseline; gap:9px; flex-wrap:wrap; }
+.realms .fu-t-head strong { font-size:13.5px; color:var(--p-deep); }
+.realms .fu-t-when { font-size:12px; color:#8A7AA6; font-variant-numeric:tabular-nums; }
+.realms .fu-t-note { font-size:13px; color:#5A4C74; line-height:1.45; }
+.realms .fu-logtoggle { margin:22px 0 0; font-family:inherit; font-size:13px; color:var(--p); background:none; border:none; cursor:pointer; padding:4px 0; }
+.realms .fu-logtoggle:hover { color:var(--p-deep); text-decoration:underline; }
+.realms .fu-logwrap { margin-top:12px; }
+.realms .reins-row { display:grid; grid-template-columns:repeat(4,1fr); gap:12px; margin:6px 0 4px; }
+.realms .reins-stat { text-align:center; padding:14px 8px; background:var(--lav1); border:1px solid var(--line); border-radius:var(--r-md); }
+.realms .reins-v { display:block; font-size:30px; font-weight:700; line-height:1; color:var(--p-deep); font-variant-numeric:tabular-nums; }
+.realms .reins-v.g { color:#2E7D46; } .realms .reins-v.a { color:#9A5B12; } .realms .reins-v.r { color:#B4442E; }
+.realms .reins-l { display:block; margin-top:6px; font-size:12.5px; color:#7A6A93; }
+@media (max-width:560px){ .realms .reins-row { grid-template-columns:repeat(2,1fr); } }
+
+/* --- dashboard redesign --- */
+.realms .dash-hero { display:flex; gap:22px; align-items:center; background:linear-gradient(120deg,#F3EEFA,#FBF6FF 55%,#F6EEF6); border:1px solid var(--line); border-radius:var(--r-lg); padding:20px 24px; margin:0 0 16px; box-shadow:var(--e1); }
+.realms .dash-hero-ring { flex:none; }
+.realms .dash-hero-body { flex:1; min-width:0; }
+.realms .dash-hero-sum { font-size:17px; line-height:1.5; color:var(--p-deep); margin:0 0 14px; font-weight:500; }
+.realms .dash-hero-cov { margin-bottom:14px; }
+.realms .cov-bar { height:9px; background:#E7DEF2; border-radius:6px; overflow:hidden; }
+.realms .cov-fill { height:100%; background:linear-gradient(90deg,var(--p),var(--p-mid)); border-radius:6px; transition:width .9s cubic-bezier(.2,.8,.2,1); }
+.realms .cov-cap { display:block; margin-top:6px; font-size:12.5px; color:#7A6A93; }
+.realms .dash-hero-legend { display:flex; flex-wrap:wrap; gap:16px; }
+.realms .hero-leg { display:inline-flex; align-items:center; gap:6px; font-size:13px; color:#5A4C74; }
+.realms .hero-leg em { font-style:normal; font-weight:700; color:var(--p-deep); font-variant-numeric:tabular-nums; }
+.realms .hero-leg .hr-dot { width:9px; height:9px; border-radius:50%; }
+.realms .hero-leg.green .hr-dot { background:#2E7D46; } .realms .hero-leg.amber .hr-dot { background:#C77D0A; } .realms .hero-leg.red .hr-dot { background:#B4442E; } .realms .hero-leg.unscored .hr-dot { background:#B9AEC9; }
+.realms .dash-kpis { display:grid; grid-template-columns:repeat(6,1fr); gap:10px; margin:0 0 18px; }
+.realms .dash-kpi { position:relative; text-align:left; padding:16px 14px 14px; background:#fff; border:1px solid var(--line); border-radius:var(--r-md); cursor:pointer; overflow:hidden; transition:.16s; display:flex; flex-direction:column; gap:3px; }
+.realms .dash-kpi::before { content:''; position:absolute; left:0; top:0; bottom:0; width:3px; background:var(--p); }
+.realms .dash-kpi.tone-r::before { background:#B4442E; } .realms .dash-kpi.tone-a::before { background:#D9A340; }
+.realms .dash-kpi:hover { box-shadow:var(--e2); transform:translateY(-2px); border-color:var(--v); }
+.realms .dk-v { font-size:30px; font-weight:700; line-height:1; color:var(--p-deep); font-variant-numeric:tabular-nums; }
+.realms .dash-kpi.tone-r .dk-v { color:#B4442E; } .realms .dash-kpi.tone-a .dk-v { color:#9A5B12; }
+.realms .dk-l { font-size:12.5px; color:#6A5A87; }
+.realms .dk-go { font-size:11.5px; color:var(--v); opacity:0; transition:.16s; margin-top:2px; }
+.realms .dash-kpi:hover .dk-go { opacity:1; }
+.realms .dash-exp-head { display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; margin-bottom:6px; }
+.realms .dash-exp-head h3 { margin:0; }
+.realms .dash-exp { display:grid; grid-template-columns:220px 1fr; gap:20px; align-items:start; margin-top:10px; }
+.realms .dash-exp-donut { display:flex; justify-content:center; }
+.realms .donut-legend .dl { background:none; border:0; font-family:inherit; font-size:13px; color:#5A4C74; display:flex; align-items:center; gap:7px; width:100%; padding:3px 6px; border-radius:8px; cursor:pointer; transition:.14s; }
+.realms .donut-legend .dl:hover { background:var(--lav1); }
+.realms .donut-legend .dl.on { background:var(--lav2); font-weight:600; color:var(--p-deep); }
+.realms .dash-exp-filters { display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; margin-bottom:10px; }
+.realms .fu-segs.wrap { flex-wrap:wrap; }
+.realms .dash-area-sel { font-family:inherit; font-size:13px; padding:7px 12px; border:1px solid var(--line); border-radius:20px; background:#fff; color:var(--p-deep); }
+.realms .dash-flist { list-style:none; margin:0; padding:0; max-height:340px; overflow-y:auto; display:grid; gap:6px; }
+.realms .dash-flist li { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:9px 12px; border:1px solid var(--line); border-radius:10px; cursor:pointer; transition:.14s; }
+.realms .dash-flist li:hover { border-color:var(--v); background:var(--lav1); }
+.realms .df-name { display:flex; flex-direction:column; gap:1px; font-size:14px; color:var(--p-deep); min-width:0; }
+.realms .df-name em { font-style:normal; font-size:12px; color:#8A7AA6; }
+.realms .bar-row.click { cursor:pointer; border-radius:8px; padding:2px 4px; transition:.14s; }
+.realms .bar-row.click:hover { background:var(--lav1); }
+.realms .bar-row.click.on .bar-fill { background:linear-gradient(90deg,var(--p),var(--p-mid)); }
+.realms .bar-row.click.on .bar-lab { font-weight:600; color:var(--p-deep); }
+@media (max-width:720px){ .realms .dash-kpis { grid-template-columns:repeat(3,1fr); } .realms .dash-exp { grid-template-columns:1fr; } .realms .dash-hero { flex-direction:column; align-items:flex-start; } }
+@media (max-width:440px){ .realms .dash-kpis { grid-template-columns:repeat(2,1fr); } }
+
+/* --- map/route: manual picker + navigate --- */
+.realms .mr-mode { margin-bottom:12px; }
+.realms .pick-list { max-height:320px; overflow-y:auto; display:grid; gap:5px; margin:10px 0; padding-right:2px; }
+.realms .pick-item { display:flex; align-items:center; gap:10px; padding:9px 11px; border:1px solid var(--line); border-radius:10px; cursor:pointer; transition:.14s; }
+.realms .pick-item:hover { border-color:var(--v); background:var(--lav1); }
+.realms .pick-item.on { border-color:var(--p); background:var(--lav2); }
+.realms .pick-item input { width:17px; height:17px; accent-color:var(--p); flex:none; }
+.realms .pi-main { display:flex; flex-direction:column; gap:1px; min-width:0; }
+.realms .pi-name { font-size:14px; color:var(--p-deep); font-weight:500; }
+.realms .pi-meta { font-size:12px; color:#8A7AA6; }
+.realms .pick-actions { display:flex; align-items:center; gap:12px; margin-top:6px; }
+.realms .pick-n { font-size:13px; color:var(--p-deep); font-weight:600; margin-right:auto; }
+.realms .pf-nav { display:inline-block; margin-top:4px; font-size:12.5px; color:#2E7D46; text-decoration:none; font-weight:600; }
+.realms .pf-nav:hover { text-decoration:underline; }
+@media (max-width:640px){ .realms .fu-kpis { grid-template-columns:repeat(2,1fr); } .realms .fu-toolbar { flex-direction:column; align-items:stretch; } .realms .fu-segs { overflow-x:auto; } }
+.realms .hef-wrap { border:1px solid var(--line); border-radius:14px; padding:14px 16px; margin-bottom:18px; background:#fff; }
+.realms .hef-title { cursor:pointer; display:flex; align-items:center; justify-content:space-between; font-weight:600; color:var(--p-deep); font-size:16px; }
+.realms .hef-total { font-size:12px; color:var(--v); background:var(--lav2); border-radius:12px; padding:3px 10px; }
+.realms .rag-summary-head { margin:6px 0 10px; }
+.realms .rag-summary-head h3 { color:var(--p-deep); font-size:16px; }
+.realms .hef-form { display:grid; gap:8px; margin-top:10px; }
+.realms .hef-sec { border:1px solid var(--line); border-radius:10px; overflow:hidden; }
+.realms .hef-sec > summary { cursor:pointer; list-style:none; display:flex; align-items:center; justify-content:space-between; padding:10px 14px; background:var(--lav1); font-size:14px; color:#3A2B54; font-weight:600; }
+.realms .hef-sec > summary::-webkit-details-marker { display:none; }
+.realms .hef-count { font-size:11.5px; color:#8A7AA6; background:#fff; border:1px solid var(--line); border-radius:10px; padding:2px 8px; font-weight:500; }
+.realms .hef-fields { padding:12px 14px; display:grid; gap:12px; }
+.realms .hef-field { display:flex; flex-direction:column; gap:6px; }
+.realms .hef-label { font-size:13.5px; color:#4A3B66; }
+.realms .hef-input { font-family:inherit; font-size:14px; border:1px solid var(--line); border-radius:8px; padding:8px 10px; background:#fff; color:var(--ink); width:100%; }
+.realms .hef-input:focus { outline:none; border-color:var(--p); }
+.realms .seg { display:inline-flex; border:1px solid var(--line); border-radius:8px; overflow:hidden; width:max-content; }
+.realms .segb { font-family:inherit; font-size:13px; padding:7px 16px; background:#fff; border:none; border-right:1px solid var(--line); color:#5A4C74; cursor:pointer; }
+.realms .segb:last-child { border-right:none; }
+.realms .segb.on { background:var(--p); color:#fff; }
+.realms .chks { display:flex; flex-wrap:wrap; gap:8px; }
+.realms .chkpill { display:inline-flex; align-items:center; gap:6px; font-size:13px; border:1px solid var(--line); border-radius:20px; padding:6px 12px; color:#5A4C74; cursor:pointer; background:#fff; }
+.realms .chkpill.on { border-color:var(--p); background:var(--lav2); color:var(--p-deep); }
+.realms .chkpill input { margin:0; }
+.realms .picks { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:8px; }
+.realms .pick { font-family:inherit; font-size:13px; min-height:38px; padding:7px 13px; border:1px solid var(--line); border-radius:19px; background:#fff; color:#5A4C74; cursor:pointer; touch-action:manipulation; -webkit-tap-highlight-color:transparent; }
+.realms .pick:active { background:var(--lav1); }
+.realms .pick.on { background:var(--p); border-color:var(--p); color:#fff; }
+.realms .hq-oversight { margin-top:24px; }
+.realms .hq-stats { display:grid; grid-template-columns:repeat(6,1fr); gap:10px; margin-bottom:14px; }
+.realms .hq-stat { background:#fff; border:1px solid var(--line); border-radius:12px; padding:14px 10px; text-align:center; }
+.realms .hq-stat .v { display:block; font-size:22px; font-weight:700; color:var(--p-deep); font-family:Lora,serif; }
+.realms .hq-stat .l { display:block; font-size:11.5px; color:#8A7AA6; margin-top:2px; }
+.realms .hq-table { border:1px solid var(--line); border-radius:12px; overflow:hidden; }
+.realms .hq-tr { display:grid; grid-template-columns:2.2fr 1.2fr 0.8fr 1fr 1fr; gap:8px; padding:10px 14px; font-size:13px; color:#4A3B66; border-top:1px solid var(--lav2); align-items:center; }
+.realms .hq-tr:first-child { border-top:none; }
+.realms .hq-th { background:var(--lav1); font-weight:600; color:var(--p-deep); font-size:12px; text-transform:uppercase; letter-spacing:.04em; }
+.realms .hq-name { color:#3A2B54; font-weight:500; }
+.realms .hq-status { font-size:12px; }
+.realms .hq-status.s-notvisited { color:#8A7AA6; }
+.realms .hq-status.s-engaged { color:#9A5B12; }
+.realms .hq-status.s-assessed { color:#2E6B8A; }
+.realms .hq-status.s-debriefed { color:#2E7D46; }
+@media (max-width:760px){ .realms .hq-stats { grid-template-columns:repeat(3,1fr); } .realms .hq-tr { grid-template-columns:2fr 1fr 1fr; } .realms .hq-tr span:nth-child(3), .realms .hq-tr span:nth-child(4) { display:none; } }
+
+/* ===== contact page ===== */
+.realms .contact-page { max-width:1800px; }
+.realms .contact-hero { text-align:center; max-width:720px; margin:0 auto clamp(26px,4vw,44px); }
+.realms .contact-hero h1 { font-size:clamp(30px,5vw,48px); line-height:1.06; color:var(--p-deep); letter-spacing:-0.01em; }
+.realms .contact-lede { font-size:17px; color:#5A4C74; margin-top:14px; }
+.realms .contact-split { display:grid; grid-template-columns:0.95fr 1.05fr; gap:20px; align-items:stretch; }
+.realms .contact-panel { position:relative; overflow:hidden; border-radius:22px; padding:clamp(26px,3vw,38px); color:#fff; background:linear-gradient(150deg,#4C3B66 0%,#574277 45%,#6D4B8E 100%); box-shadow:0 24px 60px rgba(58,21,96,.28); }
+.realms .panel-glow { position:absolute; width:340px; height:340px; right:-120px; top:-120px; background:radial-gradient(circle,rgba(169,143,196,.55),transparent 70%); pointer-events:none; }
+.realms .contact-panel h2 { color:#fff; font-size:24px; margin-bottom:20px; position:relative; }
+.realms .reach { list-style:none; margin:0 0 24px; padding:0; display:grid; gap:16px; position:relative; }
+.realms .reach li { display:flex; gap:14px; align-items:flex-start; }
+.realms .reach-ic { flex:0 0 auto; width:40px; height:40px; border-radius:12px; display:grid; place-items:center; background:rgba(255,255,255,.14); color:#fff; }
+.realms .reach-k { display:block; font-size:11.5px; letter-spacing:.1em; text-transform:uppercase; color:#D9C9EC; margin-bottom:2px; }
+.realms .reach li em { font-style:normal; font-size:15px; color:#fff; line-height:1.4; }
+.realms .panel-cta { display:flex; flex-wrap:wrap; gap:10px; position:relative; }
+.realms .enquiry { background:#fff; border:1px solid var(--line); border-radius:22px; padding:clamp(24px,3vw,34px); box-shadow:0 12px 34px rgba(58,21,96,.08); }
+.realms .enquiry h2 { color:var(--p-deep); font-size:22px; margin-bottom:18px; }
+.realms .btn.wide { width:100%; justify-content:center; }
+.realms .enquiry.sent { display:flex; flex-direction:column; align-items:center; text-align:center; justify-content:center; gap:6px; }
+.realms .sent-badge { width:64px; height:64px; border-radius:50%; display:grid; place-items:center; background:#E6F4EA; color:#2E7D46; margin-bottom:8px; }
+.realms .enquiry.sent p { color:#5A4C74; max-width:380px; margin-bottom:12px; }
+@media (max-width:820px){ .realms .contact-split { grid-template-columns:1fr; } }
+
+/* ===== toasts + modal ===== */
+.realms .toaster { position:fixed; left:50%; bottom:28px; transform:translateX(-50%); z-index:9999; display:flex; flex-direction:column; gap:8px; align-items:center; pointer-events:none; }
+.realms .toast { pointer-events:auto; background:#2E2140; color:#fff; font-size:14px; padding:11px 18px; border-radius:12px; box-shadow:0 10px 30px rgba(0,0,0,.28); animation:toastin .28s ease; max-width:90vw; }
+.realms .toast.ok { background:#2E7D46; } .realms .toast.warn { background:#9A5B12; } .realms .toast.err { background:#B4442E; }
+@keyframes toastin { from { opacity:0; transform:translateY(10px) } to { opacity:1; transform:none } }
+.realms .modal-scrim { position:fixed; inset:0; z-index:9998; background:rgba(36,21,54,.5); backdrop-filter:blur(2px); display:grid; place-items:center; padding:20px; }
+.realms .modal { background:#fff; border-radius:18px; padding:26px; max-width:400px; width:100%; box-shadow:0 30px 70px rgba(0,0,0,.3); }
+.realms .modal h3 { color:var(--p-deep); font-size:19px; margin-bottom:8px; }
+.realms .modal p { color:#5A4C74; font-size:14.5px; margin-bottom:20px; }
+.realms .modal-actions { display:flex; justify-content:flex-end; gap:10px; }
+.realms .btn.danger { background:#B4442E; color:#fff; }
+.realms .btn.danger:hover { background:#98351f; }
+
+/* completion meter */
+.realms .mon-meter { display:grid; gap:8px; margin:4px 0 14px; }
+.realms .meter-row { display:grid; grid-template-columns:88px 1fr auto; gap:10px; align-items:center; }
+.realms .meter-lab { font-size:12px; color:#8A7AA6; }
+.realms .meter-track { height:8px; border-radius:6px; background:var(--lav2); overflow:hidden; }
+.realms .meter-fill { height:100%; background:linear-gradient(90deg,var(--p),var(--v)); border-radius:6px; transition:width .35s ease; }
+.realms .meter-fill.alt { background:linear-gradient(90deg,#2E7D46,#7FC29B); }
+.realms .meter-val { font-size:12px; color:#5A4C74; font-variant-numeric:tabular-nums; }
+
+/* lightbox */
+.realms .lightbox { position:fixed; inset:0; z-index:9998; background:rgba(20,10,32,.9); display:grid; place-items:center; padding:24px; cursor:zoom-out; }
+.realms .lightbox img { max-width:92vw; max-height:88vh; border-radius:10px; box-shadow:0 20px 60px rgba(0,0,0,.5); }
+.realms .lightbox-x { position:fixed; top:18px; right:22px; background:rgba(255,255,255,.15); color:#fff; border:none; width:40px; height:40px; border-radius:50%; font-size:24px; cursor:pointer; }
+
+/* facility history drawer */
+.realms .drawer-scrim { position:fixed; inset:0; z-index:9997; background:rgba(36,21,54,.45); display:flex; justify-content:flex-end; }
+.realms .drawer { width:min(420px,92vw); background:#fff; height:100%; overflow-y:auto; padding:24px; box-shadow:-20px 0 50px rgba(0,0,0,.2); }
+.realms .anim-right { animation:slidein .26s ease; }
+@keyframes slidein { from { transform:translateX(24px); opacity:.4 } to { transform:none; opacity:1 } }
+.realms .drawer-head { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; margin-bottom:16px; }
+.realms .drawer-head h3 { color:var(--p-deep); font-size:19px; }
+.realms .drawer-sub { color:var(--v); font-size:12px; letter-spacing:.06em; text-transform:uppercase; margin-bottom:10px; }
+.realms .drawer-visits { list-style:none; margin:0; padding:0; display:grid; gap:8px; }
+.realms .drawer-visits li { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:12px 14px; border:1px solid var(--line); border-radius:12px; }
+.realms .dv-main { display:flex; flex-direction:column; }
+
+/* settings */
+.realms .settings-card { background:#fff; border:1px solid var(--line); border-radius:16px; padding:24px; max-width:680px; }
+.realms .settings-card h3 { color:var(--p-deep); font-size:17px; margin-bottom:6px; }
+
+/* ===== polish: focus, motion, hovers, empty, skeleton ===== */
+.realms .btn { transition:transform .15s ease, box-shadow .15s ease, background .15s ease, color .15s ease; }
+.realms .btn.primary:hover, .realms .btn.light:hover { transform:translateY(-1px); }
+.realms a:focus-visible, .realms button:focus-visible, .realms input:focus-visible, .realms select:focus-visible, .realms textarea:focus-visible, .realms summary:focus-visible { outline:2px solid var(--p); outline-offset:2px; border-radius:6px; }
+.realms .empty { text-align:center; color:#8A7AA6; padding:34px 20px; border:1px dashed var(--line); border-radius:14px; background:var(--lav1); }
+.realms .empty.sm { padding:18px; }
+.realms .skeleton { position:relative; overflow:hidden; background:var(--lav2); border-radius:10px; }
+.realms .skeleton::after { content:''; position:absolute; inset:0; transform:translateX(-100%); background:linear-gradient(90deg,transparent,rgba(255,255,255,.6),transparent); animation:shimmer 1.3s infinite; }
+@keyframes shimmer { 100% { transform:translateX(100%) } }
+.realms .skel-row { height:58px; margin-bottom:10px; }
+@media (prefers-reduced-motion: reduce) { .realms *, .realms *::after, .realms *::before { animation-duration:.001ms !important; transition-duration:.001ms !important; } .realms .anim { animation:none !important; opacity:1 !important; transform:none !important; } }
+
+/* ===== AI ===== */
+.realms .ai-btn { display:inline-flex; align-items:center; gap:6px; }
+.realms .ai-spark { color:var(--v); font-size:13px; }
+.realms .ai-panel { background:linear-gradient(180deg,var(--lav1),#fff); border:1px solid var(--line); border-left:3px solid var(--p); border-radius:12px; padding:14px 16px; margin-top:10px; }
+.realms .ai-panel h4 { color:var(--p-deep); font-size:13px; text-transform:uppercase; letter-spacing:.05em; margin-bottom:6px; display:flex; align-items:center; gap:6px; }
+.realms .ai-panel .ai-text { font-size:14px; color:#3A2B54; white-space:pre-wrap; line-height:1.55; }
+.realms .chat-wrap { border:1px solid var(--line); border-radius:16px; overflow:hidden; display:flex; flex-direction:column; height:min(62vh,560px); background:#fff; }
+.realms .chat-msgs { flex:1; overflow-y:auto; padding:18px; display:flex; flex-direction:column; gap:12px; }
+.realms .cmsg { max-width:80%; padding:11px 15px; border-radius:14px; font-size:14.5px; line-height:1.5; white-space:pre-wrap; }
+.realms .cmsg.user { align-self:flex-end; background:var(--p); color:#fff; border-bottom-right-radius:4px; }
+.realms .cmsg.assistant { align-self:flex-start; background:var(--lav2); color:#3A2B54; border-bottom-left-radius:4px; }
+.realms .chat-input { display:flex; gap:8px; padding:12px; border-top:1px solid var(--line); background:var(--lav1); }
+.realms .chat-input input { flex:1; font-family:inherit; font-size:14px; border:1px solid var(--line); border-radius:22px; padding:10px 16px; background:#fff; }
+.realms .assistant-fab { position:fixed; right:22px; bottom:22px; z-index:900; background:linear-gradient(135deg,var(--p-deep),var(--p-mid)); color:#fff; border:none; border-radius:26px; padding:13px 22px; font-size:15px; font-weight:600; box-shadow:0 12px 30px rgba(58,21,96,.34); }
+.realms .assistant-panel { position:fixed; right:22px; bottom:78px; z-index:900; width:min(380px,92vw); height:min(540px,74vh); background:#fff; border:1px solid var(--line); border-radius:18px; box-shadow:0 24px 60px rgba(58,21,96,.28); display:flex; flex-direction:column; overflow:hidden; animation:slideup .24s ease; }
+@keyframes slideup { from { opacity:0; transform:translateY(12px) } to { opacity:1; transform:none } }
+.realms .assistant-head { display:flex; align-items:center; justify-content:space-between; padding:14px 18px; background:linear-gradient(135deg,var(--p-deep),var(--p-mid)); color:#fff; font-weight:600; }
+.realms .assistant-head .linkbtn { color:#EBDDF8; }
+.realms .assistant-msgs { flex:1; overflow-y:auto; padding:16px; display:flex; flex-direction:column; gap:10px; background:var(--lav1); }
+.realms .amsg { max-width:88%; padding:10px 14px; border-radius:14px; font-size:14px; line-height:1.5; white-space:pre-wrap; }
+.realms .amsg.user { align-self:flex-end; background:var(--p); color:#fff; border-bottom-right-radius:4px; }
+.realms .amsg.assistant { align-self:flex-start; background:#fff; color:#3A2B54; border:1px solid var(--line); border-bottom-left-radius:4px; }
+.realms .assistant-input { display:flex; gap:8px; padding:12px; border-top:1px solid var(--line); }
+.realms .assistant-input input { flex:1; font-family:inherit; font-size:14px; border:1px solid var(--line); border-radius:20px; padding:9px 14px; }
+.realms .ai-row { display:flex; flex-wrap:wrap; gap:8px; margin-bottom:10px; }
+.realms .ai-check { display:inline-flex; align-items:center; gap:6px; font-size:13px; color:#5A4C74; white-space:nowrap; }
+.realms .mnote-row { display:flex; gap:8px; align-items:flex-start; }
+.realms .mnote-row .mnote { flex:1; }
+.realms .dictate.rec { color:#B4442E; border-color:#B4442E; }
+.realms .ev-ai { font-size:11px; padding:3px 8px; margin-top:4px; }
 `
