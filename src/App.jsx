@@ -4,7 +4,7 @@ import 'leaflet/dist/leaflet.css'
 import { supabase, MODE } from './supabaseClient.js'
 import { facilities as FAC, assignments as ASG, visits as VIS, notifications as NOTIF, calls as CALLS, access as ACC, facilitiesFromCSV, orderRoute, clusterDays, clusterDaysByDate, googleMapsDirUrl, geocode, uploadEvidence, sendNotify, askAI, seedSampleData, clearAllData } from './data.js'
 
-const BUILD = 'field-2026-07-18t'
+const BUILD = 'field-2026-07-18x'
 
 /*
   REALMS FIELD — Stages 1 to 3 (single-file App.jsx + supabaseClient.js + data.js)
@@ -1084,6 +1084,8 @@ function SecondAssessmentPage({ facilities, identity, userId, role }) {
   const [visits, setVisits] = useState([])
   const [sub, setSub] = useState('due')
   const [openId, setOpenId] = useState(null)
+  const [engId, setEngId] = useState(null)
+  const [checking, setChecking] = useState('')
   const [form, setForm] = useState({})
   const [busy, setBusy] = useState(false)
   const [q, setQ] = useState('')
@@ -1113,9 +1115,14 @@ function SecondAssessmentPage({ facilities, identity, userId, role }) {
   const due = dueAll.filter(f => matchQ(f, q))
   const done = doneAll.filter(f => matchQ(f, q))
 
-  function startVisit(f) {
+  function engagementFor(f) {
+    const today = new Date().toISOString().slice(0, 10)
+    return visits.find(v => (v.facility_id === f.id || v.facility_name === f.name) && v.status === 'engaged'
+      && ((v.arrival_time || v.created_at || '').slice(0, 10) === today)) || null
+  }
+  function openForm(f, eng) {
     const b = baseAssess(f) || {}
-    setOpenId(f.id)
+    setOpenId(f.id); setEngId(eng ? eng.id : null)
     const pre = {}; SA_FIELDS.forEach(([k]) => { pre[k] = b[k] || '' })
     const fresh = { ...pre, total_score: '', pct_score: '', notes: '', newRecs: '',
       recStatus: (b.recommendations || []).map(() => 'in_progress') }
@@ -1123,6 +1130,35 @@ function SecondAssessmentPage({ facilities, identity, userId, role }) {
     try { const raw = localStorage.getItem('realms_second_' + f.id); if (raw) { const p = JSON.parse(raw); if (p && typeof p === 'object') restored = p } } catch (e) {}
     setForm(restored ? { ...fresh, ...restored } : fresh)
     if (restored) toast('Unsaved work restored on this device.')
+  }
+  // A second assessment must be backed by a check-in, so every return visit carries
+  // the same GPS proof of attendance as a first visit. If the team has already
+  // checked in today we go straight through; otherwise we capture it here in one tap.
+  async function startVisit(f) {
+    const existing = engagementFor(f)
+    if (existing) { openForm(f, existing); return }
+    if (!navigator.geolocation) { toast('Location is not available on this device. GPS is required to check in.', 'err'); return }
+    setChecking(f.id)
+    navigator.geolocation.getCurrentPosition(async p => {
+      const coords = { lat: +p.coords.latitude.toFixed(6), lng: +p.coords.longitude.toFixed(6) }
+      try {
+        const row = {
+          facility_id: f.id, facility_name: f.name, area: f.area || 'Unassigned',
+          address: f.address || '', category: f.category || '',
+          status: 'engaged', arrival_time: new Date().toISOString(),
+          lat: coords.lat, lng: coords.lng,
+          team: [{ name: (identity && identity.name) || 'RHSC Field Monitoring Team', role: 'Team' }],
+          person_in_charge: {}
+        }
+        await VIS.add(row, userId)
+        const vs = await VIS.list(); setVisits(vs)
+        const eng = vs.find(v => (v.facility_id === f.id || v.facility_name === f.name) && v.status === 'engaged'
+          && (v.arrival_time || v.created_at || '').slice(0, 10) === new Date().toISOString().slice(0, 10)) || null
+        toast('Checked in at ' + f.name + '.')
+        openForm(f, eng)
+      } catch (e) { toast('Could not save the check-in.', 'err') } finally { setChecking('') }
+    }, () => { setChecking(''); toast('Location permission denied. GPS is required at check-in, please enable location and try again.', 'err') },
+      { enableHighAccuracy: true, timeout: 10000 })
   }
   function improvementFor(f) {
     const b = baseAssess(f) || {}
@@ -1147,16 +1183,24 @@ function SecondAssessmentPage({ facilities, identity, userId, role }) {
     assessment.recommendation_status = (b.recommendations || []).map((r, i) => ({ text: r, status: (form.recStatus || [])[i] || 'not_done' }))
     assessment.new_recommendations = (form.newRecs || '').split('\n').map(s => s.trim()).filter(Boolean)
     assessment.notes = form.notes || ''
+    const eng = engId ? visits.find(v => v.id === engId) : null
     const row = {
       facility_id: f.id, facility_name: f.name, area: f.area, status: 'second', round: 2,
-      baseline_visit_id: (first && first.id) || null, visit_date: today, arrival_time: new Date().toISOString(),
+      baseline_visit_id: (first && first.id) || null, visit_date: today,
+      arrival_time: (eng && eng.arrival_time) || new Date().toISOString(),
       score: assessment.pct_score != null ? assessment.pct_score : null, overall_rating: ragFromPct(assessment.pct_score),
-      team: [{ name: (identity && identity.name) || 'RHSC Field Monitoring Team', role: 'Team' }],
+      team: (eng && eng.team) || [{ name: (identity && identity.name) || 'RHSC Field Monitoring Team', role: 'Team' }],
       monitoring: { second_assessment: assessment }, assessment, improvement: imp,
       debrief: { first_visit: false, second_visit: true, narrative: 'Second assessment on ' + today + '. ' + imp.verdict + (imp.recTotal ? ' \u2014 ' + imp.resolved + ' of ' + imp.recTotal + ' first-visit recommendations resolved.' : '.') }
     }
     setBusy(true)
-    try { await VIS.add(row, userId); try { localStorage.removeItem('realms_second_' + f.id) } catch (e2) {} toast('Second assessment saved for ' + f.name + '.'); setOpenId(null); setForm({}); const vs = await VIS.list(); setVisits(vs); setSub('done') }
+    // Completing the check-in record keeps one row per visit and carries its GPS through.
+    try {
+      if (eng) await VIS.update(eng.id, row)
+      else await VIS.add(row, userId)
+      try { localStorage.removeItem('realms_second_' + f.id) } catch (e2) {}
+      toast('Second assessment saved for ' + f.name + '.'); setOpenId(null); setEngId(null); setForm({}); const vs = await VIS.list(); setVisits(vs); setSub('done')
+    }
     catch (e) { toast('Could not save the second assessment.', 'err') } finally { setBusy(false) }
   }
 
@@ -1178,10 +1222,10 @@ function SecondAssessmentPage({ facilities, identity, userId, role }) {
       {due.length === 0 && <p className="empty sm">{dueAll.length ? 'Nothing matches your search.' : 'No facilities are due for a second assessment yet. Load the first-assessment baselines, then facilities appear here oldest-first.'}</p>}
       {due.map(f => { const b = baseAssess(f); const open = openId === f.id; const bd = baseDate(f)
         return (<div className={'sa-item' + (open ? ' open' : '')} key={f.id}>
-          <button className="sa-head" onClick={() => open ? (setOpenId(null), setForm({})) : startVisit(f)}>
+          <button className="sa-head" onClick={() => open ? (setOpenId(null), setEngId(null), setForm({})) : startVisit(f)} disabled={checking === f.id}>
             <span className="sa-name"><strong>{f.name}</strong><em>{[f.area, f.address].filter(Boolean).join(' \u00b7 ')}</em></span>
             <span className="sa-meta">{bd ? 'First assessed ' + bd : 'No baseline date'}{(() => { const bp = basePct(b); if (b && b.visited_unscored) return ' \u00b7 not scored (visited)'; return b && b.total_score != null ? ' \u00b7 score ' + b.total_score + (bp ? ' (' + bp.v + '%' + (bp.est ? ' est.' : '') + ')' : '') : '' })()}</span>
-            <span className="sa-tog">{open ? '\u2212' : 'Start'}</span>
+            <span className="sa-tog">{open ? '\u2212' : checking === f.id ? 'Checking in…' : engagementFor(f) ? 'Start' : 'Check in to start'}</span>
           </button>
           {open && (() => { const imp = improvementFor(f); const base = b || {}
             return (<div className="sa-body">
@@ -1195,6 +1239,8 @@ function SecondAssessmentPage({ facilities, identity, userId, role }) {
                 </div>
                 <div className="sa-col sa-nowcol">
                   <h4>This visit</h4>
+                  {(() => { const e = engId ? visits.find(v => v.id === engId) : null; return e && e.lat != null
+                    ? <p className="sa-checkin">Checked in {(e.arrival_time || '').slice(11, 16)} &middot; location captured</p> : null })()}
                   {SA_FIELDS.map(([k, lab, sz]) => (<label className="field sm" key={k}><span>{lab}</span>
                     {sz === 'l'
                       ? <textarea className="sa-ta" rows={4} value={form[k] || ''} onChange={e => setForm(s => ({ ...s, [k]: e.target.value }))} />
@@ -1652,7 +1698,7 @@ function draftSet(key, obj, slimObj) {
   if (slimObj) { try { localStorage.setItem(key, JSON.stringify(slimObj)); return true } catch (e) {} }
   return false
 }
-function MonitorPage({ userId }) {
+function MonitorPage({ userId, onOpen }) {
   const [visits, setVisits] = useState([])
   const [active, setActive] = useState(null)
   const [data, setData] = useState({})
@@ -1733,18 +1779,31 @@ function MonitorPage({ userId }) {
   }
 
   if (!active) {
-    const monVisits = visits.filter(v => matchQ(v, q))
+    const monVisits = visits.filter(v => v.status !== 'incomplete' && matchQ(v, q))
+    // A facility that already has a first assessment must not be assessed again here.
+    // The correct route for it is Engage, then Second Assessment.
+    const baseKeys = {}
+    visits.forEach(v => {
+      const key = v.facility_id || v.facility_name; if (!key) return
+      if ((v.debrief && v.debrief.first_visit) || (v.assessment && v.assessment.ruid) || (v.monitoring && v.monitoring.first_assessment)) baseKeys[key] = true
+    })
+    const isBaselineRow = v => !!((v.debrief && v.debrief.first_visit) || (v.assessment && v.assessment.ruid) || (v.monitoring && v.monitoring.first_assessment))
+    const needsSecond = v => !isBaselineRow(v) && v.status !== 'monitored' && v.status !== 'debriefed' && !!baseKeys[v.facility_id || v.facility_name]
     return (<div className="page">
       <div className="ptitle"><div><p className="eyebrow">Monitor</p><h2>Assessments</h2></div>
         <span className={'net ' + (online ? 'on' : 'off')}>{online ? 'Online' : 'Offline'}</span></div>
       {visits.length > 0 && <div className="list-tools"><SearchBox value={q} onChange={setQ} placeholder="Search facilities…" /></div>}
       {monVisits.length === 0 ? <p className="empty">{visits.length === 0 ? 'No visits yet. Complete an Engage check-in first.' : 'No visits match your search.'}</p> :
-        <div className="mon-list">{monVisits.map(v => (
-          <button className="mon-row" key={v.id} onClick={() => open(v)}>
-            <div><span className="fname">{v.facility_name}</span><span className="fmeta">{v.area} &middot; {(v.arrival_time || v.created_at || '').slice(0, 10)}</span></div>
-            <div className="mon-right">{v.score != null ? <Chip rag={v.overall_rating} pct={v.score} /> : <span className={'chip ' + (v.status || 'engaged')}>{v.status === 'monitored' ? 'Assessed' : 'Ready'}</span>}<span className="mini">{v.status === 'monitored' ? 'Review' : 'Assess'}</span></div>
-          </button>
-        ))}</div>}
+        <div className="mon-list">{monVisits.map(v => { const second = needsSecond(v)
+          return (
+          <button className={'mon-row' + (second ? ' locked' : '')} key={v.id} onClick={() => second ? (onOpen && onOpen('secondassessment')) : open(v)}>
+            <div><span className="fname">{v.facility_name}</span><span className="fmeta">{v.area} &middot; {(v.arrival_time || v.created_at || '').slice(0, 10)}{second ? ' \u00b7 first visit already on record' : ''}</span></div>
+            <div className="mon-right">{v.score != null ? <Chip rag={v.overall_rating} pct={v.score} /> : <span className={'chip ' + (second ? 'amber' : (v.status || 'engaged'))}>{second ? 'Second visit' : v.status === 'monitored' ? 'Assessed' : 'Ready'}</span>}
+              {second
+                ? <><span className="mini off">Assess</span><span className="mini go">Second assessment &#8594;</span></>
+                : <span className="mini">{v.status === 'monitored' ? 'Review' : 'Assess'}</span>}
+            </div>
+          </button>) })}</div>}
     </div>)
   }
 
@@ -3014,7 +3073,12 @@ function AnalyticsBody({ facilities, onOpen, role }) {
   const vdate = v => (v.visit_date || (v.assessment && v.assessment.date) || v.arrival_time || v.created_at || '')
   const areasList = Array.from(new Set(facilities.map(f => f.area || 'Unassigned'))).sort()
 
-  const latestByFac = {}; vis.forEach(v => { const id = v.facility_id || ('n:' + (v.facility_name || '')); if (!id) return; if (!latestByFac[id] || vdate(v) > vdate(latestByFac[id])) latestByFac[id] = v })
+  // Only a completed assessment can be a facility's current record. A bare check-in
+  // means the team has arrived, not that the outcome has changed, so it must not
+  // displace the last real result and blank the facility out of the RAG figures.
+  const isOutcome = v => v.score != null || v.status === 'monitored' || v.status === 'debriefed' || v.status === 'second' || !!(v.assessment && Object.keys(v.assessment).length)
+  const outcomes = vis.filter(isOutcome)
+  const latestByFac = {}; outcomes.forEach(v => { const id = v.facility_id || ('n:' + (v.facility_name || '')); if (!id) return; if (!latestByFac[id] || vdate(v) > vdate(latestByFac[id])) latestByFac[id] = v })
   const current = Object.values(latestByFac)
   const rated = current.filter(v => v.score != null)
   const unscored = current.filter(v => v.score == null && ((v.assessment && v.assessment.visited_unscored) || v.overall_rating === 'unscored'))
@@ -3041,7 +3105,7 @@ function AnalyticsBody({ facilities, onOpen, role }) {
     .filter(({ v }) => matchQ(v, q))
     .sort((a, b) => (a.v.score == null ? 999 : a.v.score) - (b.v.score == null ? 999 : b.v.score))
 
-  const latest = {}; vis.forEach(v => { const id = v.facility_id; if (!id) return; if (!latest[id] || vdate(v) > vdate(latest[id])) latest[id] = v })
+  const latest = {}; outcomes.forEach(v => { const id = v.facility_id; if (!id) return; if (!latest[id] || vdate(v) > vdate(latest[id])) latest[id] = v })
   const points = facilities.filter(hasCoords)
     .filter(f => areaF === 'all' || (f.area || 'Unassigned') === areaF)
     .map(f => ({ lat: f.lat, lng: f.lng, name: f.name, rag: latest[f.id] ? (latest[f.id].score != null ? latest[f.id].overall_rating : 'unscored') : null }))
@@ -3441,7 +3505,7 @@ export default function App() {
     else if (appTab === 'facilities') body = <FacilitiesPage list={facs} canEdit={canEdit} userId={user.id} reload={reloadFacs} />
     else if (appTab === 'map') body = <MapRoutePage list={facs} role={effRole} userId={user.id} />
     else if (appTab === 'engage') body = <EngagePage list={facs} identity={effId} role={effRole} userId={user.id} />
-    else if (appTab === 'monitor') body = <MonitorPage userId={user.id} />
+    else if (appTab === 'monitor') body = <MonitorPage userId={user.id} onOpen={setAppTab} />
     else if (appTab === 'debrief') body = <DebriefPage userId={user.id} facilities={facs} />
     else if (appTab === 'secondassessment') body = <SecondAssessmentPage facilities={facs} identity={effId} userId={user.id} role={effRole} />
     else if (appTab === 'reports') body = <ReportsPage facilities={facs} userId={user.id} role={effRole} />
@@ -4472,9 +4536,16 @@ const css = `
 .realms .pf-nav { display:inline-block; margin-top:4px; font-size:12.5px; color:#2E7D46; text-decoration:none; font-weight:600; }
 .realms .pf-nav:hover { text-decoration:underline; }
 
-/* --- second assessment: roomier data entry --- */
-.realms .sa-ta { width:100%; font-family:inherit; font-size:15px; line-height:1.5; padding:10px 12px; border:1.5px solid var(--line); border-radius:12px; color:var(--ink); background:#fff; min-height:104px; resize:vertical; }
-.realms .sa-nowcol .field.sm { margin-bottom:14px; }
+.realms .sa-checkin { margin:0 0 10px; font-size:12.5px; color:#2E7D46; background:#E6F4EA; border:1px solid #BFE3CB; border-radius:8px; padding:6px 10px; display:inline-block; }
+.realms .sa-head:disabled { opacity:.75; cursor:progress; }
+
+/* --- monitor: route facilities with a baseline to Second Assessment --- */
+.realms .mon-row.locked { background:var(--lav1); }
+.realms .mon-row.locked .fname { color:#6A5A87; }
+.realms .mini.off { color:#B0A4C4; border-color:var(--line); background:#F4F1F8; text-decoration:line-through; cursor:not-allowed; }
+.realms .mini.go { border-color:var(--p); color:var(--p); font-weight:600; }
+
+/* --- second assessment: roomier data entry --- */.realms .sa-ta { width:100%; font-family:inherit; font-size:15px; line-height:1.5; padding:10px 12px; border:1.5px solid var(--line); border-radius:12px; color:var(--ink); background:#fff; min-height:104px; resize:vertical; }.realms .sa-nowcol .field.sm { margin-bottom:14px; }
 .realms .sa-nowcol .field.sm input { min-height:46px; }
 .realms .sa-nowcol .field.sm span { margin-bottom:5px; }
 @media (pointer: coarse){
