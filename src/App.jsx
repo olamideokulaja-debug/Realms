@@ -4,7 +4,7 @@ import 'leaflet/dist/leaflet.css'
 import { supabase, MODE } from './supabaseClient.js'
 import { facilities as FAC, assignments as ASG, visits as VIS, notifications as NOTIF, calls as CALLS, access as ACC, facilitiesFromCSV, orderRoute, clusterDays, clusterDaysByDate, googleMapsDirUrl, geocode, uploadEvidence, sendNotify, askAI, seedSampleData, clearAllData } from './data.js'
 
-const BUILD = 'field-2026-07-18r'
+const BUILD = 'field-2026-07-18t'
 
 /*
   REALMS FIELD — Stages 1 to 3 (single-file App.jsx + supabaseClient.js + data.js)
@@ -1088,6 +1088,11 @@ function SecondAssessmentPage({ facilities, identity, userId, role }) {
   const [busy, setBusy] = useState(false)
   const [q, setQ] = useState('')
   useEffect(() => { VIS.list().then(setVisits).catch(() => {}) }, [])
+  // Keep an on-device draft so leaving the page, or a refresh, never loses field work.
+  useEffect(() => {
+    if (!openId) return
+    draftSet('realms_second_' + openId, form)
+  }, [openId, form])
 
   const firstRec = {}, secondRec = {}
   visits.forEach(v => {
@@ -1112,8 +1117,12 @@ function SecondAssessmentPage({ facilities, identity, userId, role }) {
     const b = baseAssess(f) || {}
     setOpenId(f.id)
     const pre = {}; SA_FIELDS.forEach(([k]) => { pre[k] = b[k] || '' })
-    setForm({ ...pre, total_score: '', pct_score: '', notes: '', newRecs: '',
-      recStatus: (b.recommendations || []).map(() => 'in_progress') })
+    const fresh = { ...pre, total_score: '', pct_score: '', notes: '', newRecs: '',
+      recStatus: (b.recommendations || []).map(() => 'in_progress') }
+    let restored = null
+    try { const raw = localStorage.getItem('realms_second_' + f.id); if (raw) { const p = JSON.parse(raw); if (p && typeof p === 'object') restored = p } } catch (e) {}
+    setForm(restored ? { ...fresh, ...restored } : fresh)
+    if (restored) toast('Unsaved work restored on this device.')
   }
   function improvementFor(f) {
     const b = baseAssess(f) || {}
@@ -1147,7 +1156,7 @@ function SecondAssessmentPage({ facilities, identity, userId, role }) {
       debrief: { first_visit: false, second_visit: true, narrative: 'Second assessment on ' + today + '. ' + imp.verdict + (imp.recTotal ? ' \u2014 ' + imp.resolved + ' of ' + imp.recTotal + ' first-visit recommendations resolved.' : '.') }
     }
     setBusy(true)
-    try { await VIS.add(row, userId); toast('Second assessment saved for ' + f.name + '.'); setOpenId(null); setForm({}); const vs = await VIS.list(); setVisits(vs); setSub('done') }
+    try { await VIS.add(row, userId); try { localStorage.removeItem('realms_second_' + f.id) } catch (e2) {} toast('Second assessment saved for ' + f.name + '.'); setOpenId(null); setForm({}); const vs = await VIS.list(); setVisits(vs); setSub('done') }
     catch (e) { toast('Could not save the second assessment.', 'err') } finally { setBusy(false) }
   }
 
@@ -1188,7 +1197,7 @@ function SecondAssessmentPage({ facilities, identity, userId, role }) {
                   <h4>This visit</h4>
                   {SA_FIELDS.map(([k, lab, sz]) => (<label className="field sm" key={k}><span>{lab}</span>
                     {sz === 'l'
-                      ? <textarea rows={2} value={form[k] || ''} onChange={e => setForm(s => ({ ...s, [k]: e.target.value }))} />
+                      ? <textarea className="sa-ta" rows={4} value={form[k] || ''} onChange={e => setForm(s => ({ ...s, [k]: e.target.value }))} />
                       : <input value={form[k] || ''} onChange={e => setForm(s => ({ ...s, [k]: e.target.value }))} inputMode={k === 'wards' || k === 'beds' || k === 'toilets' ? 'numeric' : undefined} />}
                   </label>))}
                   <div className="mr-two">
@@ -1208,8 +1217,8 @@ function SecondAssessmentPage({ facilities, identity, userId, role }) {
                 </div>))}
               </div>}
 
-              <label className="field sm"><span>New recommendations (one per line)</span><textarea rows={2} value={form.newRecs || ''} onChange={e => setForm(s => ({ ...s, newRecs: e.target.value }))} /></label>
-              <label className="field sm"><span>Notes</span><textarea rows={2} value={form.notes || ''} onChange={e => setForm(s => ({ ...s, notes: e.target.value }))} /></label>
+              <label className="field sm"><span>New recommendations (one per line)</span><textarea className="sa-ta" rows={4} value={form.newRecs || ''} onChange={e => setForm(s => ({ ...s, newRecs: e.target.value }))} /></label>
+              <label className="field sm"><span>Notes</span><textarea className="sa-ta" rows={4} value={form.notes || ''} onChange={e => setForm(s => ({ ...s, notes: e.target.value }))} /></label>
 
               <div className="sa-improve">
                 <span className="sa-improve-l">Change since first assessment</span>
@@ -1311,13 +1320,14 @@ function EngagePage({ list, identity, role, userId }) {
 
   async function save() {
     if (!greeted) { setMsg('Confirm the greeting to continue.'); return }
+    if (!coords) { setStep(1); setMsg('GPS is mandatory at check-in. Capture the location to continue.'); setGeoMsg('GPS location is required at check-in. Tap Capture location and allow access.'); return }
     setBusy(true); setMsg('')
     try {
       await VIS.add({
         facility_id: facility.id, facility_name: facility.name, area: facility.area || 'Unassigned',
         address: facility.address || '', category: facility.category || '',
         status: 'engaged', arrival_time: (arrival || new Date()).toISOString(),
-        lat: coords ? coords.lat : null, lng: coords ? coords.lng : null,
+        lat: coords.lat, lng: coords.lng,
         team, person_in_charge: pic, greeting_confirmed: true
       }, userId)
       setDone(true); toast('Check-in saved.')
@@ -1623,6 +1633,25 @@ function DictateButton({ onText }) {
   }
   return <button type="button" className={'mini dictate' + (rec ? ' rec' : '')} onClick={toggle} title="Dictate a note">{rec ? '\u25cf Listening' : '\u25cf Dictate'}</button>
 }
+/* Drafts must survive a refresh even when the device storage is nearly full.
+   Photos taken offline are held as base64 and can blow past the browser quota,
+   which would silently kill the whole draft. So: try the full draft first, and
+   if the quota rejects it, retry without the heavy media. Ratings, notes and
+   every typed field, the expensive things to re-enter, are always kept. */
+function slimEvidence(items) {
+  const out = {}
+  Object.keys(items || {}).forEach(k => {
+    const it = items[k] || {}
+    out[k] = { ...it, evidence: (it.evidence || []).map(e => (e && typeof e.data === 'string' && e.data.indexOf('data:') === 0 && e.data.length > 20000) ? { ...e, data: '', deferred: true } : e) }
+  })
+  return out
+}
+function draftSet(key, obj, slimObj) {
+  if (!key) return false
+  try { localStorage.setItem(key, JSON.stringify(obj)); return true } catch (e) {}
+  if (slimObj) { try { localStorage.setItem(key, JSON.stringify(slimObj)); return true } catch (e) {} }
+  return false
+}
 function MonitorPage({ userId }) {
   const [visits, setVisits] = useState([])
   const [active, setActive] = useState(null)
@@ -1642,12 +1671,25 @@ function MonitorPage({ userId }) {
   useEffect(() => { if (navigator.geolocation) navigator.geolocation.getCurrentPosition(p => setGeo({ lat: +p.coords.latitude.toFixed(6), lng: +p.coords.longitude.toFixed(6) }), () => {}) }, [])
 
   const draftKey = active ? 'realms_monitor_' + active.id : ''
-  useEffect(() => { if (!active) return; try { localStorage.setItem(draftKey, JSON.stringify({ items: data })) } catch (e) {} }, [data, active])
+  useEffect(() => { if (!active) return; const at = new Date().toISOString(); draftSet(draftKey, { items: data, profile, hef, at }, { items: slimEvidence(data), profile, hef, at }) }, [data, profile, hef, active])
 
   function open(v) {
-    setMsg(''); let d = (v.monitoring && v.monitoring.items) || {}
-    try { const raw = localStorage.getItem('realms_monitor_' + v.id); if (raw) { const p = JSON.parse(raw); if (p && p.items) d = p.items } } catch (e) {}
-    setActive(v); setData(d); setProfile((v.monitoring && v.monitoring.profile) || {}); setHef((v.monitoring && v.monitoring.hefamaa) || {}); setSaveState('')
+    setMsg('')
+    let d = (v.monitoring && v.monitoring.items) || {}
+    let pf = (v.monitoring && v.monitoring.profile) || {}
+    let hf = (v.monitoring && v.monitoring.hefamaa) || {}
+    let restored = false
+    try {
+      const raw = localStorage.getItem('realms_monitor_' + v.id)
+      if (raw) {
+        const p = JSON.parse(raw)
+        if (p && p.items) { d = p.items; restored = true }
+        if (p && p.profile && Object.keys(p.profile).length) { pf = p.profile; restored = true }
+        if (p && p.hef && Object.keys(p.hef).length) { hf = p.hef; restored = true }
+      }
+    } catch (e) {}
+    setActive(v); setData(d); setProfile(pf); setHef(hf); setSaveState(restored ? 'draft' : '')
+    if (restored) toast('Unsaved work restored on this device.')
   }
   function setProfileField(k, val) { setProfile(p => ({ ...p, [k]: val })); setSaveState('draft') }
   function setItem(key, patch) { setData(d => ({ ...d, [key]: { ...(d[key] || { rating: null, note: '', evidence: [] }), ...patch } })); setSaveState('draft') }
@@ -1659,18 +1701,14 @@ function MonitorPage({ userId }) {
   const totalItems = CHECKLIST.reduce((n, c) => n + c.items.length, 0)
 
   function requirements() {
-    const noPhoto = [], noVoice = []
+    const noPhoto = []
     CHECKLIST.forEach(cat => {
-      let hasVoice = false, hasRating = false
       cat.items.forEach((label, i) => {
         const it = data[cat.id + '_' + i]; if (!it) return
-        if (it.rating) hasRating = true
-        if ((it.evidence || []).some(e => e.type === 'voice')) hasVoice = true
         if (it.rating === 'red' && !(it.evidence || []).some(e => e.type === 'photo')) noPhoto.push(cat.label + ': ' + label)
       })
-      if (hasRating && !hasVoice) noVoice.push(cat.label)
     })
-    return { noPhoto, noVoice }
+    return { noPhoto, noVoice: [] }
   }
 
   async function save() {
@@ -1729,7 +1767,7 @@ function MonitorPage({ userId }) {
         <div className="meter-row"><span className="meter-lab">HEFAMAA form</span><div className="meter-track"><div className="meter-fill alt" style={{ width: hefPct + '%' }} /></div><span className="meter-val">{hefDone}/{hefTotal}</span></div>
       </div>) })()}
     {msg && <p className="auth-msg block">{msg}</p>}
-    <p className="mon-rules">Evidence rules: a photo on every red item, a voice note per category, and GPS captured at check-in.</p>
+    <p className="mon-rules">Evidence rules: a photo on every red item, and GPS is mandatory at check-in. Voice notes are optional, use them to add context in your own words.</p>
 
     <details className="hef-wrap" open>
       <summary className="hef-title"><span>HEFAMAA facility inspection form</span><span className="hef-total">{HEFAMAA_FORM.reduce((n, s) => n + hefAnswered(s, hef), 0)}/{HEFAMAA_FORM.reduce((n, s) => n + s.fields.length, 0)}</span></summary>
@@ -1743,10 +1781,9 @@ function MonitorPage({ userId }) {
 
     {CHECKLIST.map(cat => {
       const cs = categoryScore(data, cat)
-      const catRated = cat.items.some((_, i) => { const it = data[cat.id + '_' + i]; return it && it.rating })
       const catVoice = cat.items.some((_, i) => { const it = data[cat.id + '_' + i]; return it && (it.evidence || []).some(e => e.type === 'voice') })
       return (<div className="mcat" key={cat.id}>
-        <div className="mcat-head"><h3>{cat.label}</h3><div className="mcat-r">{catRated && !catVoice && <span className="need">Voice note needed</span>}{catVoice && <span className="ok">Voice &#10003;</span>}<Chip rag={cs.rag} pct={cs.pct} /></div></div>
+        <div className="mcat-head"><h3>{cat.label}</h3><div className="mcat-r">{catVoice && <span className="ok">Voice &#10003;</span>}<Chip rag={cs.rag} pct={cs.pct} /></div></div>
         <div className="mitems">{cat.items.map((label, i) => {
           const key = cat.id + '_' + i; const it = data[key] || { rating: null, note: '', evidence: [] }
           const needPhoto = it.rating === 'red' && !(it.evidence || []).some(e => e.type === 'photo')
@@ -1997,6 +2034,12 @@ function DebriefPage({ userId, facilities }) {
 
   useEffect(() => { VIS.list().then(setVisits).catch(() => {}) }, [])
   useEffect(() => { const on = () => setOnline(true), off = () => setOnline(false); window.addEventListener('online', on); window.addEventListener('offline', off); return () => { window.removeEventListener('online', on); window.removeEventListener('offline', off) } }, [])
+  // Keep an on-device draft so leaving the page, or a refresh, never loses field work.
+  useEffect(() => {
+    if (!active) return
+    const d = { strengths, gaps, deadline, reinspection, letterIssued, propName, ack, signature, genesys, genesysNote, closure, escalate, narrative, at: new Date().toISOString() }
+    draftSet('realms_debrief_' + active.id, d, { ...d, signature: '' })
+  }, [active, strengths, gaps, deadline, reinspection, letterIssued, propName, ack, signature, genesys, genesysNote, closure, escalate, narrative])
 
   function open(v) {
     setActive(v); setMsg(''); setSaveState('')
@@ -2011,6 +2054,29 @@ function DebriefPage({ userId, facilities }) {
       setPropName((v.person_in_charge && v.person_in_charge.name) || ''); setAck(false); setSignature('')
       setGenesys(false); setGenesysNote(''); setClosure(false); setEscalate(false); setNarrative('')
     }
+    // An unsaved draft on this device wins: it is the most recent work.
+    try {
+      const raw = localStorage.getItem('realms_debrief_' + v.id)
+      if (raw) {
+        const p = JSON.parse(raw)
+        if (p && typeof p === 'object') {
+          if (Array.isArray(p.strengths)) setStrengths(p.strengths)
+          if (Array.isArray(p.gaps)) setGaps(p.gaps)
+          if (p.deadline != null) setDeadline(p.deadline)
+          if (p.reinspection) setReinspection(p.reinspection)
+          if (p.letterIssued != null) setLetterIssued(p.letterIssued)
+          if (p.propName != null) setPropName(p.propName)
+          if (p.ack != null) setAck(p.ack)
+          if (p.signature != null) setSignature(p.signature)
+          if (p.genesys != null) setGenesys(p.genesys)
+          if (p.genesysNote != null) setGenesysNote(p.genesysNote)
+          if (p.closure != null) setClosure(p.closure)
+          if (p.escalate != null) setEscalate(p.escalate)
+          if (p.narrative != null) setNarrative(p.narrative)
+          setSaveState('draft'); toast('Unsaved work restored on this device.')
+        }
+      }
+    } catch (e) {}
   }
   function setGap(i, patch) { setGaps(gs => gs.map((g, x) => x === i ? { ...g, ...patch } : g)); setSaveState('draft') }
 
@@ -2028,6 +2094,7 @@ function DebriefPage({ userId, facilities }) {
     const d = payload(); const firstClose = active.status !== 'debriefed'
     try {
       await VIS.update(active.id, { debrief: d, status: 'debriefed' })
+      try { localStorage.removeItem('realms_debrief_' + active.id) } catch (e) {}
       setSaveState('saved'); setMsg('Debrief saved.'); toast('Debrief saved.')
       setVisits(vs => vs.map(v => v.id === active.id ? { ...v, debrief: d, status: 'debriefed' } : v))
       if (firstClose) {
@@ -3194,7 +3261,8 @@ export default function App() {
   const [hqPending, setHqPending] = useState(false)
   const [pendKind, setPendKind] = useState('rhsc_hq')
   const [myFacility, setMyFacility] = useState(null)
-  const [appTab, setAppTab] = useState('dashboard')
+  const [appTab, setAppTab] = useState(() => { try { return localStorage.getItem('realms_tab') || 'dashboard' } catch (e) { return 'dashboard' } })
+  useEffect(() => { try { localStorage.setItem('realms_tab', appTab) } catch (e) {} }, [appTab])
   const [badges, setBadges] = useState({})
   const [facs, setFacs] = useState([])
   async function refreshBadges() {
@@ -3358,6 +3426,12 @@ export default function App() {
   const effRole = viewAs ? viewAs.role : role
   const effId = viewAs ? { name: viewAs.name, first: viewAs.name.split(' ')[0], title: '', photo: '' } : identity
   const canEdit = CAN_EDIT.includes(effRole)
+  // A remembered tab must still be one this role can open.
+  useEffect(() => {
+    if (!effRole) return
+    const allowed = ROLE_TABS[effRole] || ['dashboard']
+    if (!allowed.includes(appTab)) setAppTab('dashboard')
+  }, [effRole, appTab])
 
   let body
   if (view === 'auth') body = <AuthPanel onDone={afterAuth} onCancel={() => setView('site')} />
@@ -4397,6 +4471,16 @@ const css = `
 .realms .pick-n { font-size:13px; color:var(--p-deep); font-weight:600; margin-right:auto; }
 .realms .pf-nav { display:inline-block; margin-top:4px; font-size:12.5px; color:#2E7D46; text-decoration:none; font-weight:600; }
 .realms .pf-nav:hover { text-decoration:underline; }
+
+/* --- second assessment: roomier data entry --- */
+.realms .sa-ta { width:100%; font-family:inherit; font-size:15px; line-height:1.5; padding:10px 12px; border:1.5px solid var(--line); border-radius:12px; color:var(--ink); background:#fff; min-height:104px; resize:vertical; }
+.realms .sa-nowcol .field.sm { margin-bottom:14px; }
+.realms .sa-nowcol .field.sm input { min-height:46px; }
+.realms .sa-nowcol .field.sm span { margin-bottom:5px; }
+@media (pointer: coarse){
+  .realms .sa-ta { font-size:16px; min-height:120px; line-height:1.55; }
+  .realms .sa-nowcol .field.sm input { min-height:48px; font-size:16px; }
+}
 @media (max-width:640px){ .realms .fu-kpis { grid-template-columns:repeat(2,1fr); } .realms .fu-toolbar { flex-direction:column; align-items:stretch; } .realms .fu-segs { overflow-x:auto; } }
 .realms .hef-wrap { border:1px solid var(--line); border-radius:14px; padding:14px 16px; margin-bottom:18px; background:#fff; }
 .realms .hef-title { cursor:pointer; display:flex; align-items:center; justify-content:space-between; font-weight:600; color:var(--p-deep); font-size:16px; }
