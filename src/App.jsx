@@ -4,7 +4,7 @@ import 'leaflet/dist/leaflet.css'
 import { supabase, MODE } from './supabaseClient.js'
 import { facilities as FAC, assignments as ASG, visits as VIS, notifications as NOTIF, calls as CALLS, access as ACC, facilitiesFromCSV, orderRoute, clusterDays, clusterDaysByDate, googleMapsDirUrl, geocode, uploadEvidence, sendNotify, askAI, seedSampleData, clearAllData } from './data.js'
 
-const BUILD = 'field-2026-07-18x'
+const BUILD = 'field-2026-07-18z'
 
 /*
   REALMS FIELD — Stages 1 to 3 (single-file App.jsx + supabaseClient.js + data.js)
@@ -1198,6 +1198,28 @@ function SecondAssessmentPage({ facilities, identity, userId, role }) {
     try {
       if (eng) await VIS.update(eng.id, row)
       else await VIS.add(row, userId)
+      const visitId = eng ? eng.id : null
+      // A return visit must raise the same follow-up call and integrity notice as a first
+      // visit. The call to the facility is how a demand for money finds its way back to us.
+      try {
+        await NOTIF.add({ type: 'visit_completed', visit_id: visitId, facility_name: f.name, area: f.area, channel: 'customer_service', status: 'pending', message: 'Second assessment completed at ' + f.name + ' (' + (f.area || '') + '). Customer service to call the facility to hear how the visit went.' }, userId)
+      } catch (e2) {}
+      try {
+        const cs = getSettings()
+        const csMsg = 'RHSC: second assessment completed at ' + f.name + '. Please call the facility to follow up.'
+        const encPhone = (eng && eng.person_in_charge && eng.person_in_charge.phone) || ''
+        const facNum = f.phone || encPhone
+        if (f && !f.phone && encPhone) { try { await FAC.update(f.id, { phone: encPhone }) } catch (e3) {} }
+        if (facNum) {
+          const fm = 'RHSC/HEFAMAA: your facility was monitored today. This visit is free of charge and our officers must never request money, gifts or favours. If anything was asked of you, report it in confidence to ' + CONTACT.phone + '.'
+          try { sendNotify({ channel: 'sms', to: facNum, message: fm }) } catch (e3) {}
+          try { sendNotify({ channel: 'whatsapp', to: facNum, message: fm }) } catch (e3) {}
+          try { await NOTIF.add({ type: 'integrity_notice', visit_id: visitId, facility_name: f.name, area: f.area, channel: 'sms', status: 'sent', message: fm }, userId) } catch (e3) {}
+        }
+        if (cs.cs_email) { try { sendNotify({ channel: 'email', to: cs.cs_email, subject: 'Second assessment completed: ' + f.name, message: csMsg }) } catch (e3) {} }
+        if (cs.cs_phone) { try { sendNotify({ channel: 'sms', to: cs.cs_phone, message: csMsg }) } catch (e3) {} }
+        if (cs.cs_whatsapp) { try { sendNotify({ channel: 'whatsapp', to: cs.cs_whatsapp, message: csMsg }) } catch (e3) {} }
+      } catch (e2) {}
       try { localStorage.removeItem('realms_second_' + f.id) } catch (e2) {}
       toast('Second assessment saved for ' + f.name + '.'); setOpenId(null); setEngId(null); setForm({}); const vs = await VIS.list(); setVisits(vs); setSub('done')
     }
@@ -2340,7 +2362,9 @@ function FollowUpsPage({ userId, identity, facilities, onChange }) {
     return 'called'
   }
 
-  const all = visits.filter(v => v.status === 'debriefed' && !(v.debrief && v.debrief.first_visit))
+  // A completed visit needs a follow-up call whether it was a first assessment
+  // (Debrief, status 'debriefed') or a return visit (Second Assessment, status 'second').
+  const all = visits.filter(v => (v.status === 'debriefed' || v.status === 'second') && !(v.debrief && v.debrief.first_visit))
   const counts = { awaiting: 0, called: 0, escalated: 0, integrity: 0 }
   all.forEach(v => { counts[statusOf(v)]++; if (integrityFlagged(v.id)) counts.integrity++ })
   const prio = { escalated: 0, awaiting: 1, called: 2 }
@@ -2613,8 +2637,47 @@ function IntegrityPage({ facilities }) {
 function SettingsPage({ user, identity, facilities }) {
   const [s, setS] = useState(getSettings())
   const [remBusy, setRemBusy] = useState(false); const [remMsg, setRemMsg] = useState('')
+  const [intScan, setIntScan] = useState(null); const [intBusy, setIntBusy] = useState(false); const [intMsg, setIntMsg] = useState('')
   const set = (k, v) => setS(p => ({ ...p, [k]: v }))
   function save() { saveSettings(s); toast('Settings saved.') }
+  // Second assessments completed before the notice was wired in never reached the
+  // facility. Find those, so the anti-bribery notice can be sent after the fact.
+  async function scanIntegrity() {
+    setIntBusy(true); setIntMsg(''); setIntScan(null)
+    try {
+      const [vs, ns] = await Promise.all([VIS.list(), NOTIF.list()])
+      const notified = new Set(ns.filter(n => n.type === 'integrity_notice').map(n => n.visit_id).filter(Boolean))
+      const notifiedFac = new Set(ns.filter(n => n.type === 'integrity_notice').map(n => (n.facility_name || '').toLowerCase()).filter(Boolean))
+      const done = vs.filter(v => (v.status === 'second' || (v.debrief && v.debrief.second_visit)) && !notified.has(v.id))
+      const seen = {}; const targets = []
+      done.forEach(v => {
+        const key = (v.facility_name || '').toLowerCase(); if (!key || seen[key]) return
+        if (notifiedFac.has(key)) return
+        seen[key] = true
+        const fac = (facilities || []).find(f => f.id === v.facility_id || f.name === v.facility_name)
+        const phone = (fac && fac.phone) || (v.person_in_charge && v.person_in_charge.phone) || ''
+        targets.push({ visit_id: v.id, name: v.facility_name, area: v.area, phone })
+      })
+      const withPhone = targets.filter(t => t.phone)
+      setIntScan({ total: targets.length, withPhone: withPhone.length, list: withPhone })
+      setIntMsg(targets.length === 0
+        ? 'Every completed second visit has already had the notice. Nothing to send.'
+        : withPhone.length + ' of ' + targets.length + ' can be reached. ' + (targets.length - withPhone.length) + ' have no number on file.')
+    } catch (e) { setIntMsg('Could not check the notification log.') } finally { setIntBusy(false) }
+  }
+  async function sendIntegrity() {
+    if (!intScan || !intScan.list.length) return
+    setIntBusy(true); let sent = 0
+    const fm = 'RHSC/HEFAMAA: your facility was monitored recently. Monitoring is free of charge and our officers must never request money, gifts or favours. If anything was asked of you, report it in confidence to ' + CONTACT.phone + '.'
+    for (const t of intScan.list) {
+      try { sendNotify({ channel: 'sms', to: t.phone, message: fm }) } catch (e) {}
+      try { sendNotify({ channel: 'whatsapp', to: t.phone, message: fm }) } catch (e) {}
+      try { await NOTIF.add({ type: 'integrity_notice', visit_id: t.visit_id, facility_name: t.name, area: t.area, channel: 'sms', status: 'sent', message: fm }, user && user.id); sent++ } catch (e) {}
+    }
+    setIntBusy(false); setIntScan(null)
+    setIntMsg(sent + ' notice' + (sent === 1 ? '' : 's') + ' sent and logged. Re-checking will now show nothing outstanding.')
+    toast(sent + ' integrity notices sent.')
+  }
   async function sendNow() {
     saveSettings(s); setRemBusy(true); setRemMsg('')
     try {
@@ -2651,6 +2714,19 @@ function SettingsPage({ user, identity, facilities }) {
         <button className="btn ghost" onClick={sendNow} disabled={remBusy}>{remBusy ? 'Sending\u2026' : 'Send due reminders now'}</button>
       </div>
       {remMsg && <p className="hintline">{remMsg}</p>}
+    </div>
+
+    <div className="settings-card" style={{ marginTop: 16 }}>
+      <h3>Integrity notice, catch-up send</h3>
+      <p className="hintline">Every completed visit should leave the facility with the notice that monitoring is free and that no officer may request money, a gift or a favour. Second visits completed before this was wired in did not receive it. Check below, then send. Each facility is contacted once and the send is logged, so running this again will find nothing.</p>
+      <div className="cta-row">
+        <button className="btn ghost" onClick={scanIntegrity} disabled={intBusy}>{intBusy && !intScan ? 'Checking\u2026' : 'Check what is outstanding'}</button>
+        {intScan && intScan.withPhone > 0 && <button className="btn primary" onClick={sendIntegrity} disabled={intBusy}>{intBusy ? 'Sending\u2026' : 'Send to ' + intScan.withPhone + ' ' + (intScan.withPhone === 1 ? 'facility' : 'facilities')}</button>}
+      </div>
+      {intMsg && <p className="hintline">{intMsg}</p>}
+      {intScan && intScan.list.length > 0 && <ul className="log-list" style={{ marginTop: 10 }}>{intScan.list.slice(0, 25).map((t, i) => (
+        <li key={i}><span className="log-when">{t.phone}</span><span className="log-msg">{t.name}{t.area ? ' \u00b7 ' + t.area : ''}</span></li>
+      ))}{intScan.list.length > 25 && <li><span className="log-msg">and {intScan.list.length - 25} more</span></li>}</ul>}
     </div>
     <div className="settings-card" style={{ marginTop: 16 }}>
       <h3>AI translations</h3>
@@ -3334,7 +3410,7 @@ export default function App() {
     try {
       const [vs, cl] = await Promise.all([VIS.list(), CALLS.list()])
       const called = new Set(cl.map(c => c.visit_id))
-      const awaiting = vs.filter(v => v.status === 'debriefed' && !(v.debrief && v.debrief.first_visit) && !called.has(v.id)).length
+      const awaiting = vs.filter(v => (v.status === 'debriefed' || v.status === 'second') && !(v.debrief && v.debrief.first_visit) && !called.has(v.id)).length
       setBadges(b => ({ ...b, followups: awaiting }))
     } catch (e) {}
   }
