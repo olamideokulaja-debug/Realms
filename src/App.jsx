@@ -4,7 +4,7 @@ import 'leaflet/dist/leaflet.css'
 import { supabase, MODE } from './supabaseClient.js'
 import { facilities as FAC, assignments as ASG, visits as VIS, notifications as NOTIF, calls as CALLS, access as ACC, facilitiesFromCSV, orderRoute, clusterDays, clusterDaysByDate, googleMapsDirUrl, geocode, uploadEvidence, sendNotify, askAI, seedSampleData, clearAllData } from './data.js'
 
-const BUILD = 'field-2026-07-18-ac'
+const BUILD = 'field-2026-07-18-ai'
 
 /*
   REALMS FIELD — Stages 1 to 3 (single-file App.jsx + supabaseClient.js + data.js)
@@ -1001,7 +1001,7 @@ function MapRoutePage({ list, role, userId }) {
                 <span className="pi-main"><span className="pi-name">{f.name}</span><span className="pi-meta">{[f.area, f.address].filter(Boolean).join(' \u00b7 ') || 'No details'}{!hasCoords(f) ? ' \u00b7 no pin' : ''}</span></span>
               </label>))}
             </div>
-            {filtered.filter(f => matchQ(f, pq)).length > 150 && <p className="hintline">Showing 150 \u2014 search to narrow the list.</p>}
+            {filtered.filter(f => matchQ(f, pq)).length > 150 && <p className="hintline">Showing 150 — search to narrow the list.</p>}
             <div className="pick-actions">
               <span className="pick-n">{Object.values(picks).filter(Boolean).length} selected</span>
               {Object.values(picks).filter(Boolean).length > 0 && <button className="mini ghost" onClick={() => setPicks({})}>Clear</button>}
@@ -1079,6 +1079,38 @@ const SA_FIELDS = [
 ]
 function saNum(v) { if (v == null || v === '') return null; const m = String(v).match(/-?\d+(\.\d+)?/); return m ? parseFloat(m[0]) : null }
 function REC_LABEL(s) { return s === 'resolved' ? 'Resolved' : s === 'in_progress' ? 'In progress' : 'Not done' }
+// A compact version of the RHSC checklist for the return visit: the same 36 items and
+// the same green/amber/red scoring as Monitor, rating plus an optional note, without the
+// photo/voice evidence capture (that belongs to the first, formal inspection). Pre-filled
+// from the first visit so the team confirms or changes each item.
+function SaChecklist({ value, onChange, confirmed, onConfirm }) {
+  const data = value || {}
+  const conf = confirmed || {}
+  const setItem = (key, patch) => onChange({ ...data, [key]: { ...(data[key] || {}), ...patch } })
+  const allConfirmed = CHECKLIST.every(c => conf[c.id])
+  return (<div className="sa-check">
+    <div className="sa-confirm-all">
+      <button type="button" className="mini" onClick={() => { const next = {}; CHECKLIST.forEach(c => { next[c.id] = !allConfirmed }); onConfirm(next) }}>{allConfirmed ? 'Reopen all sections' : 'Confirm all unchanged'}</button>
+      <span className="sa-confirm-n">{CHECKLIST.filter(c => conf[c.id]).length} of {CHECKLIST.length} sections confirmed</span>
+    </div>
+    {CHECKLIST.map(cat => {
+    const cs = categoryScore(data, cat)
+    const isConf = !!conf[cat.id]
+    return (<details className={'mcat sa-mcat' + (isConf ? ' confirmed' : '')} key={cat.id} open={!isConf}>
+      <summary className="mcat-head"><h3>{cat.label}{isConf && <span className="sa-conf-tag">Unchanged &#10003;</span>}</h3><div className="mcat-r"><Chip rag={cs.rag} pct={cs.pct} /></div></summary>
+      <div className="sa-sec-tools">
+        <button type="button" className={'mini' + (isConf ? ' ok' : '')} onClick={() => onConfirm({ ...conf, [cat.id]: !isConf })}>{isConf ? 'Confirmed unchanged \u2014 reopen' : 'Confirm this section unchanged'}</button>
+      </div>
+      <div className="mitems">{cat.items.map((label, i) => {
+        const key = cat.id + '_' + i; const it = data[key] || { rating: null, note: '' }
+        return (<div className="mitem" key={key}>
+          <div className="mitem-top"><span className="mlabel">{label}</span><Rag value={it.rating} onChange={r => { setItem(key, { rating: r }); if (conf[cat.id]) onConfirm({ ...conf, [cat.id]: false }) }} /></div>
+          <div className="mnote-row"><textarea className="mnote" rows="1" placeholder="Note (optional)" value={it.note || ''} onChange={e => setItem(key, { note: e.target.value })} /></div>
+        </div>)
+      })}</div>
+    </details>)
+  })}</div>)
+}
 function SecondAssessmentPage({ facilities, identity, userId, role }) {
   const origin = (typeof window !== 'undefined' && window.location) ? window.location.origin : ''
   const [visits, setVisits] = useState([])
@@ -1124,7 +1156,47 @@ function SecondAssessmentPage({ facilities, identity, userId, role }) {
     const b = baseAssess(f) || {}
     setOpenId(f.id); setEngId(eng ? eng.id : null)
     const pre = {}; SA_FIELDS.forEach(([k]) => { pre[k] = b[k] || '' })
+    // Carry the first visit's full HEFAMAA form forward as the starting point, so the
+    // team confirms and updates each item rather than re-entering all 198 from scratch.
+    const first = firstOf(f)
+    const baseHef = (first && first.monitoring && first.monitoring.hefamaa) || {}
+    // The RHSC checklist items live on the first visit's monitoring.items; carry the
+    // ratings and notes forward, but drop the first visit's photos/voice (fresh evidence
+    // belongs to the formal first inspection, not the return visit).
+    const baseItems = (first && first.monitoring && first.monitoring.items) || {}
+    const carriedChecklist = {}
+    let carriedCount = 0
+    Object.keys(baseItems).forEach(k => { const it = baseItems[k] || {}; if (it.rating) carriedCount++; carriedChecklist[k] = { rating: it.rating || null, note: it.note || '' } })
+    // The 684 imported baselines hold a first-visit percentage but no per-item checklist.
+    // Rather than leave the whole checklist blank, seed a plausible starting rating from
+    // that score (green facility -> items start green, etc.), clearly flagged as estimated
+    // from the first-visit score, so the team confirms or corrects rather than starting cold.
+    let checkSeeded = false
+    if (carriedCount === 0) {
+      const bp = basePct(b)
+      if (bp && bp.v != null) {
+        // Seed a rating mix whose score lands near the first-visit percentage, rather than
+        // painting every item one colour (which would overstate a green facility as 100%).
+        // Each item is worth 2 points; total target points = pct% of (36*2).
+        const items = []
+        CHECKLIST.forEach(cat => cat.items.forEach((_, i) => items.push(cat.id + '_' + i)))
+        const target = Math.round(bp.v / 100 * items.length * 2) // points to distribute, 0..72
+        let left = target
+        items.forEach((key, idx) => {
+          const remaining = items.length - idx
+          const per = left / remaining // ideal points for this item
+          const rating = per >= 1.5 ? 'green' : per >= 0.5 ? 'amber' : 'red'
+          const pts = rating === 'green' ? 2 : rating === 'amber' ? 1 : 0
+          left -= pts
+          carriedChecklist[key] = { rating, note: '' }
+        })
+        checkSeeded = true
+      }
+    }
+    const baseHefCount = Object.keys(baseHef).filter(k => { const v = baseHef[k]; return Array.isArray(v) ? v.length : (v != null && v !== '') }).length
     const fresh = { ...pre, total_score: '', pct_score: '', notes: '', newRecs: '',
+      hef: { ...baseHef }, check: carriedChecklist,
+      checkHasBaseline: carriedCount > 0, checkSeeded, hefHasBaseline: baseHefCount > 0,
       recStatus: (b.recommendations || []).map(() => 'in_progress') }
     let restored = null
     try { const raw = localStorage.getItem('realms_second_' + f.id); if (raw) { const p = JSON.parse(raw); if (p && typeof p === 'object') restored = p } } catch (e) {}
@@ -1163,7 +1235,11 @@ function SecondAssessmentPage({ facilities, identity, userId, role }) {
   function improvementFor(f) {
     const b = baseAssess(f) || {}
     const bs = saNum(b.total_score), bp = (basePct(b) || {}).v
-    const ns = saNum(form.total_score), np = saNum(form.pct_score)
+    // The checklist now drives the score, the same way it does on a first visit; if no
+    // checklist items were rated, fall back to whatever was typed in the score fields.
+    const cScore = computeScore(form.check || {})
+    const ns = cScore.rated ? cScore.pct : saNum(form.total_score)
+    const np = cScore.rated ? cScore.pct : saNum(form.pct_score)
     const recTotal = (b.recommendations || []).length
     const resolved = (form.recStatus || []).filter(s => s === 'resolved').length
     const dScore = (bs != null && ns != null) ? +(ns - bs).toFixed(1) : null
@@ -1178,8 +1254,11 @@ function SecondAssessmentPage({ facilities, identity, userId, role }) {
     const today = new Date().toISOString().slice(0, 10)
     const assessment = { date: today, source: 'second_assessment', inspected_by: (identity && identity.name) || '' }
     SA_FIELDS.forEach(([k]) => { assessment[k] = form[k] || '' })
-    assessment.total_score = saNum(form.total_score)
-    assessment.pct_score = saNum(form.pct_score)
+    // The checklist drives the score. Manual entry is kept as a fallback if no items rated.
+    const cScore = computeScore(form.check || {})
+    assessment.total_score = cScore.rated ? cScore.rated * 2 : saNum(form.total_score) // scored points available basis kept for reference
+    assessment.pct_score = cScore.rated ? cScore.pct : saNum(form.pct_score)
+    assessment.checklist_pct = cScore.rated ? cScore.pct : null
     assessment.recommendation_status = (b.recommendations || []).map((r, i) => ({ text: r, status: (form.recStatus || [])[i] || 'not_done' }))
     assessment.new_recommendations = (form.newRecs || '').split('\n').map(s => s.trim()).filter(Boolean)
     assessment.notes = form.notes || ''
@@ -1190,7 +1269,7 @@ function SecondAssessmentPage({ facilities, identity, userId, role }) {
       arrival_time: (eng && eng.arrival_time) || new Date().toISOString(),
       score: assessment.pct_score != null ? assessment.pct_score : null, overall_rating: ragFromPct(assessment.pct_score),
       team: (eng && eng.team) || [{ name: (identity && identity.name) || 'RHSC Field Monitoring Team', role: 'Team' }],
-      monitoring: { second_assessment: assessment }, assessment, improvement: imp,
+      monitoring: { second_assessment: assessment, hefamaa: form.hef || {}, items: form.check || {} }, assessment, improvement: imp,
       debrief: { first_visit: false, second_visit: true, narrative: 'Second assessment on ' + today + '. ' + imp.verdict + (imp.recTotal ? ' \u2014 ' + imp.resolved + ' of ' + imp.recTotal + ' first-visit recommendations resolved.' : '.') }
     }
     setBusy(true)
@@ -1268,10 +1347,12 @@ function SecondAssessmentPage({ facilities, identity, userId, role }) {
                       ? <textarea className="sa-ta" rows={4} value={form[k] || ''} onChange={e => setForm(s => ({ ...s, [k]: e.target.value }))} />
                       : <input value={form[k] || ''} onChange={e => setForm(s => ({ ...s, [k]: e.target.value }))} inputMode={k === 'wards' || k === 'beds' || k === 'toilets' ? 'numeric' : undefined} />}
                   </label>))}
-                  <div className="mr-two">
-                    <label className="field sm"><span>Total score</span><input inputMode="numeric" value={form.total_score || ''} onChange={e => setForm(s => ({ ...s, total_score: e.target.value }))} /></label>
-                    <label className="field sm"><span>% score</span><input inputMode="numeric" value={form.pct_score || ''} onChange={e => setForm(s => ({ ...s, pct_score: e.target.value }))} /></label>
-                  </div>
+                  {(() => { const cs = computeScore(form.check || {}); return cs.rated
+                    ? <div className="sa-score-live"><span className="sa-score-l">Checklist score</span><span className="sa-score-v"><Chip rag={cs.rag} pct={cs.pct} /></span><span className="sa-score-n">{cs.rated} of {CHECKLIST.reduce((n, c) => n + c.items.length, 0)} items rated</span></div>
+                    : <div className="mr-two">
+                        <label className="field sm"><span>Total score</span><input inputMode="numeric" value={form.total_score || ''} onChange={e => setForm(s => ({ ...s, total_score: e.target.value }))} /></label>
+                        <label className="field sm"><span>% score</span><input inputMode="numeric" value={form.pct_score || ''} onChange={e => setForm(s => ({ ...s, pct_score: e.target.value }))} /></label>
+                      </div> })()}
                 </div>
               </div>
 
@@ -1287,6 +1368,22 @@ function SecondAssessmentPage({ facilities, identity, userId, role }) {
 
               <label className="field sm"><span>New recommendations (one per line)</span><textarea className="sa-ta" rows={4} value={form.newRecs || ''} onChange={e => setForm(s => ({ ...s, newRecs: e.target.value }))} /></label>
               <label className="field sm"><span>Notes</span><textarea className="sa-ta" rows={4} value={form.notes || ''} onChange={e => setForm(s => ({ ...s, notes: e.target.value }))} /></label>
+
+              <div className="sa-check-wrap">
+                <details className="hef-wrap" open>
+                  <summary className="hef-title"><span>RHSC compliance checklist{form.checkSeeded ? <span className="sa-conf-tag" style={{ background: '#FBF3E2', borderColor: '#E9D6A8', color: '#7A5B12' }}>estimated start</span> : null}</span><span className="hef-total">{(() => { const cs = computeScore(form.check || {}); return cs.rated + '/' + CHECKLIST.reduce((n, c) => n + c.items.length, 0) })()}</span></summary>
+                  <p className="hintline">{form.checkHasBaseline ? 'Carried over from the first visit \u2014 confirm sections that are unchanged, and only change what differs. The score is calculated from your ratings.' : form.checkSeeded ? 'No per-item checklist was recorded on the first visit, so these ratings are estimated from that visit\u2019s overall score. Confirm what matches and correct what doesn\u2019t \u2014 the score follows your ratings.' : 'This facility has no earlier checklist on record, so rate each item fresh. The score is calculated from your ratings.'}</p>
+                  <SaChecklist value={form.check || {}} onChange={cv => setForm(s => ({ ...s, check: cv }))} confirmed={form.checkConfirm || {}} onConfirm={(form.checkHasBaseline || form.checkSeeded) ? (cf => setForm(s => ({ ...s, checkConfirm: cf }))) : undefined} />
+                </details>
+              </div>
+
+              <div className="sa-hef">
+                <details className="hef-wrap" open>
+                  <summary className="hef-title"><span>HEFAMAA facility inspection form</span><span className="hef-total">{HEFAMAA_FORM.reduce((n, s) => n + hefAnswered(s, form.hef || {}), 0)}/{HEFAMAA_FORM.reduce((n, s) => n + s.fields.length, 0)}</span></summary>
+                  <p className="hintline">{form.hefHasBaseline ? 'Carried over from the first visit \u2014 confirm sections that are unchanged, and only change what differs. This is the full inspection HEFAMAA requires each visit.' : 'No earlier form on record for this facility, so complete each section. This is the full inspection HEFAMAA requires each visit.'}</p>
+                  <HefammaForm value={form.hef || {}} onChange={hv => setForm(s => ({ ...s, hef: hv }))} confirmed={form.hefConfirm || {}} onConfirm={form.hefHasBaseline ? (cf => setForm(s => ({ ...s, hefConfirm: cf }))) : undefined} />
+                </details>
+              </div>
 
               <div className="sa-improve">
                 <span className="sa-improve-l">Change since first assessment</span>
@@ -1317,7 +1414,10 @@ function SecondAssessmentPage({ facilities, identity, userId, role }) {
               {imp.recTotal > 0 && <span className="sa-delta">{imp.resolved}/{imp.recTotal} resolved</span>}
             </span>
           </div>
-          {v && <div className="sa-done-actions"><button className="mini primary" onClick={() => { try { printDoc('Second Assessment Report', buildSecondReport(v, origin, visits)) } catch (e) { toast('Could not open the report.', 'err') } }}>Print report for HEFAMAA</button></div>}
+          {v && <div className="sa-done-actions">
+            <button className="mini primary" onClick={() => { try { printDoc('Inspection Report', buildInspectionReport(v, v.debrief || deriveDebrief(v), origin)) } catch (e) { toast('Could not open the report.', 'err') } }}>HEFAMAA inspection report</button>
+            <button className="mini" onClick={() => { try { printDoc('Second Assessment Report', buildSecondReport(v, origin, visits)) } catch (e) { toast('Could not open the report.', 'err') } }}>Comparison</button>
+          </div>}
         </div>)
       })}
     </div>}
@@ -1703,15 +1803,24 @@ function HefField({ f, value, onChange }) {
   return (<div className="hef-field"><span className="hef-label">{label}</span>{control}</div>)
 }
 function hefAnswered(sec, hef) { return sec.fields.filter(f => { const v = hef[f[0]]; return Array.isArray(v) ? v.length : (v != null && v !== '') }).length }
-function HefammaForm({ value, onChange }) {
+function HefammaForm({ value, onChange, confirmed, onConfirm }) {
   const hef = value || {}
+  const conf = confirmed || null
   const set = (id, val) => onChange({ ...hef, [id]: val })
-  return (<div className="hef-form">{HEFAMAA_FORM.map(sec => (
-    <details className="hef-sec" key={sec.id}>
-      <summary><span>{sec.title}</span><span className="hef-count">{hefAnswered(sec, hef)}/{sec.fields.length}</span></summary>
-      <div className="hef-fields">{sec.fields.map(f => <HefField key={f[0]} f={f} value={hef[f[0]]} onChange={val => set(f[0], val)} />)}</div>
-    </details>
-  ))}</div>)
+  const allConfirmed = conf && HEFAMAA_FORM.every(s => conf[s.id])
+  return (<div className="hef-form">
+    {onConfirm && <div className="sa-confirm-all">
+      <button type="button" className="mini" onClick={() => { const next = {}; HEFAMAA_FORM.forEach(s => { next[s.id] = !allConfirmed }); onConfirm(next) }}>{allConfirmed ? 'Reopen all sections' : 'Confirm all unchanged'}</button>
+      <span className="sa-confirm-n">{conf ? HEFAMAA_FORM.filter(s => conf[s.id]).length : 0} of {HEFAMAA_FORM.length} sections confirmed</span>
+    </div>}
+    {HEFAMAA_FORM.map(sec => {
+    const isConf = conf && !!conf[sec.id]
+    return (<details className={'hef-sec' + (isConf ? ' confirmed' : '')} key={sec.id} open={onConfirm ? !isConf : undefined}>
+      <summary><span>{sec.title}{isConf && <span className="sa-conf-tag">Unchanged &#10003;</span>}</span><span className="hef-count">{hefAnswered(sec, hef)}/{sec.fields.length}</span></summary>
+      {onConfirm && <div className="sa-sec-tools"><button type="button" className={'mini' + (isConf ? ' ok' : '')} onClick={() => onConfirm({ ...conf, [sec.id]: !isConf })}>{isConf ? 'Confirmed unchanged \u2014 reopen' : 'Confirm this section unchanged'}</button></div>}
+      <div className="hef-fields">{sec.fields.map(f => <HefField key={f[0]} f={f} value={hef[f[0]]} onChange={val => { set(f[0], val); if (conf && conf[sec.id]) onConfirm({ ...conf, [sec.id]: false }) }} />)}</div>
+    </details>)
+  })}</div>)
 }
 
 function DictateButton({ onText }) {
@@ -2076,8 +2185,12 @@ function buildMonitoringBatch(visits, origin) {
   return docHead(origin) + idx + '<div style="page-break-before:always">' + parts.join('') + '</div>'
 }
 function buildWeeklyBatch(visits, origin, from, to) {
-  const parts = visits.map((v, i) => '<div style="' + (i ? 'page-break-before:always;' : '') + '">' + buildInspectionReport(v, v.debrief || deriveDebrief(v), origin) + '</div>')
-  const idx = '<h1>HEFAMAA submission: ' + from + ' to ' + to + '</h1><p>REALMS Healthcare Services Consulting Limited. ' + visits.length + ' approved inspection report' + (visits.length === 1 ? '' : 's') + '.</p><table><tr><th>#</th><th>Facility</th><th>LGA</th><th>Date</th></tr>' + visits.map((v, i) => '<tr><td>' + (i + 1) + '</td><td>' + v.facility_name + '</td><td>' + (v.area || '') + '</td><td>' + (v.visit_date || fmtDate(v.arrival_time)) + '</td></tr>').join('') + '</table>'
+  // HEFAMAA requires the full inspection form on every visit, first or second. A second
+  // visit now carries that form too, so it submits the same inspection report. The
+  // first-vs-second comparison is a separate document for RHSC's own tracking.
+  const docFor = v => buildInspectionReport(v, v.debrief || deriveDebrief(v), origin)
+  const parts = visits.map((v, i) => '<div style="' + (i ? 'page-break-before:always;' : '') + '">' + docFor(v) + '</div>')
+  const idx = '<h1>HEFAMAA submission: ' + from + ' to ' + to + '</h1><p>REALMS Healthcare Services Consulting Limited. ' + visits.length + ' approved inspection report' + (visits.length === 1 ? '' : 's') + '.</p><table><tr><th>#</th><th>Facility</th><th>LGA</th><th>Visit</th><th>Date</th></tr>' + visits.map((v, i) => '<tr><td>' + (i + 1) + '</td><td>' + v.facility_name + '</td><td>' + (v.area || '') + '</td><td>' + (isSecondVisit(v) ? 'Second' : 'First') + '</td><td>' + (v.visit_date || fmtDate(v.arrival_time)) + '</td></tr>').join('') + '</table>'
   return docHead(origin) + idx + '<div style="page-break-before:always">' + parts.join('') + '</div>'
 }
 function buildReport(v, d, origin) {
@@ -2899,7 +3012,7 @@ function AccessPanel({ identity, user, onChange, bare }) {
 }
 
 /* ---------- approvals (Team Lead sign-off before HEFAMAA) ---------- */
-function needsApproval(v) { return (v.status === 'debriefed') || !!(v.debrief && v.debrief.first_visit) || !!(v.assessment && v.assessment.ruid) }
+function needsApproval(v) { return (v.status === 'debriefed') || (v.status === 'second') || !!(v.debrief && (v.debrief.first_visit || v.debrief.second_visit)) || !!(v.assessment && v.assessment.ruid) || isSecondVisit(v) }
 function approvalState(v) { return (v.approval && v.approval.status) || 'pending' }
 function ApprovalsPage({ userId, identity, role }) {
   const [visits, setVisits] = useState([])
@@ -2952,12 +3065,13 @@ function ApprovalsPage({ userId, identity, role }) {
         <div className="rep-row" key={v.id}>
           <div className="rep-main"><span className="fname">{v.facility_name}</span><span className="fmeta">{v.area} &middot; {(v.visit_date || v.arrival_time || v.created_at || '').slice(0, 10)}{v.team && v.team[0] ? ' \u00b7 ' + v.team[0].name : ''}</span></div>
           <div className="rep-mid">
-            {v.score != null ? <Chip rag={v.overall_rating} pct={v.score} /> : hasFirstAssessment(v) && <span className="appr-chip">First assessment</span>}
+            {v.score != null ? <Chip rag={v.overall_rating} pct={v.score} /> : isSecondVisit(v) ? <span className="appr-chip">Second assessment</span> : hasFirstAssessment(v) && <span className="appr-chip">First assessment</span>}
             <span className={'appr-chip ' + st}>{st === 'approved' ? 'Approved' : st === 'returned' ? 'Returned' : 'Pending'}</span>
             {v.approval && v.approval.by && st !== 'pending' && <span className="fmeta">{v.approval.by}, {(v.approval.at || '').slice(0, 10)}</span>}
           </div>
           <div className="rep-actions">
-            <button className="mini" onClick={() => safePrint(hasFirstAssessment(v) ? 'Monitoring Report' : 'Inspection Report', () => hasFirstAssessment(v) ? buildMonitoringReport(v, origin) : buildInspectionReport(v, v.debrief || deriveDebrief(v), origin))}>Review</button>
+            <button className="mini" onClick={() => safePrint(hasFirstAssessment(v) && !isSecondVisit(v) ? 'Monitoring Report' : 'Inspection Report', () => hasFirstAssessment(v) && !isSecondVisit(v) ? buildMonitoringReport(v, origin) : buildInspectionReport(v, v.debrief || deriveDebrief(v), origin))}>Review</button>
+            {isSecondVisit(v) && <button className="mini" onClick={() => safePrint('Second Assessment Report', () => buildSecondReport(v, origin, visits))}>Comparison</button>}
             {canApprove && st !== 'approved' && <button className="mini ok" onClick={() => decide(v, 'approved')} disabled={busy === v.id}>Approve</button>}
             {canApprove && st !== 'returned' && <button className="mini danger" onClick={() => { setNoteFor(noteFor === v.id ? null : v.id); setNote('') }}>Return</button>}
           </div>
@@ -3111,8 +3225,8 @@ function ReportsPage({ facilities, userId, scope, role }) {
           <div className="rep-mid">{v.score != null ? <Chip rag={v.overall_rating} pct={v.score} /> : <span className={'chip ' + (v.status || 'engaged')}>{v.status === 'monitored' ? 'Assessed' : v.status === 'debriefed' ? 'Debriefed' : 'Engaged'}</span>}{v.debrief && v.debrief.closure_recommended && <span className="risk-badge high">Closure</span>}{v.debrief && v.debrief.escalated && <span className="risk-badge high">Escalated</span>}{v.debrief && v.debrief.genesys_interest && <span className="risk-badge low">Genesys</span>}{needsApproval(v) && <span className={'appr-chip ' + approvalState(v)}>{approvalState(v) === 'approved' ? 'Approved' : approvalState(v) === 'returned' ? 'Returned' : 'Pending'}</span>}</div>
           <div className="rep-actions">
             {isSecondVisit(v) ? <>
-              <button className="mini primary" onClick={() => safePrint('Second Assessment Report', () => buildSecondReport(v, origin, visits))}>Second assessment report</button>
-              <button className="mini" onClick={() => safePrint('Inspection Report', () => buildInspectionReport(v, v.debrief || deriveDebrief(v), origin))}>Inspection</button>
+              <button className="mini primary" onClick={() => safePrint('Inspection Report', () => buildInspectionReport(v, v.debrief || deriveDebrief(v), origin))}>Inspection (HEFAMAA)</button>
+              <button className="mini" onClick={() => safePrint('Second Assessment Report', () => buildSecondReport(v, origin, visits))}>Comparison</button>
             </> : hasFirstAssessment(v) ? <>
               <button className="mini primary" onClick={() => safePrint('Monitoring Report', () => buildMonitoringReport(v, origin))}>Monitoring report</button>
               <button className="mini" onClick={() => safePrint('Inspection Report', () => buildInspectionReport(v, v.debrief || deriveDebrief(v), origin))}>Inspection</button>
@@ -3323,7 +3437,7 @@ function AnalyticsBody({ facilities, onOpen, role }) {
 
   return (<>
     {visLoad === 'error' && <div className="db-banner err">
-      <div><strong>Can&#8217;t reach the database.</strong> The figures below may be incomplete. This is usually a weak connection, not your data \u2014 nothing has been lost.</div>
+      <div><strong>Can&#8217;t reach the database.</strong> The figures below may be incomplete. This is usually a weak connection, not your data — nothing has been lost.</div>
       <button className="mini" onClick={() => setReloadKey(k => k + 1)}>Retry</button>
     </div>}
     {visLoad === 'stale' && <div className="db-banner stale">
@@ -3331,7 +3445,7 @@ function AnalyticsBody({ facilities, onOpen, role }) {
       <button className="mini" onClick={() => setReloadKey(k => k + 1)}>Refresh</button>
     </div>}
     {visLoad === 'loading' && <div className="db-banner load">
-      <span className="db-spin" /> Loading the latest visit data\u2026
+      <span className="db-spin" /> Loading the latest visit data…
     </div>}
     <div className="dash-hero">
       <div className="dash-hero-ring"><Ring pct={complianceRate} label={avg == null ? 'No scores yet' : 'Avg score ' + avg + '%'} /></div>
@@ -4742,6 +4856,18 @@ const css = `
 .realms .mini.go { border-color:var(--p); color:var(--p); font-weight:600; }
 
 .realms .sa-done-actions { padding:0 18px 14px; }
+.realms .sa-check-wrap { margin:2px 0 4px; }
+.realms .sa-mcat { border:1px solid var(--line); border-radius:12px; margin-bottom:8px; overflow:hidden; }
+.realms .sa-mcat > summary { cursor:pointer; }
+.realms .sa-score-live { display:flex; align-items:center; gap:12px; padding:10px 12px; background:#F4F1F8; border:1px solid var(--line); border-radius:12px; }
+.realms .sa-score-l { font-weight:600; color:var(--p-deep); }
+.realms .sa-score-n { font-size:12.5px; color:#7A6A93; margin-left:auto; }
+.realms .sa-confirm-all { display:flex; align-items:center; gap:12px; margin:0 0 10px; }
+.realms .sa-confirm-n { font-size:12.5px; color:#7A6A93; }
+.realms .sa-sec-tools { padding:0 2px 8px; }
+.realms .sa-conf-tag { font-size:11px; font-weight:600; color:#2E7D46; background:#E6F4EA; border:1px solid #BFE3CB; border-radius:6px; padding:1px 6px; margin-left:8px; }
+.realms .mcat.confirmed > summary, .realms .hef-sec.confirmed > summary { background:#F2FaF4; }
+.realms .mini.ok { color:#2E7D46; border-color:#BFE3CB; background:#E6F4EA; }
 /* --- second assessment: roomier data entry --- */.realms .sa-ta { width:100%; font-family:inherit; font-size:15px; line-height:1.5; padding:10px 12px; border:1.5px solid var(--line); border-radius:12px; color:var(--ink); background:#fff; min-height:104px; resize:vertical; }.realms .sa-nowcol .field.sm { margin-bottom:14px; }
 .realms .sa-nowcol .field.sm input { min-height:46px; }
 .realms .sa-nowcol .field.sm span { margin-bottom:5px; }
