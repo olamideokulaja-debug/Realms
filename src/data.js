@@ -174,12 +174,63 @@ function uid() { return 'loc_' + Math.random().toString(36).slice(2, 10) }
 function nullEmpty(v) { return (v === '' || v === undefined) ? null : v }
 function cleanRow(obj) { const o = { ...obj }; Object.keys(o).forEach(k => { if (o[k] === '') o[k] = null }); return o }
 
+// A weak connection can leave a query hanging or failing. This gives each read a
+// time limit and a couple of retries with a short backoff, so a brief dip recovers
+// on its own instead of silently returning nothing. Throws only after all tries fail,
+// so the caller can tell a real failure from a genuinely empty result.
+function withTimeout(promise, ms) {
+  return new Promise((resolve, reject) => {
+    const t = setTimeout(() => reject(new Error('The database did not respond in time. Check your connection and try again.')), ms)
+    promise.then(v => { clearTimeout(t); resolve(v) }, e => { clearTimeout(t); reject(e) })
+  })
+}
+async function runQuery(fn, { tries = 3, timeout = 12000 } = {}) {
+  let lastErr
+  for (let i = 0; i < tries; i++) {
+    try {
+      const { data, error } = await withTimeout(fn(), timeout)
+      if (error) throw error
+      return data || []
+    } catch (e) {
+      lastErr = e
+      if (i < tries - 1) await new Promise(r => setTimeout(r, 600 * (i + 1)))
+    }
+  }
+  throw lastErr
+}
+
+// Remember the last data a query returned, so a later failure can fall back to it
+// instead of showing nothing. The cache is only ever READ when the live query fails,
+// so a working connection always wins; a brief drop shows the last real picture,
+// clearly marked as possibly out of date rather than silently stale.
+function cacheKey(name) { return 'realms_cache_' + name }
+function cacheSave(name, rows) {
+  try { localStorage.setItem(cacheKey(name), JSON.stringify({ at: new Date().toISOString(), rows })) } catch (e) { /* quota, ignore */ }
+}
+function cacheLoad(name) {
+  try { const raw = localStorage.getItem(cacheKey(name)); if (!raw) return null; const p = JSON.parse(raw); if (p && Array.isArray(p.rows)) return p } catch (e) {}
+  return null
+}
+// Returns { rows, stale, cachedAt }. stale=true means the live read failed and these
+// rows came from the last successful load. In demo mode there is no server to fail,
+// so it just returns the local rows as fresh.
+async function listResilient(name, liveFn, localFn) {
+  if (MODE !== 'supabase') return { rows: await localFn(), stale: false, cachedAt: null }
+  try {
+    const rows = await liveFn()
+    cacheSave(name, rows)
+    return { rows, stale: false, cachedAt: null }
+  } catch (e) {
+    const cached = cacheLoad(name)
+    if (cached) return { rows: cached.rows, stale: true, cachedAt: cached.at, error: e }
+    throw e
+  }
+}
+
 export const facilities = {
   async list() {
     if (MODE === 'supabase') {
-      const { data, error } = await supabase.from('facilities').select('*').order('area', { ascending: true })
-      if (error) throw error
-      return data || []
+      return await runQuery(() => supabase.from('facilities').select('*').order('area', { ascending: true }))
     }
     return lsGet(LS_FAC)
   },
@@ -228,11 +279,16 @@ const LS_VIS = 'realms_visits'
 export const visits = {
   async list() {
     if (MODE === 'supabase') {
-      const { data, error } = await supabase.from('visits').select('*').order('created_at', { ascending: false })
-      if (error) throw error
-      return data || []
+      return await runQuery(() => supabase.from('visits').select('*').order('created_at', { ascending: false }))
     }
     return lsGet(LS_VIS)
+  },
+  // Like list(), but on a failed live read falls back to the last successful load
+  // and flags it stale, so the dashboard can show yesterday's picture rather than a dash.
+  async listCached() {
+    return await listResilient('visits',
+      () => runQuery(() => supabase.from('visits').select('*').order('created_at', { ascending: false })),
+      () => lsGet(LS_VIS))
   },
   async add(v, userId) {
     if (MODE === 'supabase') {

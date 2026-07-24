@@ -4,7 +4,7 @@ import 'leaflet/dist/leaflet.css'
 import { supabase, MODE } from './supabaseClient.js'
 import { facilities as FAC, assignments as ASG, visits as VIS, notifications as NOTIF, calls as CALLS, access as ACC, facilitiesFromCSV, orderRoute, clusterDays, clusterDaysByDate, googleMapsDirUrl, geocode, uploadEvidence, sendNotify, askAI, seedSampleData, clearAllData } from './data.js'
 
-const BUILD = 'field-2026-07-18z'
+const BUILD = 'field-2026-07-18-ac'
 
 /*
   REALMS FIELD — Stages 1 to 3 (single-file App.jsx + supabaseClient.js + data.js)
@@ -1262,7 +1262,7 @@ function SecondAssessmentPage({ facilities, identity, userId, role }) {
                 <div className="sa-col sa-nowcol">
                   <h4>This visit</h4>
                   {(() => { const e = engId ? visits.find(v => v.id === engId) : null; return e && e.lat != null
-                    ? <p className="sa-checkin">Checked in {(e.arrival_time || '').slice(11, 16)} &middot; location captured</p> : null })()}
+                    ? <p className="sa-checkin">Checked in {fmtTime(e.arrival_time)} &middot; location captured</p> : null })()}
                   {SA_FIELDS.map(([k, lab, sz]) => (<label className="field sm" key={k}><span>{lab}</span>
                     {sz === 'l'
                       ? <textarea className="sa-ta" rows={4} value={form[k] || ''} onChange={e => setForm(s => ({ ...s, [k]: e.target.value }))} />
@@ -1317,6 +1317,7 @@ function SecondAssessmentPage({ facilities, identity, userId, role }) {
               {imp.recTotal > 0 && <span className="sa-delta">{imp.resolved}/{imp.recTotal} resolved</span>}
             </span>
           </div>
+          {v && <div className="sa-done-actions"><button className="mini primary" onClick={() => { try { printDoc('Second Assessment Report', buildSecondReport(v, origin, visits)) } catch (e) { toast('Could not open the report.', 'err') } }}>Print report for HEFAMAA</button></div>}
         </div>)
       })}
     </div>}
@@ -1453,7 +1454,7 @@ function EngagePage({ list, identity, role, userId }) {
       <p className="eyebrow">Confirm arrival</p>
       <h3 className="fbig">{facility.name}</h3>
       <p className="fsub">{[facility.category, facility.area, facility.address].filter(Boolean).join(' \u00b7 ')}</p>
-      <div className="ci-row"><span>Arrival time</span><em>{new Date().toLocaleTimeString('en-GB')}</em></div>
+      <div className="ci-row"><span>Arrival time</span><em>{new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit', timeZone: 'Africa/Lagos' })}</em></div>
       <div className="ci-row"><span>Location</span><em>{coords ? (coords.lat + ', ' + coords.lng) : 'Required \u2014 not captured'}</em></div>
       {geoMsg && <p className="hintline">{geoMsg}</p>}
       {!coords && <p className="hintline req">GPS is mandatory at check-in.</p>}
@@ -1590,6 +1591,31 @@ const HEFAMAA_FORM = [
 const HEF_TYPES = { yn: ['Yes', 'No'], ai: ['Adequate', 'Inadequate'], fn: ['Functional', 'Non-functional'], av: ['Available', 'Not available'] }
 function ragWeight(r) { return r === 'green' ? 2 : r === 'amber' ? 1 : 0 }
 function ragFromPct(pct) { return pct == null ? null : pct >= 80 ? 'green' : pct >= 50 ? 'amber' : 'red' }
+// Timestamps are stored in UTC (toISOString). These format them in Lagos time (West
+// Africa Time, UTC+1) so the app never shows an hour behind the wall clock.
+const LAGOS_TZ = 'Africa/Lagos'
+function fmtTime(ts) {
+  if (!ts) return ''
+  try { const d = new Date(ts); if (isNaN(d)) return ''; return d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', timeZone: LAGOS_TZ }) } catch (e) { return (ts || '').slice(11, 16) }
+}
+function fmtDate(ts) {
+  if (!ts) return ''
+  try { const d = new Date(ts); if (isNaN(d)) return (ts || '').slice(0, 10); return d.toLocaleDateString('en-CA', { timeZone: LAGOS_TZ }) } catch (e) { return (ts || '').slice(0, 10) }
+}
+// A friendly "how long ago" for the stale-data banner.
+function relTime(ts) {
+  try {
+    const then = new Date(ts).getTime(); if (isNaN(then)) return ''
+    const mins = Math.round((Date.now() - then) / 60000)
+    if (mins < 1) return 'just now'
+    if (mins < 60) return mins + (mins === 1 ? ' minute ago' : ' minutes ago')
+    const hrs = Math.round(mins / 60)
+    if (hrs < 24) return hrs + (hrs === 1 ? ' hour ago' : ' hours ago')
+    const days = Math.round(hrs / 24)
+    if (days < 7) return days + (days === 1 ? ' day ago' : ' days ago')
+    return 'on ' + fmtDate(ts)
+  } catch (e) { return '' }
+}
 function computeScore(data) {
   let sum = 0, max = 0, rated = 0
   CHECKLIST.forEach(cat => cat.items.forEach((_, i) => { const it = data[cat.id + '_' + i]; if (it && it.rating) { rated++; max += 2; sum += ragWeight(it.rating) } }))
@@ -1834,7 +1860,7 @@ function MonitorPage({ userId, onOpen }) {
       <div className="mon-head-l">
         <button className="linkbtn subtle" onClick={() => setActive(null)}>&larr; All assessments</button>
         <h2>{active.facility_name}</h2>
-        <p className="fsub">{active.area} &middot; arrival {(active.arrival_time || '').slice(11, 16) || 'logged'}</p>
+        <p className="fsub">{active.area} &middot; arrival {fmtTime(active.arrival_time) || 'logged'}</p>
       </div>
       <div className="mon-head-r">
         <span className={'net ' + (online ? 'on' : 'off')}>{online ? 'Online' : 'Offline'}</span>
@@ -1995,14 +2021,63 @@ function buildMonitoringReport(v, origin) {
     + '<p class="muted" style="border:1px solid #E4DCEE;border-radius:6px;padding:8px 10px"><strong>Integrity notice.</strong> ' + INTEGRITY_NOTICE + '</p>'
     + '<p class="muted">Prepared by REALMS Healthcare Services Consulting Limited for HEFAMAA, Lagos State.</p>'
 }
+function isSecondVisit(v) { return !!(v && (v.status === 'second' || v.round === 2 || (v.debrief && v.debrief.second_visit) || (v.assessment && v.assessment.source === 'second_assessment'))) }
+function buildSecondReport(v, origin, allVisits) {
+  const esc = s => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/\n/g, '<br>')
+  const a = (v.assessment && v.assessment.source === 'second_assessment') ? v.assessment : (v.monitoring && v.monitoring.second_assessment) || v.assessment || {}
+  const imp = v.improvement || {}
+  const date = firstVal(a.date, v.visit_date, fmtDate(v.arrival_time))
+  // pull the baseline through the stored link, else the facility's first visit
+  let base = null
+  if (Array.isArray(allVisits)) {
+    base = (v.baseline_visit_id && allVisits.find(x => x.id === v.baseline_visit_id))
+      || allVisits.find(x => x.id !== v.id && (x.facility_id === v.facility_id || x.facility_name === v.facility_name) && (x.round === 1 || (x.debrief && x.debrief.first_visit) || (x.assessment && x.assessment.ruid)))
+  }
+  const b = base ? ((base.assessment) || {}) : {}
+  const bp = base ? (basePct(b) || {}).v : (imp.basePct != null ? imp.basePct : null)
+  const np = a.pct_score != null && a.pct_score !== '' ? a.pct_score : (imp.newPct != null ? imp.newPct : null)
+  const verdictColour = imp.verdict === 'Improved' ? '#2E7D46' : imp.verdict === 'Declined' ? '#B4442E' : '#9A5B12'
+  const row = r => '<tr><td style="width:34%;font-weight:600;color:#574277">' + r[0] + '</td><td>' + esc(r[1]) + '</td></tr>'
+  const sec = t => '<tr><th colspan="2" style="font-size:13px">' + t + '</th></tr>'
+  const gen = [
+    ['Date of second assessment', date], ['Facility Name', v.facility_name], ['Facility Address', firstVal(a.address, v.address)],
+    ['LGA', v.area], ['Facility Schedule', firstVal(a.schedule, v.category)], ['Registration Status', a.reg_status]
+  ]
+  const find = [
+    ['Renewal Status', a.renewal_status], ['Services Rendered', a.services], ['Total Staff Strength and Breakdown', a.staff_strength], ['Staff met on duty', a.staff_on_duty],
+    ['Basic Equipment Available', a.basic_equipment], ['# of Wards', a.wards], ['# of Beds', a.beds], ['# of Toilets', a.toilets],
+    ['Environment', a.environment], ['Waste Management', a.waste_mgmt], ['Theatre / Clinical Areas', a.clinical_area], ['Others', a.others]
+  ].filter(r => r[1] != null && r[1] !== '')
+  // progress against the first-visit recommendations
+  const recStatus = Array.isArray(a.recommendation_status) ? a.recommendation_status : []
+  const statusLabel = s => s === 'resolved' ? 'Resolved' : s === 'in_progress' ? 'In progress' : 'Not done'
+  const recTable = recStatus.length
+    ? '<h2>Progress on first-visit recommendations</h2><table>' + recStatus.map(r => '<tr><td>' + esc(r.text) + '</td><td style="width:26%;font-weight:600">' + statusLabel(r.status) + '</td></tr>').join('') + '</table>'
+    : ''
+  const newRecs = Array.isArray(a.new_recommendations) && a.new_recommendations.length
+    ? '<h2>New recommendation(s)</h2><ol>' + a.new_recommendations.map(r => '<li>' + esc(r) + '</li>').join('') + '</ol>' : ''
+  const cmp = '<h2>Comparison with the first assessment</h2><table>'
+    + '<tr><th>Measure</th><th>First visit</th><th>This visit</th><th>Change</th></tr>'
+    + '<tr><td style="font-weight:600;color:#574277">Percentage score</td><td>' + (bp != null ? bp + '%' : '\u2014') + '</td><td>' + (np != null ? np + '%' : '\u2014') + '</td><td>' + (imp.dPct != null ? (imp.dPct > 0 ? '+' : '') + imp.dPct + ' pts' : '\u2014') + '</td></tr>'
+    + '<tr><td style="font-weight:600;color:#574277">Recommendations resolved</td><td colspan="2">' + (imp.resolved != null ? imp.resolved : 0) + ' of ' + (imp.recTotal != null ? imp.recTotal : recStatus.length) + '</td><td style="font-weight:700;color:' + verdictColour + '">' + esc(imp.verdict || '') + '</td></tr>'
+    + '</table>'
+  const notes = a.notes ? '<h2>Notes</h2><p>' + esc(a.notes) + '</p>' : ''
+  const inspBy = a.inspected_by ? '<p class="muted"><strong>Inspected by:</strong> ' + esc(a.inspected_by) + '</p>' : ''
+  const scoreRows = [['Total Score', a.total_score != null && a.total_score !== '' ? String(a.total_score) : ''], ['Percentage', np != null ? np + '%' : '']]
+  return inspHead(origin) + '<h1 style="font-size:18px;margin-top:10px">Second Assessment \u2014 Monitoring Report</h1>'
+    + '<table style="margin-top:6px">' + sec('General') + gen.map(row).join('') + sec('Findings') + find.map(row).join('') + sec('Scores') + scoreRows.map(row).join('') + '</table>'
+    + cmp + recTable + newRecs + notes + inspBy
+    + '<p class="muted" style="border:1px solid #E4DCEE;border-radius:6px;padding:8px 10px"><strong>Integrity notice.</strong> ' + INTEGRITY_NOTICE + '</p>'
+    + '<p class="muted">Prepared by REALMS Healthcare Services Consulting Limited for HEFAMAA, Lagos State.</p>'
+}
 function buildMonitoringBatch(visits, origin) {
   const parts = visits.map((v, i) => '<div style="' + (i ? 'page-break-before:always;' : '') + '">' + buildMonitoringReport(v, origin) + '</div>')
-  const idx = '<h1>First-assessment monitoring reports</h1><p>REALMS Healthcare Services Consulting Limited. ' + visits.length + ' report' + (visits.length === 1 ? '' : 's') + '.</p><table><tr><th>#</th><th>Facility</th><th>LGA</th><th>Date</th></tr>' + visits.map((v, i) => { const a = firstAssessmentData(v); return '<tr><td>' + (i + 1) + '</td><td>' + (v.facility_name || '') + '</td><td>' + (v.area || '') + '</td><td>' + firstVal(a.date, v.visit_date, (v.arrival_time || '').slice(0, 10)) + '</td></tr>' }).join('') + '</table>'
+  const idx = '<h1>First-assessment monitoring reports</h1><p>REALMS Healthcare Services Consulting Limited. ' + visits.length + ' report' + (visits.length === 1 ? '' : 's') + '.</p><table><tr><th>#</th><th>Facility</th><th>LGA</th><th>Date</th></tr>' + visits.map((v, i) => { const a = firstAssessmentData(v); return '<tr><td>' + (i + 1) + '</td><td>' + (v.facility_name || '') + '</td><td>' + (v.area || '') + '</td><td>' + firstVal(a.date, v.visit_date, fmtDate(v.arrival_time)) + '</td></tr>' }).join('') + '</table>'
   return docHead(origin) + idx + '<div style="page-break-before:always">' + parts.join('') + '</div>'
 }
 function buildWeeklyBatch(visits, origin, from, to) {
   const parts = visits.map((v, i) => '<div style="' + (i ? 'page-break-before:always;' : '') + '">' + buildInspectionReport(v, v.debrief || deriveDebrief(v), origin) + '</div>')
-  const idx = '<h1>HEFAMAA submission: ' + from + ' to ' + to + '</h1><p>REALMS Healthcare Services Consulting Limited. ' + visits.length + ' approved inspection report' + (visits.length === 1 ? '' : 's') + '.</p><table><tr><th>#</th><th>Facility</th><th>LGA</th><th>Date</th></tr>' + visits.map((v, i) => '<tr><td>' + (i + 1) + '</td><td>' + v.facility_name + '</td><td>' + (v.area || '') + '</td><td>' + (v.arrival_time || '').slice(0, 10) + '</td></tr>').join('') + '</table>'
+  const idx = '<h1>HEFAMAA submission: ' + from + ' to ' + to + '</h1><p>REALMS Healthcare Services Consulting Limited. ' + visits.length + ' approved inspection report' + (visits.length === 1 ? '' : 's') + '.</p><table><tr><th>#</th><th>Facility</th><th>LGA</th><th>Date</th></tr>' + visits.map((v, i) => '<tr><td>' + (i + 1) + '</td><td>' + v.facility_name + '</td><td>' + (v.area || '') + '</td><td>' + (v.visit_date || fmtDate(v.arrival_time)) + '</td></tr>').join('') + '</table>'
   return docHead(origin) + idx + '<div style="page-break-before:always">' + parts.join('') + '</div>'
 }
 function buildReport(v, d, origin) {
@@ -3035,7 +3110,10 @@ function ReportsPage({ facilities, userId, scope, role }) {
           <div className="rep-main"><span className="fname">{v.facility_name}</span><span className="fmeta">{v.area} &middot; {(v.arrival_time || v.created_at || '').slice(0, 10)}</span></div>
           <div className="rep-mid">{v.score != null ? <Chip rag={v.overall_rating} pct={v.score} /> : <span className={'chip ' + (v.status || 'engaged')}>{v.status === 'monitored' ? 'Assessed' : v.status === 'debriefed' ? 'Debriefed' : 'Engaged'}</span>}{v.debrief && v.debrief.closure_recommended && <span className="risk-badge high">Closure</span>}{v.debrief && v.debrief.escalated && <span className="risk-badge high">Escalated</span>}{v.debrief && v.debrief.genesys_interest && <span className="risk-badge low">Genesys</span>}{needsApproval(v) && <span className={'appr-chip ' + approvalState(v)}>{approvalState(v) === 'approved' ? 'Approved' : approvalState(v) === 'returned' ? 'Returned' : 'Pending'}</span>}</div>
           <div className="rep-actions">
-            {hasFirstAssessment(v) ? <>
+            {isSecondVisit(v) ? <>
+              <button className="mini primary" onClick={() => safePrint('Second Assessment Report', () => buildSecondReport(v, origin, visits))}>Second assessment report</button>
+              <button className="mini" onClick={() => safePrint('Inspection Report', () => buildInspectionReport(v, v.debrief || deriveDebrief(v), origin))}>Inspection</button>
+            </> : hasFirstAssessment(v) ? <>
               <button className="mini primary" onClick={() => safePrint('Monitoring Report', () => buildMonitoringReport(v, origin))}>Monitoring report</button>
               <button className="mini" onClick={() => safePrint('Inspection Report', () => buildInspectionReport(v, v.debrief || deriveDebrief(v), origin))}>Inspection</button>
             </> : <>
@@ -3119,7 +3197,7 @@ function LineChart({ points }) {
     {points.map((p, i) => (<g key={i}><circle cx={x(i)} cy={y(p.value)} r="4" fill="#6D4B8E" /><text x={x(i)} y={H - pad + 16} textAnchor="middle" className="lc-x">{p.label}</text><text x={x(i)} y={y(p.value) - 10} textAnchor="middle" className="lc-v">{p.value}</text></g>))}
   </svg>)
 }
-function CountVal({ n }) { const v = useCountUp(typeof n === 'number' ? n : 0); return <>{typeof n === 'number' ? v : n}</> }
+function CountVal({ n }) { const v = useCountUp(typeof n === 'number' ? n : 0); return <>{typeof n === 'number' ? v : (n == null ? '\u2013' : n)}</> }
 function DonutInteractive({ data, active, onPick }) {
   const total = data.reduce((s, d) => s + d.value, 0) || 1; const R = 54, C = 2 * Math.PI * R; let off = 0
   return (<div className="donut">
@@ -3140,9 +3218,26 @@ function AnalyticsBody({ facilities, onOpen, role }) {
   const [areaF, setAreaF] = useState('all')
   const [range, setRange] = useState('all')
   const [q, setQ] = useState('')
-  useEffect(() => { VIS.list().then(setVisits).catch(() => {}) }, [])
-  useEffect(() => { CALLS.list().then(setCalls).catch(() => {}) }, [])
-  useEffect(() => { ACC.list().then(setAccess).catch(() => {}) }, [])
+  // The figures below are computed from visits. Until that query returns we must not
+  // show 0, because 0 would look like real data. Track the load so the dashboard can
+  // say "loading" or "couldn't connect" instead of quietly reporting nothing. On a
+  // failed read we fall back to the last data we successfully loaded, marked stale.
+  const [visLoad, setVisLoad] = useState('loading') // loading | ok | stale | error
+  const [staleAt, setStaleAt] = useState(null)
+  const [reloadKey, setReloadKey] = useState(0)
+  useEffect(() => {
+    let live = true
+    setVisLoad('loading')
+    VIS.listCached().then(res => {
+      if (!live) return
+      setVisits(res.rows)
+      if (res.stale) { setVisLoad('stale'); setStaleAt(res.cachedAt) }
+      else setVisLoad('ok')
+    }).catch(() => { if (live) setVisLoad('error') })
+    return () => { live = false }
+  }, [reloadKey])
+  useEffect(() => { CALLS.list().then(setCalls).catch(() => {}) }, [reloadKey])
+  useEffect(() => { ACC.list().then(setAccess).catch(() => {}) }, [reloadKey])
   const go = tab => { if (onOpen && tab) onOpen(tab) }
   const tabsFor = ROLE_TABS[role] || []
   const vis = visits
@@ -3208,13 +3303,18 @@ function AnalyticsBody({ facilities, onOpen, role }) {
     ? coverage + '% of the estate assessed \u00b7 ' + complianceRate + '% green' + (needsAttention ? ' \u00b7 ' + needsAttention + ' need attention' : '') + (awaitingCalls ? ' \u00b7 ' + awaitingCalls + ' awaiting a follow-up call' : '')
     : 'No assessments recorded yet. Load or capture visits to see the picture here.'
 
+  // Facilities comes from a prop that loaded fine, so it always shows a number.
+  // Everything else is derived from visits: if that has not loaded at all, show a
+  // dash, never a 0 that reads as a real figure. Stale data IS real data (just from
+  // the last load), so the numbers show, with a banner saying they may be out of date.
+  const vv = visLoad === 'ok' || visLoad === 'stale'
   const kpis = [
     { l: 'Facilities', v: facilities.length, tab: 'facilities', tone: 'p', show: true },
-    { l: 'Assessed', v: rated.length + unscored.length, tab: 'facilities', tone: 'p', show: true },
-    { l: 'Need attention', v: needsAttention, tab: 'reports', tone: 'r', show: tabsFor.includes('reports') },
-    { l: 'Awaiting calls', v: awaitingCalls, tab: 'followups', tone: 'a', show: tabsFor.includes('followups') },
-    { l: 'Second visits due', v: secondDue, tab: 'secondassessment', tone: 'p', show: tabsFor.includes('secondassessment') },
-    { l: 'Access requests', v: accessPending, tab: 'access', tone: 'r', show: tabsFor.includes('access') }
+    { l: 'Assessed', v: vv ? rated.length + unscored.length : null, tab: 'facilities', tone: 'p', show: true },
+    { l: 'Need attention', v: vv ? needsAttention : null, tab: 'reports', tone: 'r', show: tabsFor.includes('reports') },
+    { l: 'Awaiting calls', v: vv ? awaitingCalls : null, tab: 'followups', tone: 'a', show: tabsFor.includes('followups') },
+    { l: 'Second visits due', v: vv ? secondDue : null, tab: 'secondassessment', tone: 'p', show: tabsFor.includes('secondassessment') },
+    { l: 'Access requests', v: vv ? accessPending : null, tab: 'access', tone: 'r', show: tabsFor.includes('access') }
   ].filter(k => k.show)
 
   const ragChips = [['all', 'All', rated.length + unscored.length], ['green', 'Green', rag.green], ['amber', 'Amber', rag.amber], ['red', 'Red', rag.red], ['unscored', 'Not scored', unscored.length]]
@@ -3222,6 +3322,17 @@ function AnalyticsBody({ facilities, onOpen, role }) {
   const legend = [['green', 'Green', rag.green], ['amber', 'Amber', rag.amber], ['red', 'Red', rag.red], ['unscored', 'Not scored', unscored.length]]
 
   return (<>
+    {visLoad === 'error' && <div className="db-banner err">
+      <div><strong>Can&#8217;t reach the database.</strong> The figures below may be incomplete. This is usually a weak connection, not your data \u2014 nothing has been lost.</div>
+      <button className="mini" onClick={() => setReloadKey(k => k + 1)}>Retry</button>
+    </div>}
+    {visLoad === 'stale' && <div className="db-banner stale">
+      <div><strong>Showing the last data that loaded{staleAt ? ', from ' + relTime(staleAt) : ''}.</strong> The connection is weak, so this may be out of date. It will refresh on its own when the connection improves.</div>
+      <button className="mini" onClick={() => setReloadKey(k => k + 1)}>Refresh</button>
+    </div>}
+    {visLoad === 'loading' && <div className="db-banner load">
+      <span className="db-spin" /> Loading the latest visit data\u2026
+    </div>}
     <div className="dash-hero">
       <div className="dash-hero-ring"><Ring pct={complianceRate} label={avg == null ? 'No scores yet' : 'Avg score ' + avg + '%'} /></div>
       <div className="dash-hero-body">
@@ -4615,12 +4726,22 @@ const css = `
 .realms .sa-checkin { margin:0 0 10px; font-size:12.5px; color:#2E7D46; background:#E6F4EA; border:1px solid #BFE3CB; border-radius:8px; padding:6px 10px; display:inline-block; }
 .realms .sa-head:disabled { opacity:.75; cursor:progress; }
 
+/* --- dashboard connection banner --- */
+.realms .db-banner { display:flex; align-items:center; gap:12px; justify-content:space-between; border-radius:12px; padding:11px 15px; margin-bottom:14px; font-size:14px; }
+.realms .db-banner.err { background:#FBE9E6; border:1px solid #E7B9AE; color:#7A2E1E; }
+.realms .db-banner.load { background:#F3EEFA; border:1px solid #DCCFEC; color:#574277; }
+.realms .db-banner.stale { background:#FBF3E2; border:1px solid #E9D6A8; color:#7A5B12; }
+.realms .db-banner .mini { white-space:nowrap; }
+.realms .db-spin { width:14px; height:14px; border:2px solid #C9B8DF; border-top-color:#6D4B8E; border-radius:50%; display:inline-block; animation:db-spin .7s linear infinite; }
+@keyframes db-spin { to { transform:rotate(360deg); } }
+
 /* --- monitor: route facilities with a baseline to Second Assessment --- */
 .realms .mon-row.locked { background:var(--lav1); }
 .realms .mon-row.locked .fname { color:#6A5A87; }
 .realms .mini.off { color:#B0A4C4; border-color:var(--line); background:#F4F1F8; text-decoration:line-through; cursor:not-allowed; }
 .realms .mini.go { border-color:var(--p); color:var(--p); font-weight:600; }
 
+.realms .sa-done-actions { padding:0 18px 14px; }
 /* --- second assessment: roomier data entry --- */.realms .sa-ta { width:100%; font-family:inherit; font-size:15px; line-height:1.5; padding:10px 12px; border:1.5px solid var(--line); border-radius:12px; color:var(--ink); background:#fff; min-height:104px; resize:vertical; }.realms .sa-nowcol .field.sm { margin-bottom:14px; }
 .realms .sa-nowcol .field.sm input { min-height:46px; }
 .realms .sa-nowcol .field.sm span { margin-bottom:5px; }
