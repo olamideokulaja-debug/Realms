@@ -2,9 +2,9 @@ import React, { useEffect, useRef, useState } from 'react'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
 import { supabase, MODE } from './supabaseClient.js'
-import { facilities as FAC, assignments as ASG, visits as VIS, notifications as NOTIF, calls as CALLS, access as ACC, facilitiesFromCSV, orderRoute, clusterDays, clusterDaysByDate, googleMapsDirUrl, geocode, uploadEvidence, sendNotify, askAI, seedSampleData, clearAllData } from './data.js'
+import { facilities as FAC, assignments as ASG, visits as VIS, notifications as NOTIF, calls as CALLS, access as ACC, roles as ROLEMGR, facilitiesFromCSV, orderRoute, clusterDays, clusterDaysByDate, googleMapsDirUrl, geocode, uploadEvidence, sendNotify, askAI, seedSampleData, clearAllData } from './data.js'
 
-const BUILD = 'field-2026-07-18-ai'
+const BUILD = 'field-2026-07-18-aj'
 
 /*
   REALMS FIELD — Stages 1 to 3 (single-file App.jsx + supabaseClient.js + data.js)
@@ -2826,8 +2826,23 @@ function SettingsPage({ user, identity, facilities }) {
   const [s, setS] = useState(getSettings())
   const [remBusy, setRemBusy] = useState(false); const [remMsg, setRemMsg] = useState('')
   const [intScan, setIntScan] = useState(null); const [intBusy, setIntBusy] = useState(false); const [intMsg, setIntMsg] = useState('')
+  const [team, setTeam] = useState(null); const [teamBusy, setTeamBusy] = useState(false); const [teamMsg, setTeamMsg] = useState('')
+  const owner = isOwner(user)
   const set = (k, v) => setS(p => ({ ...p, [k]: v }))
   function save() { saveSettings(s); toast('Settings saved.') }
+  async function loadTeam() {
+    setTeamBusy(true); setTeamMsg('')
+    try { const rows = await ROLEMGR.list(); setTeam(rows) }
+    catch (e) { setTeamMsg('Could not load the team list.') } finally { setTeamBusy(false) }
+  }
+  async function setMemberRole(userId, role, name) {
+    setTeamBusy(true)
+    try {
+      await ROLEMGR.setRole(userId, role)
+      setTeam(t => (t || []).map(m => m.user_id === userId ? { ...m, role } : m))
+      toast((name || 'Role') + ' set to ' + ((roleById(role) || {}).label || role) + '. They see the change at their next sign-in.')
+    } catch (e) { toast('Could not change the role.', 'err') } finally { setTeamBusy(false) }
+  }
   // Second assessments completed before the notice was wired in never reached the
   // facility. Find those, so the anti-bribery notice can be sent after the fact.
   async function scanIntegrity() {
@@ -2916,6 +2931,28 @@ function SettingsPage({ user, identity, facilities }) {
         <li key={i}><span className="log-when">{t.phone}</span><span className="log-msg">{t.name}{t.area ? ' \u00b7 ' + t.area : ''}</span></li>
       ))}{intScan.list.length > 25 && <li><span className="log-msg">and {intScan.list.length - 25} more</span></li>}</ul>}
     </div>
+
+    {owner && <div className="settings-card" style={{ marginTop: 16 }}>
+      <h3>Team roles</h3>
+      <p className="hintline">Set what each person can do. A Team Leader can approve reports and assign routes; a Field Monitor can assess but not approve. If someone leading the team was set up as a Field Monitor, they will not see the Approvals tab, change them to Team Leader here. Changes take effect at that person&#8217;s next sign-in.</p>
+      <div className="cta-row">
+        <button className="btn ghost" onClick={loadTeam} disabled={teamBusy}>{teamBusy && !team ? 'Loading\u2026' : team ? 'Refresh' : 'Show the team'}</button>
+      </div>
+      {teamMsg && <p className="hintline">{teamMsg}</p>}
+      {team && team.length === 0 && <p className="hintline">No team members have signed in yet.</p>}
+      {team && team.length > 0 && <div className="role-list">{team.map(m => (
+        <div className="role-row" key={m.user_id}>
+          <div className="role-who"><span className="fname">{m.name || m.email || 'Unnamed user'}</span><span className="fmeta">{m.email || m.user_id}{m.role ? ' \u00b7 ' + ((roleById(m.role) || {}).label || m.role) : ' \u00b7 no role set'}</span></div>
+          <select className="sel" value={m.role || ''} disabled={teamBusy || (m.email || '').toLowerCase() === OWNER_EMAIL} onChange={e => setMemberRole(m.user_id, e.target.value, m.name || m.email)}>
+            <option value="" disabled>Set role\u2026</option>
+            <option value="team_leader">Team Leader</option>
+            <option value="field_monitor">Field Monitor</option>
+            <option value="hefamaa_reviewer">HEFAMAA Reviewer</option>
+          </select>
+        </div>
+      ))}</div>}
+      <p className="hintline" style={{ marginTop: 8 }}>RHSC HQ access is granted separately, through Access requests, so it is not offered here.</p>
+    </div>}
     <div className="settings-card" style={{ marginTop: 16 }}>
       <h3>AI translations</h3>
       <p className="hintline">Generate first-draft Yorùbá, Hausa and Igbo for the website strings, to give a native speaker to review before use. Downloads a JSON file.</p>
@@ -4868,6 +4905,10 @@ const css = `
 .realms .sa-conf-tag { font-size:11px; font-weight:600; color:#2E7D46; background:#E6F4EA; border:1px solid #BFE3CB; border-radius:6px; padding:1px 6px; margin-left:8px; }
 .realms .mcat.confirmed > summary, .realms .hef-sec.confirmed > summary { background:#F2FaF4; }
 .realms .mini.ok { color:#2E7D46; border-color:#BFE3CB; background:#E6F4EA; }
+.realms .role-list { display:flex; flex-direction:column; gap:8px; margin-top:10px; }
+.realms .role-row { display:flex; align-items:center; gap:12px; justify-content:space-between; border:1px solid var(--line); border-radius:12px; padding:10px 12px; }
+.realms .role-who { display:flex; flex-direction:column; gap:2px; min-width:0; }
+.realms .role-row .sel { min-width:150px; }
 /* --- second assessment: roomier data entry --- */.realms .sa-ta { width:100%; font-family:inherit; font-size:15px; line-height:1.5; padding:10px 12px; border:1.5px solid var(--line); border-radius:12px; color:var(--ink); background:#fff; min-height:104px; resize:vertical; }.realms .sa-nowcol .field.sm { margin-bottom:14px; }
 .realms .sa-nowcol .field.sm input { min-height:46px; }
 .realms .sa-nowcol .field.sm span { margin-bottom:5px; }

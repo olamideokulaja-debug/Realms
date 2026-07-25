@@ -358,6 +358,32 @@ export const access = {
   }
 }
 
+// Owner-only role management. Lists everyone who has a saved role or an access
+// request, and lets the executive office set a person's role directly (e.g. a team
+// lead saved as field_monitor who therefore can't see Approvals).
+export const roles = {
+  async list() {
+    if (MODE !== 'supabase') {
+      const demo = localStorage.getItem('realms_demo_role')
+      return demo ? [{ user_id: 'demo', email: 'you (demo)', name: 'Demo user', role: demo }] : []
+    }
+    // Everyone with a saved role
+    const { data: kvRows } = await supabase.from('kv').select('user_id, v').eq('k', 'role')
+    const byId = {}
+    ;(kvRows || []).forEach(r => { const role = r.v && (typeof r.v === 'string' ? r.v : r.v.role); if (r.user_id) byId[r.user_id] = { user_id: r.user_id, role: role || null } })
+    // Names/emails come from access_requests (the roster of who signed up)
+    const { data: reqs } = await supabase.from('access_requests').select('user_id, email, name, role, status')
+    ;(reqs || []).forEach(r => { if (!r.user_id) return; const e = byId[r.user_id] || { user_id: r.user_id, role: null }; e.email = e.email || r.email; e.name = e.name || r.name; e.requested = r.role; e.req_status = r.status; byId[r.user_id] = e })
+    return Object.values(byId)
+  },
+  async setRole(userId, role) {
+    if (!userId || !role) return
+    if (MODE !== 'supabase') { localStorage.setItem('realms_demo_role', role); return }
+    const { error } = await supabase.from('kv').upsert({ user_id: userId, k: 'role', v: role, updated_at: new Date().toISOString() }, { onConflict: 'user_id,k' })
+    if (error) throw error
+  }
+}
+
 /* ---------- notifications + call logs (customer service follow-ups) ---------- */
 const LS_NOTIF = 'realms_notifications'
 export const notifications = {
