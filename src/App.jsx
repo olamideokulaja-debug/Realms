@@ -4,7 +4,7 @@ import 'leaflet/dist/leaflet.css'
 import { supabase, MODE } from './supabaseClient.js'
 import { facilities as FAC, assignments as ASG, visits as VIS, notifications as NOTIF, calls as CALLS, access as ACC, roles as ROLEMGR, facilitiesFromCSV, orderRoute, clusterDays, clusterDaysByDate, googleMapsDirUrl, geocode, uploadEvidence, sendNotify, askAI, seedSampleData, clearAllData } from './data.js'
 
-const BUILD = 'field-2026-07-18-al'
+const BUILD = 'field-2026-07-18-an'
 
 /*
   REALMS FIELD — Stages 1 to 3 (single-file App.jsx + supabaseClient.js + data.js)
@@ -2082,7 +2082,12 @@ function buildInspectionReport(v, d, origin) {
   const staffAuto = [hef.doctors_ft && (hef.doctors_ft + ' doctor(s)'), hef.nurses_ft && (hef.nurses_ft + ' nurse(s)'), hef.others_ft && (hef.others_ft + ' other staff')].filter(Boolean).join(', ')
   const renewal = firstVal(hef.hefamaa_renewal ? (hef.hefamaa_renewal + (hef.hefamaa_last_renewal ? ' (' + hef.hefamaa_last_renewal + ')' : '')) : '', sa.renewal_status)
   const gapsText = (d && d.gaps && d.gaps.length) ? d.gaps.map(g => (g.category ? g.category + ': ' : '') + g.label).join('; ') : ''
-  const observation = firstVal(hef.observation, sa.notes, d && d.narrative, gapsText)
+  // The observation should reflect what the team actually found. Prefer their typed note;
+  // otherwise, if they logged recommendations this visit, summarise those (real gaps beat a
+  // generic "no change"); only fall back to the auto narrative when nothing was recorded.
+  const newRecs = Array.isArray(sa.new_recommendations) ? sa.new_recommendations.filter(Boolean) : []
+  const recsText = newRecs.length ? newRecs.join('; ') : ''
+  const observation = firstVal(hef.observation, sa.notes, recsText, gapsText, d && d.narrative)
   const rows = [
     ['General', ''],
     ['Date', date], ['Facility Name', v.facility_name || ''], ['Facility Address', firstVal(hef.address, sa.address, v.address)],
@@ -3625,7 +3630,44 @@ function SiteBar({ tab, setTab, onSignIn, lang, setLang, t }) {
     </div>
   </header>)
 }
-function TopBarApp({ identity, realRole, viewAsName, onViewAs, onEditName, onSignOut, onToggleNav }) {
+function ChangePasswordModal({ onClose }) {
+  const [pw, setPw] = useState(''); const [pw2, setPw2] = useState('')
+  const [show, setShow] = useState(false); const [busy, setBusy] = useState(false); const [err, setErr] = useState('')
+  async function save() {
+    setErr('')
+    if (pw.length < 8) { setErr('Use at least 8 characters.'); return }
+    if (pw !== pw2) { setErr('The two passwords do not match.'); return }
+    if (MODE !== 'supabase') { toast('Password changes need the live app; this is the demo.'); onClose(); return }
+    setBusy(true)
+    try {
+      const { error } = await supabase.auth.updateUser({ password: pw })
+      if (error) throw error
+      toast('Your password has been changed.'); onClose()
+    } catch (e) {
+      const m = (e && e.message) || ''
+      setErr(/should be different|same/i.test(m) ? 'Choose a password different from your current one.' : /weak|pwned|compromised/i.test(m) ? 'That password is too weak or has been exposed in a breach. Choose another.' : 'Could not change the password. Please try again.')
+    } finally { setBusy(false) }
+  }
+  return (<div className="modal-scrim" onClick={onClose}>
+    <div className="modal anim" onClick={e => e.stopPropagation()} role="dialog" aria-modal="true">
+      <h3>Change password</h3>
+      <p className="hintline" style={{ marginTop: 0 }}>Enter a new password of at least 8 characters, then confirm it.</p>
+      <label className="field"><span>New password</span>
+        <input type={show ? 'text' : 'password'} value={pw} autoComplete="new-password" onChange={e => { setPw(e.target.value); setErr('') }} onKeyDown={e => { if (e.key === 'Enter') save() }} />
+      </label>
+      <label className="field"><span>Confirm new password</span>
+        <input type={show ? 'text' : 'password'} value={pw2} autoComplete="new-password" onChange={e => { setPw2(e.target.value); setErr('') }} onKeyDown={e => { if (e.key === 'Enter') save() }} />
+      </label>
+      <label className="pw-show"><input type="checkbox" checked={show} onChange={e => setShow(e.target.checked)} /> Show password</label>
+      {err && <p className="pw-err">{err}</p>}
+      <div className="modal-actions">
+        <button className="btn ghost" onClick={onClose} disabled={busy}>Cancel</button>
+        <button className="btn primary" onClick={save} disabled={busy}>{busy ? 'Saving\u2026' : 'Change password'}</button>
+      </div>
+    </div>
+  </div>)
+}
+function TopBarApp({ identity, realRole, viewAsName, onViewAs, onEditName, onChangePassword, onSignOut, onToggleNav }) {
   const isHQ = realRole === 'rhsc_hq'
   return (<header className="topbar">
     <div className="tb-left">
@@ -3639,7 +3681,7 @@ function TopBarApp({ identity, realRole, viewAsName, onViewAs, onEditName, onSig
         </select>
       </div>)}
     </div>
-    <div className="tb-right"><button className="who" onClick={onEditName} title="Edit your name">{identity.first}</button><button className="signin" onClick={onSignOut}>Sign out</button></div>
+    <div className="tb-right"><button className="who" onClick={onEditName} title="Edit your name">{identity.first}</button><button className="tb-pw" onClick={onChangePassword} title="Change your password"><svg viewBox="0 0 24 24" stroke="currentColor" fill="none" strokeWidth="2" width="16" height="16"><rect x="4" y="10" width="16" height="10" rx="2" /><path d="M8 10V7a4 4 0 0 1 8 0v3" /></svg><span className="tb-pw-lab">Password</span></button><button className="signin" onClick={onSignOut}>Sign out</button></div>
   </header>)
 }
 function Sidebar({ role, appTab, setAppTab, collapsed, setCollapsed, open, setOpen, badges }) {
@@ -3692,6 +3734,7 @@ export default function App() {
   }, [user, role, appTab])
   const [navCollapsed, setNavCollapsed] = useState(false)
   const [navOpen, setNavOpen] = useState(false)
+  const [pwOpen, setPwOpen] = useState(false)
   const [viewAs, setViewAs] = useState(null)
   const [dbError, setDbError] = useState('')
   const [lang, setLang] = useState(() => { try { return localStorage.getItem('realms_lang') || 'en' } catch (e) { return 'en' } })
@@ -3878,7 +3921,8 @@ export default function App() {
     return (<div className="realms app-mode">
       <style>{css}</style>
       <Overlays />
-      <TopBarApp identity={effId} realRole={role} viewAsName={viewAs ? viewAs.name : ''} onViewAs={doViewAs} onEditName={editName} onSignOut={signOut} onToggleNav={() => setNavOpen(o => !o)} />
+      <TopBarApp identity={effId} realRole={role} viewAsName={viewAs ? viewAs.name : ''} onViewAs={doViewAs} onEditName={editName} onChangePassword={() => setPwOpen(true)} onSignOut={signOut} onToggleNav={() => setNavOpen(o => !o)} />
+      {pwOpen && <ChangePasswordModal onClose={() => setPwOpen(false)} />}
       {viewAs && (<div className="viewas-bar">Viewing as {viewAs.name} &middot; {(roleById(viewAs.role) || {}).label}<button onClick={() => doViewAs('')}>Return to my view</button></div>)}
       <div className="shell">
         <Sidebar role={effRole} appTab={appTab} setAppTab={setAppTab} collapsed={navCollapsed} setCollapsed={setNavCollapsed} open={navOpen} setOpen={setNavOpen} badges={badges} />
@@ -3984,6 +4028,12 @@ const css = `
 .realms .tab:hover { color:var(--p); }
 .realms .tab.active { background:#fff; color:var(--p-deep); box-shadow:0 2px 8px rgba(122,52,168,.14); font-weight:600; }
 .realms .signin { padding:9px 18px; border:1.5px solid var(--p); background:none; border-radius:24px; color:var(--p); font-weight:500; font-size:14.5px; transition:.16s; }
+.realms .tb-pw { display:inline-flex; align-items:center; gap:6px; padding:8px 12px; border:1.5px solid var(--line); background:none; border-radius:24px; color:var(--p-deep); font-weight:500; font-size:14px; transition:.16s; cursor:pointer; }
+.realms .tb-pw:hover { border-color:var(--p); color:var(--p); }
+.realms .pw-show { display:flex; align-items:center; gap:8px; font-size:13.5px; color:#6A5A83; margin:2px 0 6px; cursor:pointer; }
+.realms .pw-show input { width:auto; }
+.realms .pw-err { color:#C0392B; font-size:13.5px; margin:0 0 6px; }
+@media (max-width:640px){ .realms .tb-pw-lab { display:none; } .realms .tb-pw { padding:8px; } }
 .realms .signin:hover { background:var(--p); color:#fff; }
 .realms .app-bar .who { font-size:14.5px; color:#5A4C74; }
 
