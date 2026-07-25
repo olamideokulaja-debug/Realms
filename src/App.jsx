@@ -4,7 +4,7 @@ import 'leaflet/dist/leaflet.css'
 import { supabase, MODE } from './supabaseClient.js'
 import { facilities as FAC, assignments as ASG, visits as VIS, notifications as NOTIF, calls as CALLS, access as ACC, roles as ROLEMGR, facilitiesFromCSV, orderRoute, clusterDays, clusterDaysByDate, googleMapsDirUrl, geocode, uploadEvidence, sendNotify, askAI, seedSampleData, clearAllData } from './data.js'
 
-const BUILD = 'field-2026-07-18-aj'
+const BUILD = 'field-2026-07-18-ak'
 
 /*
   REALMS FIELD — Stages 1 to 3 (single-file App.jsx + supabaseClient.js + data.js)
@@ -2944,7 +2944,7 @@ function SettingsPage({ user, identity, facilities }) {
         <div className="role-row" key={m.user_id}>
           <div className="role-who"><span className="fname">{m.name || m.email || 'Unnamed user'}</span><span className="fmeta">{m.email || m.user_id}{m.role ? ' \u00b7 ' + ((roleById(m.role) || {}).label || m.role) : ' \u00b7 no role set'}</span></div>
           <select className="sel" value={m.role || ''} disabled={teamBusy || (m.email || '').toLowerCase() === OWNER_EMAIL} onChange={e => setMemberRole(m.user_id, e.target.value, m.name || m.email)}>
-            <option value="" disabled>Set role\u2026</option>
+            <option value="" disabled>Set role…</option>
             <option value="team_leader">Team Leader</option>
             <option value="field_monitor">Field Monitor</option>
             <option value="hefamaa_reviewer">HEFAMAA Reviewer</option>
@@ -3700,7 +3700,7 @@ export default function App() {
       try {
         if (forceOut) { try { supabase.auth.signOut() } catch (e) {} }
         const res = supabase.auth.onAuthStateChange((_e, s) => {
-          if (s && s.user) { setUser({ email: s.user.email, id: s.user.id, name: (s.user.user_metadata && s.user.user_metadata.full_name) || '' }); loadRole(s.user.id, { email: s.user.email }); setView('app') }
+          if (s && s.user) { const nm = (s.user.user_metadata && s.user.user_metadata.full_name) || ''; setUser({ email: s.user.email, id: s.user.id, name: nm }); try { ROLEMGR.saveIdentity(s.user.id, s.user.email, nm) } catch (e) {} loadRole(s.user.id, { email: s.user.email }); setView('app') }
           else { setUser(null); setRole(null); setViewAs(null); setView(prev => (prev === 'app' ? 'site' : prev)) }
         })
         subscription = res.data.subscription

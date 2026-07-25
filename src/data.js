@@ -368,19 +368,32 @@ export const roles = {
       return demo ? [{ user_id: 'demo', email: 'you (demo)', name: 'Demo user', role: demo }] : []
     }
     // Everyone with a saved role
-    const { data: kvRows } = await supabase.from('kv').select('user_id, v').eq('k', 'role')
+    const { data: kvRows } = await supabase.from('kv').select('user_id, k, v').in('k', ['role', 'identity'])
     const byId = {}
-    ;(kvRows || []).forEach(r => { const role = r.v && (typeof r.v === 'string' ? r.v : r.v.role); if (r.user_id) byId[r.user_id] = { user_id: r.user_id, role: role || null } })
-    // Names/emails come from access_requests (the roster of who signed up)
+    ;(kvRows || []).forEach(r => {
+      if (!r.user_id) return
+      const e = byId[r.user_id] || { user_id: r.user_id, role: null }
+      if (r.k === 'role') { e.role = r.v && (typeof r.v === 'string' ? r.v : r.v.role) || null }
+      else if (r.k === 'identity' && r.v && typeof r.v === 'object') { e.email = e.email || r.v.email; e.name = e.name || r.v.name }
+      byId[r.user_id] = e
+    })
+    // Fallback: names/emails for anyone who also has an access request on file
     const { data: reqs } = await supabase.from('access_requests').select('user_id, email, name, role, status')
     ;(reqs || []).forEach(r => { if (!r.user_id) return; const e = byId[r.user_id] || { user_id: r.user_id, role: null }; e.email = e.email || r.email; e.name = e.name || r.name; e.requested = r.role; e.req_status = r.status; byId[r.user_id] = e })
-    return Object.values(byId)
+    return Object.values(byId).filter(e => e.role || e.email)
   },
   async setRole(userId, role) {
     if (!userId || !role) return
     if (MODE !== 'supabase') { localStorage.setItem('realms_demo_role', role); return }
     const { error } = await supabase.from('kv').upsert({ user_id: userId, k: 'role', v: role, updated_at: new Date().toISOString() }, { onConflict: 'user_id,k' })
     if (error) throw error
+  },
+  // Store a person's email and name so the owner's Team roles list can show who they are.
+  // Team leaders and field monitors don't create an access request, so without this their
+  // identity would never be on file. Called on sign-in; best-effort.
+  async saveIdentity(userId, email, name) {
+    if (MODE !== 'supabase' || !userId) return
+    try { await supabase.from('kv').upsert({ user_id: userId, k: 'identity', v: { email: email || '', name: name || '' }, updated_at: new Date().toISOString() }, { onConflict: 'user_id,k' }) } catch (e) {}
   }
 }
 
