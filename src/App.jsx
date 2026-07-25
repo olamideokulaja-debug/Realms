@@ -4,7 +4,7 @@ import 'leaflet/dist/leaflet.css'
 import { supabase, MODE } from './supabaseClient.js'
 import { facilities as FAC, assignments as ASG, visits as VIS, notifications as NOTIF, calls as CALLS, access as ACC, roles as ROLEMGR, facilitiesFromCSV, orderRoute, clusterDays, clusterDaysByDate, googleMapsDirUrl, geocode, uploadEvidence, sendNotify, askAI, seedSampleData, clearAllData } from './data.js'
 
-const BUILD = 'field-2026-07-18-an'
+const BUILD = 'field-2026-07-18-ap'
 
 /*
   REALMS FIELD — Stages 1 to 3 (single-file App.jsx + supabaseClient.js + data.js)
@@ -195,13 +195,13 @@ const ROLES = [
 ]
 
 const ROLE_TABS = {
-  team_leader: ['dashboard', 'facilities', 'map', 'engage', 'monitor', 'debrief', 'secondassessment', 'assign', 'approvals', 'reports'],
+  team_leader: ['dashboard', 'rounds', 'facilities', 'map', 'engage', 'monitor', 'debrief', 'secondassessment', 'assign', 'approvals', 'reports'],
   field_monitor: ['dashboard', 'facilities', 'map', 'engage', 'monitor', 'debrief', 'secondassessment'],
-  rhsc_hq: ['dashboard', 'facilities', 'map', 'secondassessment', 'reports', 'approvals', 'integrity', 'followups', 'access', 'assistant', 'settings'],
+  rhsc_hq: ['dashboard', 'rounds', 'facilities', 'map', 'secondassessment', 'reports', 'approvals', 'integrity', 'followups', 'access', 'assistant', 'settings'],
   hefamaa_reviewer: ['dashboard', 'facilities', 'reports'],
   facility_proprietor: ['dashboard', 'myfacility']
 }
-const TAB_LABEL = { dashboard: 'Dashboard', facilities: 'Facilities', map: 'Map & Route', engage: 'Engage', monitor: 'Monitor', debrief: 'Debrief', secondassessment: 'Second Assessment', assign: 'Assign', reports: 'Reports', analytics: 'Analytics', myfacility: 'My Facility', followups: 'Follow-ups', settings: 'Settings', assistant: 'AI Assistant', approvals: 'Approvals', integrity: 'Integrity', access: 'Access requests' }
+const TAB_LABEL = { dashboard: 'Dashboard', rounds: 'Rounds (1st / 2nd)', facilities: 'Facilities', map: 'Map & Route', engage: 'Engage', monitor: 'Monitor', debrief: 'Debrief', secondassessment: 'Second Assessment', assign: 'Assign', reports: 'Reports', analytics: 'Analytics', myfacility: 'My Facility', followups: 'Follow-ups', settings: 'Settings', assistant: 'AI Assistant', approvals: 'Approvals', integrity: 'Integrity', access: 'Access requests' }
 const CAN_EDIT = ['team_leader', 'field_monitor', 'rhsc_hq']
 const AREA_COLORS = ['#6D4B8E', '#3E86C9', '#C7549C', '#5FA35A', '#D08A2E', '#7E63A0', '#4AA3A3', '#B0562E', '#6C6FD0', '#C0603C']
 
@@ -3372,7 +3372,13 @@ function DonutInteractive({ data, active, onPick }) {
     <div className="donut-legend">{data.map((d, i) => (<button key={i} className={'dl' + (active === d.key ? ' on' : '')} onClick={() => onPick(d.key)}><span className="dot" style={{ background: d.color }} />{d.label}<em>{d.value}</em></button>))}</div>
   </div>)
 }
-function AnalyticsBody({ facilities, onOpen, role }) {
+function RoundsPage({ facilities, role, onOpen }) {
+  return (<div className="page">
+    <div className="ptitle"><h1>Rounds</h1><p>First and second visits, each on its own. Use the toggle to switch between rounds; a facility with both visits is counted in each.</p></div>
+    <AnalyticsBody facilities={facilities} onOpen={onOpen} role={role} initialRound="first" />
+  </div>)
+}
+function AnalyticsBody({ facilities, onOpen, role, initialRound }) {
   const [visits, setVisits] = useState([])
   const [calls, setCalls] = useState([])
   const [access, setAccess] = useState([])
@@ -3421,6 +3427,27 @@ function AnalyticsBody({ facilities, onOpen, role }) {
   const coverage = facilities.length ? Math.round((rated.length + unscored.length) / facilities.length * 100) : null
   const rag = { green: 0, amber: 0, red: 0 }; rated.forEach(v => { if (rag[v.overall_rating] != null) rag[v.overall_rating]++ })
 
+  // First / second round split. "All" keeps the latest-wins current-state view above.
+  // For a round view we take, per facility, that facility's OWN visit of that round (its
+  // latest if it somehow has more than one), so a facility with both visits is counted in
+  // BOTH rounds - each round's figure is the true number of visits performed in it.
+  const [roundView, setRoundView] = useState(initialRound || 'all') // all | first | second
+  const isFirstRound = v => !isSecondVisit(v) && (v.status === 'monitored' || v.status === 'debriefed' || (v.assessment && (v.assessment.ruid || v.assessment.source !== 'second_assessment')) || (v.monitoring && v.monitoring.first_assessment)) && isOutcome(v)
+  const isSecondRound = v => isSecondVisit(v) && isOutcome(v)
+  const perFacLatest = pred => { const m = {}; outcomes.filter(pred).forEach(v => { const id = v.facility_id || ('n:' + (v.facility_name || '')); if (!id) return; if (!m[id] || vdate(v) > vdate(m[id])) m[id] = v }); return Object.values(m) }
+  const firstSet = perFacLatest(isFirstRound)
+  const secondSet = perFacLatest(isSecondRound)
+  // Which set feeds the ring/donut/list, and its RAG counts.
+  const roundSet = roundView === 'first' ? firstSet : roundView === 'second' ? secondSet : current
+  const roundRated = roundSet.filter(v => v.score != null)
+  const roundUnscored = roundSet.filter(v => v.score == null && ((v.assessment && v.assessment.visited_unscored) || v.overall_rating === 'unscored'))
+  const roundRag = { green: 0, amber: 0, red: 0 }; roundRated.forEach(v => { if (roundRag[v.overall_rating] != null) roundRag[v.overall_rating]++ })
+  const roundAvg = roundRated.length ? Math.round(roundRated.reduce((a, v) => a + v.score, 0) / roundRated.length) : null
+  const roundComplianceRate = roundRated.length ? Math.round(roundRated.filter(v => v.overall_rating === 'green').length / roundRated.length * 100) : null
+  const returnRate = firstSet.length ? Math.round(secondSet.length / firstSet.length * 100) : null
+  const dRag = roundView === 'all' ? rag : roundRag
+  const dUnscored = roundView === 'all' ? unscored : roundUnscored
+
   const called = new Set(calls.map(c => c.visit_id))
   const awaitingCalls = vis.filter(v => v.status === 'debriefed' && !(v.debrief && v.debrief.first_visit) && !called.has(v.id)).length
   const seconds = vis.filter(v => v.round === 2 || v.status === 'second' || (v.debrief && v.debrief.second_visit))
@@ -3431,7 +3458,7 @@ function AnalyticsBody({ facilities, onOpen, role }) {
   const needsAttention = rated.filter(v => v.overall_rating === 'red' || v.overall_rating === 'amber').length
 
   const ragOf = v => v.score != null ? v.overall_rating : (((v.assessment && v.assessment.visited_unscored) || v.overall_rating === 'unscored') ? 'unscored' : null)
-  const explore = current
+  const explore = roundSet
     .map(v => ({ v, f: facilities.find(f => f.id === v.facility_id) || { name: v.facility_name, area: v.area } }))
     .filter(({ v }) => ragF === 'all' || ragOf(v) === ragF)
     .filter(({ f, v }) => areaF === 'all' || (f.area || v.area || 'Unassigned') === areaF)
@@ -3479,9 +3506,9 @@ function AnalyticsBody({ facilities, onOpen, role }) {
     { l: 'Access requests', v: vv ? accessPending : null, tab: 'access', tone: 'r', show: tabsFor.includes('access') }
   ].filter(k => k.show)
 
-  const ragChips = [['all', 'All', rated.length + unscored.length], ['green', 'Green', rag.green], ['amber', 'Amber', rag.amber], ['red', 'Red', rag.red], ['unscored', 'Not scored', unscored.length]]
-  const donutData = [{ label: 'Green', value: rag.green, color: '#2E7D46', key: 'green' }, { label: 'Amber', value: rag.amber, color: '#C77D0A', key: 'amber' }, { label: 'Red', value: rag.red, color: '#B4442E', key: 'red' }, { label: 'Not scored', value: unscored.length, color: '#B9AEC9', key: 'unscored' }]
-  const legend = [['green', 'Green', rag.green], ['amber', 'Amber', rag.amber], ['red', 'Red', rag.red], ['unscored', 'Not scored', unscored.length]]
+  const ragChips = [['all', 'All', roundRated.length + roundUnscored.length], ['green', 'Green', dRag.green], ['amber', 'Amber', dRag.amber], ['red', 'Red', dRag.red], ['unscored', 'Not scored', roundView === 'all' ? unscored.length : roundUnscored.length]]
+  const donutData = [{ label: 'Green', value: dRag.green, color: '#2E7D46', key: 'green' }, { label: 'Amber', value: dRag.amber, color: '#C77D0A', key: 'amber' }, { label: 'Red', value: dRag.red, color: '#B4442E', key: 'red' }, { label: 'Not scored', value: dUnscored.length, color: '#B9AEC9', key: 'unscored' }]
+  const legend = [['green', 'Green', dRag.green], ['amber', 'Amber', dRag.amber], ['red', 'Red', dRag.red], ['unscored', 'Not scored', dUnscored.length]]
 
   return (<>
     {visLoad === 'error' && <div className="db-banner err">
@@ -3495,13 +3522,21 @@ function AnalyticsBody({ facilities, onOpen, role }) {
     {visLoad === 'loading' && <div className="db-banner load">
       <span className="db-spin" /> Loading the latest visit data…
     </div>}
+    <div className="dash-rounds">
+      {[['all', 'All rounds'], ['first', 'First visits'], ['second', 'Second visits']].map(([k, l]) => (
+        <button key={k} className={'dash-round' + (roundView === k ? ' on' : '')} onClick={() => { setRoundView(k); setRagF('all') }}>{l}
+          <span className="dash-round-n">{k === 'all' ? current.length : k === 'first' ? firstSet.length : secondSet.length}</span>
+        </button>))}
+      {roundView === 'second' && returnRate != null && <span className="dash-round-note">{secondSet.length} of {firstSet.length} first-visit facilities returned to ({returnRate}%)</span>}
+      {roundView === 'first' && <span className="dash-round-note">Every facility that has had a first visit</span>}
+    </div>
     <div className="dash-hero">
-      <div className="dash-hero-ring"><Ring pct={complianceRate} label={avg == null ? 'No scores yet' : 'Avg score ' + avg + '%'} /></div>
+      <div className="dash-hero-ring"><Ring pct={roundView === 'all' ? complianceRate : roundComplianceRate} label={(roundView === 'all' ? avg : roundAvg) == null ? 'No scores yet' : 'Avg score ' + (roundView === 'all' ? avg : roundAvg) + '%'} /></div>
       <div className="dash-hero-body">
-        <p className="dash-hero-sum">{summary}</p>
+        <p className="dash-hero-sum">{roundView === 'all' ? summary : roundView === 'first' ? (firstSet.length + ' facilities have had a first visit \u00b7 ' + (roundComplianceRate == null ? 'no scores yet' : roundComplianceRate + '% green')) : (secondSet.length + ' facilities re-inspected' + (returnRate != null ? ' \u00b7 ' + returnRate + '% of first-visit facilities' : '') + ' \u00b7 ' + (roundComplianceRate == null ? 'no scores yet' : roundComplianceRate + '% green'))}</p>
         <div className="dash-hero-cov">
-          <div className="cov-bar"><div className="cov-fill" style={{ width: (coverage || 0) + '%' }} /></div>
-          <span className="cov-cap">{rated.length + unscored.length} of {facilities.length} facilities visited</span>
+          <div className="cov-bar"><div className="cov-fill" style={{ width: (roundView === 'all' ? (coverage || 0) : roundView === 'first' ? (facilities.length ? Math.round(firstSet.length / facilities.length * 100) : 0) : (returnRate || 0)) + '%' }} /></div>
+          <span className="cov-cap">{roundView === 'all' ? (rated.length + unscored.length) + ' of ' + facilities.length + ' facilities visited' : roundView === 'first' ? firstSet.length + ' of ' + facilities.length + ' facilities first-visited' : secondSet.length + ' of ' + firstSet.length + ' due facilities returned to'}</span>
         </div>
         <div className="dash-hero-legend">{legend.map(([k, l, n]) => (<span key={k} className={'hero-leg ' + k}><span className="hr-dot" />{l}<em>{n}</em></span>))}</div>
       </div>
@@ -3616,7 +3651,8 @@ function TabIcon({ id }) {
     assistant: 'M12 3l2 5 5 2-5 2-2 5-2-5-5-2 5-2zM19 15l1 2.5L22 19l-2 1-1 2.5-1-2.5L16 19l2-1z',
     approvals: 'M9 12l2 2 4-4M12 3l7 4v5c0 4.5-3 8.3-7 9-4-.7-7-4.5-7-9V7z',
     integrity: 'M12 3l7 4v5c0 4.5-3 8.3-7 9-4-.7-7-4.5-7-9V7zM12 8v4M12 15h.01',
-    access: 'M10 11a4 4 0 100-8 4 4 0 000 8zM3 21v-1a7 7 0 019.5-6.5M15 18l2 2 4-4'
+    access: 'M10 11a4 4 0 100-8 4 4 0 000 8zM3 21v-1a7 7 0 019.5-6.5M15 18l2 2 4-4',
+    rounds: 'M4 7h7M4 7l3-3M4 7l3 3M20 17h-7M20 17l-3-3M20 17l-3 3'
   }[id] || 'M4 4h16v16H4z'
   return (<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d={p} /></svg>)
 }
@@ -3889,6 +3925,7 @@ export default function App() {
   else if (view === 'app' && user) {
     if (hqPending) body = <PendingAccess kind={pendKind} user={user} facilities={facs} identity={identity} onSignOut={signOut} onBack={() => setHqPending(false)} />
     else if (!role) body = <RolePicker identity={identity} onPick={pickRole} onSignOut={signOut} />
+    else if (appTab === 'rounds') body = <RoundsPage facilities={facs} role={effRole} onOpen={setAppTab} />
     else if (appTab === 'facilities') body = <FacilitiesPage list={facs} canEdit={canEdit} userId={user.id} reload={reloadFacs} />
     else if (appTab === 'map') body = <MapRoutePage list={facs} role={effRole} userId={user.id} />
     else if (appTab === 'engage') body = <EngagePage list={facs} identity={effId} role={effRole} userId={user.id} />
@@ -4031,6 +4068,8 @@ const css = `
 .realms .tb-pw { display:inline-flex; align-items:center; gap:6px; padding:8px 12px; border:1.5px solid var(--line); background:none; border-radius:24px; color:var(--p-deep); font-weight:500; font-size:14px; transition:.16s; cursor:pointer; }
 .realms .tb-pw:hover { border-color:var(--p); color:var(--p); }
 .realms .pw-show { display:flex; align-items:center; gap:8px; font-size:13.5px; color:#6A5A83; margin:2px 0 6px; cursor:pointer; }
+.realms .modal .field input { color:var(--ink); -webkit-text-fill-color:var(--ink); caret-color:var(--p); background:#fff; opacity:1; }
+.realms .modal .field input:-webkit-autofill { -webkit-text-fill-color:var(--ink); -webkit-box-shadow:0 0 0 30px #fff inset; }
 .realms .pw-show input { width:auto; }
 .realms .pw-err { color:#C0392B; font-size:13.5px; margin:0 0 6px; }
 @media (max-width:640px){ .realms .tb-pw-lab { display:none; } .realms .tb-pw { padding:8px; } }
@@ -4571,6 +4610,8 @@ const css = `
 .realms .topbar .who { font-size:14.5px; color:#F1E5FB; }
 .realms .topbar .signin { border:1.5px solid rgba(255,255,255,.5); color:#fff; background:none; }
 .realms .topbar .signin:hover { background:#fff; color:var(--p-deep); }
+.realms .topbar .tb-pw { border:1.5px solid rgba(255,255,255,.5); color:#fff; background:none; }
+.realms .topbar .tb-pw:hover { background:#fff; color:var(--p-deep); border-color:#fff; }
 .realms .shell { flex:1; display:flex; align-items:flex-start; }
 .realms .sidebar { position:sticky; top:56px; align-self:flex-start; width:214px; flex-shrink:0; height:calc(100vh - 56px); background:#fff; border-right:1px solid var(--line); display:flex; flex-direction:column; padding:14px 12px; transition:width .18s ease; }
 .realms .sidebar.collapsed { width:66px; }
@@ -4870,6 +4911,14 @@ const css = `
 @media (max-width:560px){ .realms .reins-row { grid-template-columns:repeat(2,1fr); } }
 
 /* --- dashboard redesign --- */
+.realms .dash-rounds { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin:0 0 14px; }
+.realms .dash-round { display:inline-flex; align-items:center; gap:8px; padding:9px 16px; border:1.5px solid var(--line); background:#fff; border-radius:24px; color:var(--p-deep); font-weight:600; font-size:14px; cursor:pointer; transition:.16s; }
+.realms .dash-round:hover { border-color:var(--p); }
+.realms .dash-round.on { background:var(--p-deep); color:#fff; border-color:var(--p-deep); }
+.realms .dash-round-n { display:inline-flex; align-items:center; justify-content:center; min-width:22px; height:20px; padding:0 6px; border-radius:11px; background:var(--lav2); color:var(--p-deep); font-size:12px; font-weight:700; }
+.realms .dash-round.on .dash-round-n { background:rgba(255,255,255,.22); color:#fff; }
+.realms .dash-round-note { font-size:13px; color:#6A5A83; margin-left:2px; }
+@media (max-width:640px){ .realms .dash-round-note { width:100%; margin:4px 0 0; } }
 .realms .dash-hero { display:flex; gap:22px; align-items:center; background:linear-gradient(120deg,#F3EEFA,#FBF6FF 55%,#F6EEF6); border:1px solid var(--line); border-radius:var(--r-lg); padding:20px 24px; margin:0 0 16px; box-shadow:var(--e1); }
 .realms .dash-hero-ring { flex:none; }
 .realms .dash-hero-body { flex:1; min-width:0; }
