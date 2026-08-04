@@ -4,7 +4,7 @@ import 'leaflet/dist/leaflet.css'
 import { supabase, MODE } from './supabaseClient.js'
 import { facilities as FAC, assignments as ASG, visits as VIS, notifications as NOTIF, calls as CALLS, access as ACC, roles as ROLEMGR, facilitiesFromCSV, orderRoute, clusterDays, clusterDaysByDate, googleMapsDirUrl, geocode, uploadEvidence, sendNotify, askAI, seedSampleData, clearAllData } from './data.js'
 
-const BUILD = 'field-2026-07-18-ap'
+const BUILD = 'field-2026-07-18-aq'
 
 /*
   REALMS FIELD — Stages 1 to 3 (single-file App.jsx + supabaseClient.js + data.js)
@@ -3062,11 +3062,58 @@ function AccessPanel({ identity, user, onChange, bare }) {
 /* ---------- approvals (Team Lead sign-off before HEFAMAA) ---------- */
 function needsApproval(v) { return (v.status === 'debriefed') || (v.status === 'second') || !!(v.debrief && (v.debrief.first_visit || v.debrief.second_visit)) || !!(v.assessment && v.assessment.ruid) || isSecondVisit(v) }
 function approvalState(v) { return (v.approval && v.approval.status) || 'pending' }
+function EditReportModal({ visit, onClose, onSaved }) {
+  const a0 = visit.assessment || {}
+  const [f, setF] = useState(() => {
+    const init = {}
+    SA_FIELDS.forEach(([k]) => { init[k] = a0[k] || '' })
+    init.notes = a0.notes || ''
+    init.new_recommendations = (Array.isArray(a0.new_recommendations) ? a0.new_recommendations : []).join('\n')
+    return init
+  })
+  const [busy, setBusy] = useState(false)
+  const set = (k, v) => setF(s => ({ ...s, [k]: v }))
+  async function save() {
+    setBusy(true)
+    const assessment = { ...a0 }
+    SA_FIELDS.forEach(([k]) => { assessment[k] = f[k] })
+    assessment.notes = f.notes
+    assessment.new_recommendations = f.new_recommendations.split('\n').map(s => s.trim()).filter(Boolean)
+    assessment.edited = { by: 'approver', at: new Date().toISOString() }
+    // The inspection report reads second-visit fields from monitoring.second_assessment when
+    // assessment isn't the second-assessment object, so mirror the edit there too.
+    const monitoring = { ...(visit.monitoring || {}) }
+    if (assessment.source === 'second_assessment' || (monitoring.second_assessment)) monitoring.second_assessment = assessment
+    try {
+      await VIS.update(visit.id, { assessment, monitoring })
+      toast('Report updated.'); onSaved({ ...visit, assessment, monitoring }); onClose()
+    } catch (e) { toast('Could not save the changes.', 'err') } finally { setBusy(false) }
+  }
+  return (<div className="modal-scrim" onClick={onClose}>
+    <div className="modal anim edit-modal" onClick={e => e.stopPropagation()} role="dialog" aria-modal="true">
+      <h3>Edit report before approval</h3>
+      <p className="hintline" style={{ marginTop: 0 }}>Correct any details or wording here. Scores, the rating and the integrity notice are fixed and can’t be changed. Once you approve the report, it locks.</p>
+      <div className="edit-grid">
+        {SA_FIELDS.map(([k, label, kind]) => (
+          <label key={k} className={'field ' + (kind === 'l' ? 'edit-wide' : 'sm')}><span>{label}</span>
+            {kind === 'l' ? <textarea rows="2" value={f[k]} onChange={e => set(k, e.target.value)} /> : <input value={f[k]} onChange={e => set(k, e.target.value)} />}
+          </label>))}
+      </div>
+      <label className="field edit-wide"><span>Observation (Gaps)</span><textarea rows="3" value={f.notes} onChange={e => set('notes', e.target.value)} placeholder="What was found on this visit" /></label>
+      <label className="field edit-wide"><span>Recommendations (one per line)</span><textarea rows="4" value={f.new_recommendations} onChange={e => set('new_recommendations', e.target.value)} placeholder="One recommendation per line" /></label>
+      <div className="modal-actions">
+        <button className="btn ghost" onClick={onClose} disabled={busy}>Cancel</button>
+        <button className="btn primary" onClick={save} disabled={busy}>{busy ? 'Saving\u2026' : 'Save changes'}</button>
+      </div>
+    </div>
+  </div>)
+}
 function ApprovalsPage({ userId, identity, role }) {
   const [visits, setVisits] = useState([])
   const [q, setQ] = useState(''); const [filter, setFilter] = useState('pending')
   const [busy, setBusy] = useState('')
   const [noteFor, setNoteFor] = useState(null); const [note, setNote] = useState('')
+  const [editFor, setEditFor] = useState(null)
   const origin = (typeof window !== 'undefined' && window.location) ? window.location.origin : ''
   const canApprove = role === 'team_leader' || role === 'rhsc_hq'
   async function refresh() { try { setVisits(await VIS.list()) } catch (e) {} }
@@ -3120,6 +3167,7 @@ function ApprovalsPage({ userId, identity, role }) {
           <div className="rep-actions">
             <button className="mini" onClick={() => safePrint(hasFirstAssessment(v) && !isSecondVisit(v) ? 'Monitoring Report' : 'Inspection Report', () => hasFirstAssessment(v) && !isSecondVisit(v) ? buildMonitoringReport(v, origin) : buildInspectionReport(v, v.debrief || deriveDebrief(v), origin))}>Review</button>
             {isSecondVisit(v) && <button className="mini" onClick={() => safePrint('Second Assessment Report', () => buildSecondReport(v, origin, visits))}>Comparison</button>}
+            {canApprove && st !== 'approved' && <button className="mini" onClick={() => setEditFor(v)}>Edit</button>}
             {canApprove && st !== 'approved' && <button className="mini ok" onClick={() => decide(v, 'approved')} disabled={busy === v.id}>Approve</button>}
             {canApprove && st !== 'returned' && <button className="mini danger" onClick={() => { setNoteFor(noteFor === v.id ? null : v.id); setNote('') }}>Return</button>}
           </div>
@@ -3129,6 +3177,7 @@ function ApprovalsPage({ userId, identity, role }) {
           </div>}
           {st === 'returned' && v.approval && v.approval.note && <p className="hintline">Returned: {v.approval.note}</p>}
         </div>) })}</div>}
+    {editFor && <EditReportModal visit={editFor} onClose={() => setEditFor(null)} onSaved={u => setVisits(vs => vs.map(x => x.id === u.id ? u : x))} />}
   </div>)
 }
 
@@ -4072,6 +4121,11 @@ const css = `
 .realms .modal .field input:-webkit-autofill { -webkit-text-fill-color:var(--ink); -webkit-box-shadow:0 0 0 30px #fff inset; }
 .realms .pw-show input { width:auto; }
 .realms .pw-err { color:#C0392B; font-size:13.5px; margin:0 0 6px; }
+.realms .edit-modal { max-width:640px; width:calc(100vw - 40px); max-height:88vh; overflow-y:auto; }
+.realms .edit-grid { display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:8px; }
+.realms .edit-grid .edit-wide { grid-column:1 / -1; }
+.realms .field.edit-wide { display:block; }
+@media (max-width:560px){ .realms .edit-grid { grid-template-columns:1fr; } }
 @media (max-width:640px){ .realms .tb-pw-lab { display:none; } .realms .tb-pw { padding:8px; } }
 .realms .signin:hover { background:var(--p); color:#fff; }
 .realms .app-bar .who { font-size:14.5px; color:#5A4C74; }
