@@ -4,7 +4,7 @@ import 'leaflet/dist/leaflet.css'
 import { supabase, MODE } from './supabaseClient.js'
 import { facilities as FAC, assignments as ASG, visits as VIS, notifications as NOTIF, calls as CALLS, access as ACC, roles as ROLEMGR, facilitiesFromCSV, orderRoute, clusterDays, clusterDaysByDate, googleMapsDirUrl, geocode, uploadEvidence, sendNotify, askAI, seedSampleData, clearAllData } from './data.js'
 
-const BUILD = 'field-2026-07-18-aq'
+const BUILD = 'field-2026-07-18-ar'
 
 /*
   REALMS FIELD — Stages 1 to 3 (single-file App.jsx + supabaseClient.js + data.js)
@@ -230,6 +230,17 @@ const VIEW_USERS = [
 ]
 function roleById(id) { return ROLES.find(r => r.id === id) || null }
 function hasCoords(f) { return typeof f.lat === 'number' && typeof f.lng === 'number' && !isNaN(f.lat) && !isNaN(f.lng) }
+// Area names were typed inconsistently over time ("Ifako Ijaiye" / "Ifako-Ijaiye" /
+// "ifako ijaiye"). canonArea folds those to one key; makeAreaLabeller returns a function
+// that maps any facility to its area's most common tidy spelling, so one real area shows
+// once across the filters even if the underlying records still vary.
+function canonArea(a) { return (a == null || a === '' ? 'Unassigned' : a).toString().trim().toLowerCase().replace(/[-_]+/g, ' ').replace(/\s+/g, ' ') }
+function makeAreaLabeller(list) {
+  const tally = {}
+  ;(list || []).forEach(f => { const raw = (f.area || 'Unassigned').toString().trim() || 'Unassigned'; const c = canonArea(raw); (tally[c] = tally[c] || {})[raw] = (tally[c][raw] || 0) + 1 })
+  const label = {}; Object.keys(tally).forEach(c => { label[c] = Object.keys(tally[c]).sort((x, y) => tally[c][y] - tally[c][x])[0] })
+  return x => label[canonArea(typeof x === 'string' ? x : (x && x.area))] || 'Unassigned'
+}
 
 /* ---------- icons ---------- */
 function IconLeader() { return (<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6"><circle cx="12" cy="8" r="3.4"/><path d="M5 20c0-3.6 3.1-6 7-6s7 2.4 7 6"/><path d="M12 1.6l1 2 2.2.2-1.7 1.5.5 2.1L12 6.4 9.9 7.5l.5-2.1L8.8 3.8 11 3.6z"/></svg>) }
@@ -587,7 +598,8 @@ function FacilitiesPage({ list, canEdit, userId, reload }) {
   const flist = list.filter(f => matchQ(f, q) && (
     fstate === 'all' ? true : fstate === 'live' ? isLive(f) : fstate === 'dead' ? !isLive(f)
     : fstate === 'field' ? f.source === 'field' : fstate === 'unreg' ? (f.reg_status && f.reg_status !== 'Registered') : true))
-  flist.forEach(f => { const a = f.area || 'Unassigned'; (groups[a] = groups[a] || []).push(f) })
+  const facAreaLabel = makeAreaLabeller(list)
+  flist.forEach(f => { const a = facAreaLabel(f); (groups[a] = groups[a] || []).push(f) })
   const areas = Object.keys(groups).sort()
   const missing = list.filter(f => !hasCoords(f)).length
 
@@ -794,7 +806,11 @@ function pinIcon(color, num) {
 }
 function MapRoutePage({ list, role, userId }) {
   const mapRef = useRef(null); const mapObj = useRef(null); const layerRef = useRef(null)
-  const areas = Array.from(new Set(list.map(f => f.area || 'Unassigned'))).sort()
+  // Group facilities by a normalised area key so one real area shows once (see canonArea).
+  const areaLabel = makeAreaLabeller(list)
+  const canon = canonArea
+  const labelByCanon = {}; list.forEach(f => { labelByCanon[canon(f.area)] = areaLabel(f) })
+  const areas = Array.from(new Set(list.map(areaLabel))).sort()
   const colorMap = {}; areas.forEach((a, i) => { colorMap[a] = AREA_COLORS[i % AREA_COLORS.length] })
   const [area, setArea] = useState('all')
   const [tab, setTab] = useState('plan')
@@ -816,9 +832,9 @@ function MapRoutePage({ list, role, userId }) {
   const isHQ = role === 'rhsc_hq'
   useEffect(() => { VIS.list().then(setVisits).catch(() => {}) }, [])
 
-  const areaCount = {}; list.forEach(f => { const a = f.area || 'Unassigned'; areaCount[a] = (areaCount[a] || 0) + 1 })
+  const areaCount = {}; list.forEach(f => { const a = areaLabel(f); areaCount[a] = (areaCount[a] || 0) + 1 })
   function pickArea(a) { setArea(a); setPlan(null); setPlanErr(''); setOpenDay(-1) }
-  const filtered = (area === 'all' ? list : list.filter(f => (f.area || 'Unassigned') === area))
+  const filtered = (area === 'all' ? list : list.filter(f => areaLabel(f) === area))
   const plotted = filtered.filter(hasCoords)
 
   const visByFac = {}
@@ -827,7 +843,7 @@ function MapRoutePage({ list, role, userId }) {
   function facStatus(f) { const v = facVisit(f); return v ? (v.status === 'debriefed' ? 'Debriefed' : v.status === 'monitored' ? 'Assessed' : 'Engaged') : 'Not visited' }
   const visitedCount = filtered.filter(facVisit).length
   const assessedCount = filtered.filter(f => { const v = facVisit(f); return v && (v.status === 'monitored' || v.status === 'debriefed') }).length
-  const overdueCount = visits.filter(v => (area === 'all' || (v.area || 'Unassigned') === area) && v.debrief && v.debrief.remediation_deadline && daysUntil(v.debrief.remediation_deadline) != null && daysUntil(v.debrief.remediation_deadline) < 7).length
+  const overdueCount = visits.filter(v => (area === 'all' || (labelByCanon[canon(v.area)] || 'Unassigned') === area) && v.debrief && v.debrief.remediation_deadline && daysUntil(v.debrief.remediation_deadline) != null && daysUntil(v.debrief.remediation_deadline) < 7).length
   const tableRows = filtered.filter(f => matchQ(f, q))
 
   const firstDone = {}, laterDone = {}, firstRec = {}
@@ -928,7 +944,7 @@ function MapRoutePage({ list, role, userId }) {
     const m = mapObj.current, lg = layerRef.current; if (!m || !lg) return
     lg.clearLayers()
     focus.forEach((f, i) => {
-      const mk = L.marker([f.lat, f.lng], { icon: pinIcon(focusRouted ? '#6D4B8E' : (colorMap[f.area || 'Unassigned'] || '#6D4B8E'), focusRouted ? i + 1 : null) })
+      const mk = L.marker([f.lat, f.lng], { icon: pinIcon(focusRouted ? '#6D4B8E' : (colorMap[areaLabel(f)] || '#6D4B8E'), focusRouted ? i + 1 : null) })
       mk.bindPopup('<strong>' + (f.name || '') + '</strong><br>' + [f.category, f.area, f.phone].filter(Boolean).join(' \u00b7 '))
       mk.addTo(lg)
     })
@@ -3459,7 +3475,8 @@ function AnalyticsBody({ facilities, onOpen, role, initialRound }) {
   const tabsFor = ROLE_TABS[role] || []
   const vis = visits
   const vdate = v => (v.visit_date || (v.assessment && v.assessment.date) || v.arrival_time || v.created_at || '')
-  const areasList = Array.from(new Set(facilities.map(f => f.area || 'Unassigned'))).sort()
+  const dashAreaLabel = makeAreaLabeller(facilities)
+  const areasList = Array.from(new Set(facilities.map(dashAreaLabel))).sort()
 
   // Only a completed assessment can be a facility's current record. A bare check-in
   // means the team has arrived, not that the outcome has changed, so it must not
@@ -3510,13 +3527,13 @@ function AnalyticsBody({ facilities, onOpen, role, initialRound }) {
   const explore = roundSet
     .map(v => ({ v, f: facilities.find(f => f.id === v.facility_id) || { name: v.facility_name, area: v.area } }))
     .filter(({ v }) => ragF === 'all' || ragOf(v) === ragF)
-    .filter(({ f, v }) => areaF === 'all' || (f.area || v.area || 'Unassigned') === areaF)
+    .filter(({ f, v }) => areaF === 'all' || dashAreaLabel(f && f.area != null ? f : v) === areaF)
     .filter(({ v }) => matchQ(v, q))
     .sort((a, b) => (a.v.score == null ? 999 : a.v.score) - (b.v.score == null ? 999 : b.v.score))
 
   const latest = {}; outcomes.forEach(v => { const id = v.facility_id; if (!id) return; if (!latest[id] || vdate(v) > vdate(latest[id])) latest[id] = v })
   const points = facilities.filter(hasCoords)
-    .filter(f => areaF === 'all' || (f.area || 'Unassigned') === areaF)
+    .filter(f => areaF === 'all' || dashAreaLabel(f) === areaF)
     .map(f => ({ lat: f.lat, lng: f.lng, name: f.name, rag: latest[f.id] ? (latest[f.id].score != null ? latest[f.id].overall_rating : 'unscored') : null }))
     .filter(p => ragF === 'all' || (p.rag || 'none') === ragF)
 
