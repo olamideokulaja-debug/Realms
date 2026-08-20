@@ -4,7 +4,7 @@ import 'leaflet/dist/leaflet.css'
 import { supabase, MODE } from './supabaseClient.js'
 import { facilities as FAC, assignments as ASG, visits as VIS, notifications as NOTIF, calls as CALLS, access as ACC, roles as ROLEMGR, facilitiesFromCSV, orderRoute, clusterDays, clusterDaysByDate, googleMapsDirUrl, geocode, uploadEvidence, sendNotify, askAI, seedSampleData, clearAllData } from './data.js'
 
-const BUILD = 'field-2026-07-18-ar'
+const BUILD = 'field-2026-07-18-as'
 
 /*
   REALMS FIELD — Stages 1 to 3 (single-file App.jsx + supabaseClient.js + data.js)
@@ -2577,9 +2577,11 @@ function FollowUpsPage({ userId, identity, facilities, onChange }) {
     return 'called'
   }
 
-  // A completed visit needs a follow-up call whether it was a first assessment
-  // (Debrief, status 'debriefed') or a return visit (Second Assessment, status 'second').
-  const all = visits.filter(v => (v.status === 'debriefed' || v.status === 'second') && !(v.debrief && v.debrief.first_visit))
+  // A completed visit needs a follow-up call whether it was a first assessment via Monitor
+  // (status 'monitored'), taken through Debrief (status 'debriefed') or a return visit via
+  // Second Assessment (status 'second'). Integrity uses the same 'monitored'/'debriefed'
+  // set, so anything visible there is now visible here too.
+  const all = visits.filter(v => (v.status === 'monitored' || v.status === 'debriefed' || v.status === 'second') && !(v.debrief && v.debrief.first_visit))
   const counts = { awaiting: 0, called: 0, escalated: 0, integrity: 0 }
   all.forEach(v => { counts[statusOf(v)]++; if (integrityFlagged(v.id)) counts.integrity++ })
   const prio = { escalated: 0, awaiting: 1, called: 2 }
@@ -2743,15 +2745,50 @@ function metresBetween(a, b) {
   const h = Math.sin(dLat / 2) ** 2 + Math.cos(la1) * Math.cos(la2) * Math.sin(dLng / 2) ** 2
   return Math.round(2 * R * Math.asin(Math.sqrt(h)))
 }
-function IntegrityPage({ facilities }) {
+function IntegrityPage({ facilities, userId, identity }) {
   const [visits, setVisits] = useState([])
   const [calls, setCalls] = useState([])
   const [loading, setLoading] = useState(true)
   const [sample, setSample] = useState(null)
+  const [notes, setNotes] = useState([])
+  const [openReview, setOpenReview] = useState(null)
+  const [rDecision, setRDecision] = useState('')
+  const [rComment, setRComment] = useState('')
+  const [rBusy, setRBusy] = useState(false)
   useEffect(() => {
     VIS.list().then(v => { setVisits(v); setLoading(false) }).catch(() => setLoading(false))
     CALLS.list().then(setCalls).catch(() => {})
+    NOTIF.list().then(setNotes).catch(() => {})
   }, [])
+  // The latest integrity review recorded against each visit, so the row shows its current
+  // state (escalated / de-escalated) and the reason.
+  const reviewByVisit = {}
+  notes.filter(n => n.type === 'integrity_review').forEach(n => { if (!n.visit_id) return; if (!reviewByVisit[n.visit_id]) reviewByVisit[n.visit_id] = n })
+  function startReview(v) {
+    const cur = reviewByVisit[v.id]
+    setOpenReview(v.id)
+    setRDecision((cur && cur.status) || '')
+    setRComment((cur && cur.review_comment) || '')
+  }
+  async function saveReview(v) {
+    if (!rDecision) { toast('Choose escalate or de-escalate first.', 'warn'); return }
+    setRBusy(true)
+    const label = rDecision === 'escalated' ? 'ESCALATED' : 'De-escalated'
+    const msg = 'Integrity review \u2014 ' + label + ': ' + v.facility_name + (v.area ? ' (' + v.area + ')' : '') + '.' +
+      (rComment.trim() ? ' Reason: ' + rComment.trim() + '.' : '') +
+      (rDecision === 'escalated' ? ' Escalated to the MD and Chairman.' : '') +
+      ' By ' + ((identity && identity.name) || 'RHSC HQ') + '.'
+    try {
+      await NOTIF.add({ type: 'integrity_review', visit_id: v.id, facility_name: v.facility_name, area: v.area || '', channel: 'in_app', status: rDecision, review_comment: rComment.trim(), message: msg }, userId)
+      if (rDecision === 'escalated') {
+        // In-app alert to the executive office (stands in for MD + Chairman for now).
+        try { await NOTIF.add({ type: 'integrity_escalation', visit_id: v.id, facility_name: v.facility_name, area: v.area || '', channel: 'in_app', status: 'sent', message: 'ESCALATION to MD and Chairman \u2014 ' + v.facility_name + (v.area ? ' (' + v.area + ')' : '') + '.' + (rComment.trim() ? ' Reason: ' + rComment.trim() + '.' : '') }, userId) } catch (e) {}
+      }
+      toast(rDecision === 'escalated' ? 'Escalated to the MD and Chairman.' : 'Marked de-escalated.', rDecision === 'escalated' ? 'warn' : 'ok')
+      setOpenReview(null)
+      NOTIF.list().then(setNotes).catch(() => {})
+    } catch (e) { toast('Could not save the review.', 'err') } finally { setRBusy(false) }
+  }
   const scored = visits.filter(v => !(v.debrief && v.debrief.first_visit) && (v.status === 'monitored' || v.status === 'debriefed'))
   const facById = {}; (facilities || []).forEach(f => { facById[f.id] = f; facById[f.name] = f })
 
@@ -2829,12 +2866,29 @@ function IntegrityPage({ facilities }) {
     <SectionHead eyebrow="Worth a second look" title={flagged.length + ' visit' + (flagged.length === 1 ? '' : 's') + ' raised something'} />
     {loading ? <div className="skeleton skel-row" /> :
       flagged.length === 0 ? <p className="empty">Nothing flagged. This fills up as the August round runs.</p> :
-        <div className="rep-rows">{flagged.slice(0, 60).map(c => (
-          <div className="rep-row" key={c.v.id}>
+        <div className="rep-rows">{flagged.slice(0, 60).map(c => { const rev = reviewByVisit[c.v.id]; return (
+          <div className={'rep-row int-rev-row' + (rev ? ' has-rev rev-' + rev.status : '')} key={c.v.id}>
             <div className="rep-main"><span className="fname">{c.v.facility_name}</span><span className="fmeta">{c.v.area} &middot; {(c.v.arrival_time || '').slice(0, 10)} &middot; {(c.v.team || []).map(m => m.name).join(', ') || 'team not recorded'}</span></div>
             <div className="rep-mid">{c.v.score != null && <Chip rag={c.v.overall_rating} pct={c.v.score} />}</div>
             <div className="int-flags">{c.flags.map((x, i) => <em key={i}>{x}</em>)}</div>
-          </div>))}</div>}
+            <div className="int-rev">
+              {rev && <span className={'int-rev-tag ' + rev.status}>{rev.status === 'escalated' ? 'Escalated' : 'De-escalated'}</span>}
+              <button className="mini" onClick={() => (openReview === c.v.id ? setOpenReview(null) : startReview(c.v))}>{openReview === c.v.id ? 'Close' : rev ? 'Update review' : 'Review'}</button>
+            </div>
+            {rev && rev.review_comment && openReview !== c.v.id && <div className="int-rev-note">{rev.review_comment}</div>}
+            {openReview === c.v.id && (<div className="int-rev-form">
+              <div className="int-rev-choice">
+                <button type="button" className={'seg' + (rDecision === 'escalated' ? ' on esc' : '')} onClick={() => setRDecision('escalated')}>Escalate</button>
+                <button type="button" className={'seg' + (rDecision === 'de_escalated' ? ' on de' : '')} onClick={() => setRDecision('de_escalated')}>De-escalate</button>
+              </div>
+              <textarea className="int-rev-ta" rows="2" placeholder={rDecision === 'escalated' ? 'Reason for escalation (goes to the MD and Chairman)' : 'Comment (optional)'} value={rComment} onChange={e => setRComment(e.target.value)} />
+              {rDecision === 'escalated' && <p className="hintline">Escalating raises an alert to the MD and Chairman with your reason.</p>}
+              <div className="int-rev-actions">
+                <button className="btn ghost sm" onClick={() => setOpenReview(null)} disabled={rBusy}>Cancel</button>
+                <button className="btn primary sm" onClick={() => saveReview(c.v)} disabled={rBusy || !rDecision}>{rBusy ? 'Saving\u2026' : 'Save review'}</button>
+              </div>
+            </div>)}
+          </div>) })}</div>}
     {flagged.length > 60 && <p className="hintline">Showing the first 60 of {flagged.length}.</p>}
 
     {presentRows.length > 0 && (<>
@@ -4004,7 +4058,7 @@ export default function App() {
     else if (appTab === 'settings') body = <SettingsPage user={user} identity={identity} facilities={facs} />
     else if (appTab === 'assistant') body = <AssistantPage facilities={facs} />
     else if (appTab === 'approvals') body = <ApprovalsPage userId={user.id} identity={effId} role={effRole} />
-    else if (appTab === 'integrity') body = <IntegrityPage facilities={facs} />
+    else if (appTab === 'integrity') body = <IntegrityPage facilities={facs} userId={user.id} identity={effId} />
     else if (appTab === 'access') body = <AccessRequestsPage identity={effId} user={user} onChange={refreshBadges} />
     else if (appTab === 'assign') body = <AssignPage list={facs} userId={user.id} />
     else body = <Dashboard identity={effId} role={effRole} onOpen={setAppTab} facilities={facs} onSeed={loadSample} onClear={clearAll} dbError={dbError} />
@@ -4141,6 +4195,21 @@ const css = `
 .realms .edit-modal { max-width:640px; width:calc(100vw - 40px); max-height:88vh; overflow-y:auto; }
 .realms .edit-grid { display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:8px; }
 .realms .edit-grid .edit-wide { grid-column:1 / -1; }
+.realms .int-rev { display:flex; align-items:center; gap:8px; margin-left:auto; }
+.realms .int-rev-tag { font-size:11px; font-weight:700; padding:2px 8px; border-radius:8px; text-transform:uppercase; letter-spacing:.04em; }
+.realms .int-rev-tag.escalated { background:#FBE9E7; color:#B4442E; border:1px solid #F0C4BC; }
+.realms .int-rev-tag.de_escalated { background:#E6F4EA; color:#2E7D46; border:1px solid #BFE3CB; }
+.realms .int-rev-row.rev-escalated { border-left:3px solid #B4442E; }
+.realms .int-rev-row.rev-de_escalated { border-left:3px solid #2E7D46; }
+.realms .int-rev-note { grid-column:1 / -1; font-size:13px; color:#6A5A83; margin-top:4px; font-style:italic; }
+.realms .int-rev-form { grid-column:1 / -1; margin-top:10px; padding-top:10px; border-top:1px solid var(--line); display:flex; flex-direction:column; gap:8px; }
+.realms .int-rev-choice { display:flex; gap:8px; }
+.realms .int-rev-choice .seg { padding:8px 16px; border:1.5px solid var(--line); background:#fff; border-radius:20px; font-weight:600; font-size:13.5px; cursor:pointer; color:var(--p-deep); }
+.realms .int-rev-choice .seg.on.esc { background:#B4442E; color:#fff; border-color:#B4442E; }
+.realms .int-rev-choice .seg.on.de { background:#2E7D46; color:#fff; border-color:#2E7D46; }
+.realms .int-rev-ta { width:100%; border:1.5px solid var(--line); border-radius:10px; padding:8px 10px; font:inherit; resize:vertical; }
+.realms .int-rev-actions { display:flex; gap:8px; justify-content:flex-end; }
+.realms .btn.sm { padding:7px 14px; font-size:13.5px; }
 .realms .field.edit-wide { display:block; }
 @media (max-width:560px){ .realms .edit-grid { grid-template-columns:1fr; } }
 @media (max-width:640px){ .realms .tb-pw-lab { display:none; } .realms .tb-pw { padding:8px; } }
