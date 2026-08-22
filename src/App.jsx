@@ -4,7 +4,7 @@ import 'leaflet/dist/leaflet.css'
 import { supabase, MODE } from './supabaseClient.js'
 import { facilities as FAC, assignments as ASG, visits as VIS, notifications as NOTIF, calls as CALLS, access as ACC, roles as ROLEMGR, facilitiesFromCSV, orderRoute, clusterDays, clusterDaysByDate, googleMapsDirUrl, geocode, uploadEvidence, sendNotify, askAI, seedSampleData, clearAllData } from './data.js'
 
-const BUILD = 'field-2026-07-18-au'
+const BUILD = 'field-2026-07-18-av'
 
 /*
   REALMS FIELD — Stages 1 to 3 (single-file App.jsx + supabaseClient.js + data.js)
@@ -253,7 +253,7 @@ function IconShield() { return (<svg viewBox="0 0 24 24" fill="none" stroke="cur
 function IconStore() { return (<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6"><path d="M4 9.5V20h16V9.5"/><path d="M3 4.5h18l1 5H2z"/><path d="M9.5 20v-5h5v5"/></svg>) }
 
 /* ---------- shared ---------- */
-function SectionHead({ eyebrow, title }) { return (<div className="section-head anim"><p className="eyebrow">{eyebrow}</p><h2>{title}</h2></div>) }
+function SectionHead({ eyebrow, title }) { return (<div className="section-head reveal"><p className="eyebrow">{eyebrow}</p><h2>{title}</h2></div>) }
 function NumField({ label, value, min, max, onChange, hint }) {
   const [txt, setTxt] = useState(String(value))
   useEffect(() => { setTxt(String(value)) }, [value])
@@ -423,11 +423,12 @@ function HomePage({ onSignIn, go, t }) {
 }
 
 function ServicesPage({ go }) {
+  useReveal()
   return (<div className="page"><SectionHead eyebrow="What we do" title="Our services" />
-    <p className="page-lede anim">End-to-end healthcare consulting: we advise, build and operate across the health system.</p>
+    <p className="page-lede reveal">End-to-end healthcare consulting: we advise, build and operate across the health system.</p>
     <div className="pillars">{SERVICES.map((p, i) => {
       const clickable = p.to || p.href
-      return (<article className={'pillar photo anim' + (clickable ? ' clickable' : '')} key={p.t} style={{ animationDelay: (i * 60) + 'ms' }}
+      return (<article className={'pillar photo reveal' + (clickable ? ' clickable' : '')} key={p.t} style={{ transitionDelay: (i % 3 * 70) + 'ms' }}
         onClick={() => p.to ? go(p.to) : p.href ? window.open(p.href, '_blank') : null}>
         <div className="pillar-img"><img src={p.img} alt="" /></div>
         <span className="pillar-rule" aria-hidden="true" /><h3>{p.t}</h3><p>{p.d}</p>
@@ -435,11 +436,12 @@ function ServicesPage({ go }) {
         {p.href && <span className="svc-more">Visit Genesys &#8599;</span>}
       </article>)
     })}</div>
-    <div className="cta-band anim"><h2>Have a brief in mind?</h2><button className="btn primary" onClick={() => go('contact')}>Book a consultation</button></div>
+    <div className="cta-band reveal"><h2>Have a brief in mind?</h2><button className="btn primary" onClick={() => go('contact')}>Book a consultation</button></div>
   </div>)
 }
 
 function GenesysPlusPage({ go }) {
+  useReveal()
   const features = [
     { t: 'Consent at the centre', d: 'Nothing moves without the patient’s permission. A patient grants access from their phone, sees who has viewed their record, and can withdraw at any time.' },
     { t: 'Records that follow the patient', d: 'When a patient is referred or arrives at a new hospital, their history can be made available in seconds, under a live grant, instead of starting from a blank page.' },
@@ -447,7 +449,7 @@ function GenesysPlusPage({ go }) {
     { t: 'Built for oversight', d: 'Every access is logged to a tamper-evident trail. Regulators and ministries can see operational and public-health signals without ever seeing a clinical record.' }
   ]
   return (<div className="page"><SectionHead eyebrow="A Realms product" title="Genesys+ health information exchange" />
-    <div className="mon-lead anim">
+    <div className="mon-lead reveal">
       <div className="mon-lead-copy">
         <p>Genesys+ is a consent-gated health information exchange: it lets a patient’s records follow them safely from one hospital to another, always under the patient’s permission and without pooling everyone’s clinical data in one place.</p>
         <p>It is a Realms product, built on the installed base of the Genesys Electronic Medical Records platform so that hospitals already using Genesys can connect without changing how they work.</p>
@@ -455,17 +457,22 @@ function GenesysPlusPage({ go }) {
       </div>
       <div className="mon-lead-art"><img src="/photos/g-network.jpg" alt="Connected hospitals exchanging records under consent" /></div>
     </div>
-    <div className="pillars">{features.map((p, i) => (<article className="pillar anim" key={p.t} style={{ animationDelay: (i * 70) + 'ms' }}><span className="pillar-rule" aria-hidden="true" /><h3>{p.t}</h3><p>{p.d}</p></article>))}</div>
-    <div className="own-note anim">
+    <figure className="product-shot reveal">
+      <div className="shot-frame"><span className="shot-dots" aria-hidden="true"><i /><i /><i /></span><img src="/photos/genesys-plus-product.png" alt="The Genesys+ platform: the patient moves, the record moves with them" /></div>
+      <figcaption>The Genesys+ platform at genesysplus.net</figcaption>
+    </figure>
+    <div className="pillars">{features.map((p, i) => (<article className="pillar reveal" key={p.t} style={{ transitionDelay: (i % 2 * 70) + 'ms' }}><span className="pillar-rule" aria-hidden="true" /><h3>{p.t}</h3><p>{p.d}</p></article>))}</div>
+    <div className="own-note reveal">
       <h3>How Genesys+ and Genesys relate</h3>
       <p>Genesys+ is wholly a Realms product. It is built on top of Genesys, the Electronic Medical Records platform developed by Genesys Health Information Systems (GHIS). Realms holds a 50% stake in GHIS, which is what makes the close integration between the two possible.</p>
     </div>
-    <div className="cta-band anim"><h2>Interested in connecting your hospital?</h2><button className="btn primary" onClick={() => go('contact')}>Book a conversation</button></div>
+    <div className="cta-band reveal"><h2>Interested in connecting your hospital?</h2><button className="btn primary" onClick={() => go('contact')}>Book a conversation</button></div>
   </div>)
 }
 function MonitoringPage({ onSignIn, go }) {
+  useReveal()
   return (<div className="page"><SectionHead eyebrow="Licensed HEFAMAA monitoring operator" title="Facility Monitoring & Accreditation" />
-    <div className="mon-lead anim">
+    <div className="mon-lead reveal">
       <div className="mon-lead-copy">
         <p>As a licensed operator for the Health Facility Monitoring and Accreditation Agency (HEFAMAA), RHSC carries out routine, evidence-based monitoring of public and private health facilities across Lagos State, holding every provider to the standards that protect the people they serve.</p>
         <p>Our field teams plan efficient routes, engage facilities with courtesy and official identification, assess against the approved HEFAMAA checklist, and debrief proprietors with clear corrective actions and timelines. Findings flow to a live oversight dashboard for the Agency and RHSC leadership.</p>
@@ -474,20 +481,21 @@ function MonitoringPage({ onSignIn, go }) {
       <div className="mon-lead-art"><img src="/photos/team.jpg" alt="RHSC monitoring team" /></div>
     </div>
     <div className="wave-wrap"><svg className="wave" viewBox="0 0 1000 90" preserveAspectRatio="none" aria-hidden="true"><path d="M0 55 C110 22, 200 78, 320 52 S540 20, 660 52 S870 82, 1000 46" fill="none" stroke="#A98FC4" strokeWidth="2.5" /></svg>
-      <ol className="stages">{STAGES.map((s, i) => (<li className="stage anim" key={s.n} style={{ animationDelay: (i * 80) + 'ms' }}><span className="stage-n">{s.n}</span><span className="dot" aria-hidden="true" /><h3>{s.t}</h3><p>{s.d}</p></li>))}</ol>
+      <ol className="stages">{STAGES.map((s, i) => (<li className="stage reveal" key={s.n} style={{ transitionDelay: (i * 70) + 'ms' }}><span className="stage-n">{s.n}</span><span className="dot" aria-hidden="true" /><h3>{s.t}</h3><p>{s.d}</p></li>))}</ol>
     </div>
-    <div className="pillars">{PILLARS.map((p, i) => (<article className="pillar anim" key={p.t} style={{ animationDelay: (i * 70) + 'ms' }}><span className="pillar-rule" aria-hidden="true" /><h3>{p.t}</h3><p>{p.d}</p></article>))}</div>
+    <div className="pillars">{PILLARS.map((p, i) => (<article className="pillar reveal" key={p.t} style={{ transitionDelay: (i % 2 * 70) + 'ms' }}><span className="pillar-rule" aria-hidden="true" /><h3>{p.t}</h3><p>{p.d}</p></article>))}</div>
   </div>)
 }
 
 function AboutPage() {
+  useReveal()
   return (<div className="page"><SectionHead eyebrow="Who we are" title="A full-service healthcare consulting firm" />
-    <div className="about-lead anim"><img src="/photos/g-building.jpg" alt="Healthcare" /></div>
+    <div className="about-lead reveal"><img src="/photos/g-building.jpg" alt="Healthcare" /></div>
     <div className="mandate-grid">
-      <p className="anim">REALMS Healthcare Services Consulting Limited (RHSC) is a healthcare consulting firm working across strategy, quality and accreditation, training, health financing, digital health and regulatory monitoring. We serve government and regulators, private providers, investors and development partners.</p>
-      <p className="anim" style={{ animationDelay: '90ms' }}>We combine boardroom advisory with on-the-ground delivery. That range, from shaping strategy to operating monitoring at scale as a licensed HEFAMAA operator, lets us turn recommendations into measurable results and raise the standard of care.</p>
+      <p className="reveal">REALMS Healthcare Services Consulting Limited (RHSC) is a healthcare consulting firm working across strategy, quality and accreditation, training, health financing, digital health and regulatory monitoring. We serve government and regulators, private providers, investors and development partners.</p>
+      <p className="reveal" style={{ transitionDelay: '90ms' }}>We combine boardroom advisory with on-the-ground delivery. That range, from shaping strategy to operating monitoring at scale as a licensed HEFAMAA operator, lets us turn recommendations into measurable results and raise the standard of care.</p>
     </div>
-    <div className="principles">{PRINCIPLES.map((p, i) => (<div className="principle anim" key={p.t} style={{ animationDelay: (i * 70) + 'ms' }}><h3>{p.t}</h3><p>{p.d}</p></div>))}</div>
+    <div className="principles">{PRINCIPLES.map((p, i) => (<div className="principle reveal" key={p.t} style={{ transitionDelay: (i % 3 * 70) + 'ms' }}><h3>{p.t}</h3><p>{p.d}</p></div>))}</div>
   </div>)
 }
 
@@ -516,20 +524,22 @@ function StaffCard({ s }) {
   </article>)
 }
 function LeadershipPage({ go }) {
+  useReveal()
   return (<div className="page"><SectionHead eyebrow="Our people" title="Leadership & staff" />
-    <p className="page-lede">The leadership and field team behind RHSC, a licensed HEFAMAA monitoring operator across Lagos State.</p>
-    <div className="staff-grid lead-grid anim">{LEADERS.map((l, i) => <LeaderCard key={i} l={l} />)}</div>
+    <p className="page-lede reveal">The leadership and field team behind RHSC, a licensed HEFAMAA monitoring operator across Lagos State.</p>
+    <div className="staff-grid lead-grid reveal">{LEADERS.map((l, i) => <LeaderCard key={i} l={l} />)}</div>
     <SectionHead eyebrow="Our team" title="Monitoring officers & specialists" />
-    <div className="staff-grid anim">{STAFF.map((s, i) => <StaffCard key={i} s={s} />)}</div>
-    <div className="cta-band anim"><h2>Join our team</h2><p>We are always interested in talented people who care about better healthcare.</p><button className="btn primary" onClick={() => go('contact')}>See careers</button></div>
+    <div className="staff-grid reveal">{STAFF.map((s, i) => <StaffCard key={i} s={s} />)}</div>
+    <div className="cta-band reveal"><h2>Join our team</h2><p>We are always interested in talented people who care about better healthcare.</p><button className="btn primary" onClick={() => go('contact')}>See careers</button></div>
   </div>)
 }
 
 function InsightsPage() {
+  useReveal()
   return (<div className="page"><SectionHead eyebrow="Insights" title="Thinking, news & reports" />
-    <p className="page-lede anim">Perspectives from our team, company updates, and research on healthcare in Nigeria and beyond.</p>
+    <p className="page-lede reveal">Perspectives from our team, company updates, and research on healthcare in Nigeria and beyond.</p>
     <div className="insights">{INSIGHTS.map((p, i) => (
-      <article className="insight anim" key={i} style={{ animationDelay: (i * 70) + 'ms' }}>
+      <article className="insight reveal" key={i} style={{ transitionDelay: (i % 3 * 70) + 'ms' }}>
         <span className="insight-tag">{p.tag}</span><span className="insight-date">{p.date}</span>
         <h3>{p.title}</h3><p>{p.blurb}</p><span className="svc-more">Read &rarr;</span>
       </article>
@@ -539,6 +549,7 @@ function InsightsPage() {
 }
 
 function ContactPage() {
+  useReveal()
   const [f, setF] = useState({ name: '', org: '', email: '', phone: '', interest: 'Book a consultation', message: '' })
   const [sent, setSent] = useState(false)
   const set = (k, v) => setF(s => ({ ...s, [k]: v }))
@@ -553,13 +564,13 @@ function ContactPage() {
   }
   const waHref = CONTACT.whatsapp ? waLink(CONTACT.whatsapp, 'Hello RHSC, I would like to enquire about your services.') : ''
   return (<div className="page contact-page">
-    <div className="contact-hero anim">
+    <div className="contact-hero reveal">
       <p className="eyebrow">Get in touch</p>
       <h1>Let&rsquo;s raise the standard, together.</h1>
       <p className="contact-lede">Tell us what you are working on. Whether it is strategy, quality, monitoring or digital health, we will point you to the right team.</p>
     </div>
     <div className="contact-split">
-      <aside className="contact-panel anim">
+      <aside className="contact-panel reveal">
         <div className="panel-glow" aria-hidden="true" />
         <h2>Reach RHSC</h2>
         <ul className="reach">
@@ -4349,7 +4360,8 @@ const css = `
 .realms main { flex:1; }
 .realms .page { max-width:1800px; margin:0 auto; padding:clamp(28px,4vw,54px) clamp(18px,4vw,56px) clamp(40px,5vw,70px); min-height:56vh; }
 .realms .section-head { text-align:center; max-width:720px; margin:0 auto clamp(26px,3.4vw,44px); }
-.realms .section-head h2 { font-size:clamp(28px,3.3vw,40px); color:var(--p-deep); }
+.realms .section-head h2 { font-size:clamp(28px,3.3vw,40px); color:var(--p-deep); font-family:'Lora',Georgia,serif; font-weight:500; }
+.realms .section-head .eyebrow { display:inline-block; padding-bottom:8px; border-bottom:2px solid var(--gold); }
 .realms .btn { display:inline-block; font-size:16px; padding:14px 26px; border-radius:30px; font-weight:500; transition:.16s; border:0; }
 .realms .btn.small { font-size:14px; padding:10px 18px; }
 .realms .btn.primary { background:var(--p); color:#fff; }
@@ -4407,10 +4419,10 @@ const css = `
 .realms .stage p { font-size:14.5px; line-height:1.58; color:#5A4C74; }
 
 .realms .pillars { display:grid; grid-template-columns:1fr 1fr; gap:22px; }
-.realms .pillar { background:#fff; border:1px solid var(--line); border-radius:16px; padding:28px 28px 32px; transition:.2s; }
-.realms .pillar:hover { box-shadow:0 18px 44px rgba(122,52,168,.12); border-color:var(--v); transform:translateY(-3px); }
-.realms .pillar-rule { display:block; width:44px; height:4px; border-radius:3px; background:linear-gradient(90deg,var(--p),var(--v)); margin-bottom:18px; }
-.realms .pillar h3 { font-size:21px; color:var(--p-deep); margin-bottom:11px; }
+.realms .pillar { background:#fff; border:1px solid var(--line); border-radius:18px; padding:28px 28px 32px; transition:.28s cubic-bezier(.2,.7,.2,1); box-shadow:0 12px 32px rgba(87,66,119,.07); }
+.realms .pillar:hover { box-shadow:0 26px 60px rgba(122,52,168,.16); border-color:var(--gold-soft); transform:translateY(-7px); }
+.realms .pillar-rule { display:block; width:46px; height:4px; border-radius:3px; background:linear-gradient(90deg,var(--p),var(--gold-deep)); margin-bottom:18px; }
+.realms .pillar h3 { font-size:21px; color:var(--p-deep); margin-bottom:11px; font-family:'Lora',Georgia,serif; font-weight:500; }
 .realms .pillar p { font-size:15px; line-height:1.6; color:#4A3B66; }
 
 .realms .mandate-grid { display:grid; grid-template-columns:1fr 1fr; gap:32px; font-size:clamp(16px,1.3vw,18px); line-height:1.68; color:#4A3B66; margin-bottom:clamp(30px,4vw,48px); }
@@ -4976,6 +4988,15 @@ const css = `
 .realms .impact-art img { width:100%; height:100%; object-fit:cover; }
 
 /* pillar photos + about lead */
+
+.realms .product-shot { margin:clamp(30px,5vw,60px) auto; max-width:1000px; text-align:center; }
+.realms .shot-frame { position:relative; border-radius:16px; overflow:hidden; border:1px solid var(--line); box-shadow:0 30px 70px rgba(87,66,119,.18); background:#0A1A24; }
+.realms .shot-frame img { display:block; width:100%; height:auto; }
+.realms .shot-dots { position:absolute; top:12px; left:14px; z-index:2; display:flex; gap:7px; }
+.realms .shot-dots i { width:11px; height:11px; border-radius:50%; background:rgba(255,255,255,.35); }
+.realms .shot-dots i:first-child { background:#FF5F57; } .realms .shot-dots i:nth-child(2){ background:#FEBC2E; } .realms .shot-dots i:nth-child(3){ background:#28C840; }
+.realms .product-shot figcaption { margin-top:14px; font-size:13.5px; color:#8A7AA6; font-style:italic; }
+
 .realms .pillar.photo { padding-top:0; overflow:hidden; }
 .realms .pillar-img { margin:-1px -28px 20px; height:300px; overflow:hidden; }
 .realms .pillar-img img { width:100%; height:100%; object-fit:cover; object-position:center top; }
