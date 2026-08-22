@@ -4,7 +4,7 @@ import 'leaflet/dist/leaflet.css'
 import { supabase, MODE } from './supabaseClient.js'
 import { facilities as FAC, assignments as ASG, visits as VIS, notifications as NOTIF, calls as CALLS, access as ACC, roles as ROLEMGR, facilitiesFromCSV, orderRoute, clusterDays, clusterDaysByDate, googleMapsDirUrl, geocode, uploadEvidence, sendNotify, askAI, seedSampleData, clearAllData } from './data.js'
 
-const BUILD = 'field-2026-07-18-as'
+const BUILD = 'field-2026-07-18-at'
 
 /*
   REALMS FIELD — Stages 1 to 3 (single-file App.jsx + supabaseClient.js + data.js)
@@ -16,7 +16,7 @@ const BUILD = 'field-2026-07-18-as'
 
 const SITE_TABS = [
   { id: 'home', label: 'Home' }, { id: 'services', label: 'Services' },
-  { id: 'monitoring', label: 'Facility Monitoring & Accreditation' }, { id: 'about', label: 'About' },
+  { id: 'monitoring', label: 'Facility Monitoring & Accreditation' }, { id: 'genesys', label: 'Genesys+' }, { id: 'about', label: 'About' },
   { id: 'leadership', label: 'Leadership & Staff' }, { id: 'contact', label: 'Contact' }
 ]
 
@@ -42,16 +42,18 @@ const PRINCIPLES = [
   { t: 'Firm in enforcement', d: 'Evidence-based assessment and clear corrective guidance that protect the people these facilities serve.' }
 ]
 
-// Genesys = GeneSys Health Information Systems Limited (RHSC's EMR platform)
+// Genesys = GeneSys Health Information Systems Limited (GHIS), the EMR company Realms co-owns (50%)
 const GENESYS_URL = 'https://www.genesys-health.com/'
+const GENESYS_PLUS_URL = 'https://genesysplus.net/'
 
 const SERVICES = [
   { t: 'Strategy & advisory', d: 'Growth, market-entry and operational strategy for health providers, investors and government, grounded in evidence and delivered to implementation.', img: '/photos/g-boardroom.jpg' },
   { t: 'Quality & accreditation', d: 'Readiness assessments and hands-on support that help facilities meet and hold the standards required for licensing and accreditation.', img: '/photos/g-corridor.jpg?v=4' },
   { t: 'Facility Monitoring & Accreditation', d: 'As a licensed HEFAMAA monitoring operator, we carry out routine, evidence-based monitoring of health facilities across Lagos State.', img: '/photos/team.jpg', to: 'monitoring' },
+  { t: 'Genesys+ health information exchange', d: 'Our own consent-gated exchange that lets a patient\u2019s records follow them safely between hospitals. A Realms product, built on the Genesys installed base.', img: '/photos/g-network.jpg', to: 'genesys' },
   { t: 'Training & capacity building', d: 'Practical training and mentoring for facility teams, regulators and operators, building the knowledge that prevents non-compliance.', img: '/photos/meeting.jpg' },
   { t: 'Health financing', d: 'Advisory on health financing, insurance design and sustainable funding models for providers, programmes and the public sector.', img: '/photos/g-handshake.jpg?v=4' },
-  { t: 'Digital health & technology', d: 'Digital transformation for healthcare, powered by Genesys, our own Electronic Medical Records (EMR) platform, from patient records to real-time monitoring.', img: '/photos/g-health.jpg', href: GENESYS_URL }
+  { t: 'Digital health & technology', d: 'Digital transformation for healthcare, including the Genesys Electronic Medical Records (EMR) platform, built by Genesys Health Information Systems, in which Realms holds a 50% stake.', img: '/photos/g-health.jpg', href: GENESYS_URL }
 ]
 
 const IMPACT_STATS = [ { v: '25+', l: 'Years of experience' }, { v: '1000+', l: 'Facilities monitored' }, { v: '20+', l: 'Projects delivered' } ]
@@ -167,6 +169,7 @@ const TR = {
   nav_home: { en: 'Home', yo: 'Ilé', pcm: 'Home', ha: 'Gida', ig: 'Ụlọ' },
   nav_services: { en: 'Services', yo: 'Iṣẹ́', pcm: 'Services', ha: 'Ayyuka', ig: 'Ọrụ' },
   nav_monitoring: { en: 'Facility Monitoring & Accreditation', yo: 'Ìbójútó Ilé-ìwòsàn', pcm: 'Facility Monitoring', ha: 'Sa Ido da Amincewa', ig: 'Nlekọta Ụlọ Ọgwụ' },
+  nav_genesys: { en: 'Genesys+', yo: 'Genesys+', pcm: 'Genesys+', ha: 'Genesys+', ig: 'Genesys+' },
   nav_about: { en: 'About', yo: 'Nípa Wa', pcm: 'About', ha: 'Game da Mu', ig: 'Banyere Anyị' },
   nav_leadership: { en: 'Leadership & Staff', yo: 'Àwọn Aṣáájú', pcm: 'Our Team', ha: 'Shugabanni', ig: 'Ndị Isi' },
   nav_insights: { en: 'Insights', yo: 'Ìjìnlẹ̀', pcm: 'Insights', ha: 'Bayanai', ig: 'Nghọta' },
@@ -337,6 +340,30 @@ function ServicesPage({ go }) {
   </div>)
 }
 
+function GenesysPlusPage({ go }) {
+  const features = [
+    { t: 'Consent at the centre', d: 'Nothing moves without the patient’s permission. A patient grants access from their phone, sees who has viewed their record, and can withdraw at any time.' },
+    { t: 'Records that follow the patient', d: 'When a patient is referred or arrives at a new hospital, their history can be made available in seconds, under a live grant, instead of starting from a blank page.' },
+    { t: 'The clinical record stays put', d: 'Genesys+ links facilities rather than pooling their data. A patient’s clinical details remain with the hospital that recorded them and are fetched only when consent is live.' },
+    { t: 'Built for oversight', d: 'Every access is logged to a tamper-evident trail. Regulators and ministries can see operational and public-health signals without ever seeing a clinical record.' }
+  ]
+  return (<div className="page"><SectionHead eyebrow="A Realms product" title="Genesys+ health information exchange" />
+    <div className="mon-lead anim">
+      <div className="mon-lead-copy">
+        <p>Genesys+ is a consent-gated health information exchange: it lets a patient’s records follow them safely from one hospital to another, always under the patient’s permission and without pooling everyone’s clinical data in one place.</p>
+        <p>It is a Realms product, built on the installed base of the Genesys Electronic Medical Records platform so that hospitals already using Genesys can connect without changing how they work.</p>
+        <div className="cta-row"><button className="btn primary" onClick={() => window.open(GENESYS_PLUS_URL, '_blank')}>Visit Genesys+ &#8599;</button><button className="btn ghost" onClick={() => go('contact')}>Talk to us</button></div>
+      </div>
+      <div className="mon-lead-art"><img src="/photos/g-network.jpg" alt="Connected hospitals exchanging records under consent" /></div>
+    </div>
+    <div className="pillars">{features.map((p, i) => (<article className="pillar anim" key={p.t} style={{ animationDelay: (i * 70) + 'ms' }}><span className="pillar-rule" aria-hidden="true" /><h3>{p.t}</h3><p>{p.d}</p></article>))}</div>
+    <div className="own-note anim">
+      <h3>How Genesys+ and Genesys relate</h3>
+      <p>Genesys+ is wholly a Realms product. It is built on top of Genesys, the Electronic Medical Records platform developed by Genesys Health Information Systems (GHIS). Realms holds a 50% stake in GHIS, which is what makes the close integration between the two possible.</p>
+    </div>
+    <div className="cta-band anim"><h2>Interested in connecting your hospital?</h2><button className="btn primary" onClick={() => go('contact')}>Book a conversation</button></div>
+  </div>)
+}
 function MonitoringPage({ onSignIn, go }) {
   return (<div className="page"><SectionHead eyebrow="Licensed HEFAMAA monitoring operator" title="Facility Monitoring & Accreditation" />
     <div className="mon-lead anim">
@@ -4066,6 +4093,7 @@ export default function App() {
     body = tab === 'home' ? <HomePage onSignIn={() => setView('auth')} go={setTab} t={t} />
       : tab === 'services' ? <ServicesPage go={setTab} />
       : tab === 'monitoring' ? <MonitoringPage onSignIn={() => setView('auth')} go={setTab} />
+      : tab === 'genesys' ? <GenesysPlusPage go={setTab} />
       : tab === 'about' ? <AboutPage />
       : tab === 'leadership' ? <LeadershipPage go={setTab} />
       : <ContactPage />
@@ -4210,6 +4238,9 @@ const css = `
 .realms .int-rev-ta { width:100%; border:1.5px solid var(--line); border-radius:10px; padding:8px 10px; font:inherit; resize:vertical; }
 .realms .int-rev-actions { display:flex; gap:8px; justify-content:flex-end; }
 .realms .btn.sm { padding:7px 14px; font-size:13.5px; }
+.realms .own-note { margin:26px 0 8px; padding:22px 26px; background:var(--lav1, #F4F1F8); border:1px solid var(--line); border-radius:16px; }
+.realms .own-note h3 { margin:0 0 8px; color:var(--p-deep); }
+.realms .own-note p { margin:0; color:#4A3D5E; max-width:70ch; }
 .realms .field.edit-wide { display:block; }
 @media (max-width:560px){ .realms .edit-grid { grid-template-columns:1fr; } }
 @media (max-width:640px){ .realms .tb-pw-lab { display:none; } .realms .tb-pw { padding:8px; } }
