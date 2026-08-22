@@ -4,7 +4,7 @@ import 'leaflet/dist/leaflet.css'
 import { supabase, MODE } from './supabaseClient.js'
 import { facilities as FAC, assignments as ASG, visits as VIS, notifications as NOTIF, calls as CALLS, access as ACC, roles as ROLEMGR, facilitiesFromCSV, orderRoute, clusterDays, clusterDaysByDate, googleMapsDirUrl, geocode, uploadEvidence, sendNotify, askAI, seedSampleData, clearAllData } from './data.js'
 
-const BUILD = 'field-2026-07-18-at'
+const BUILD = 'field-2026-07-18-au'
 
 /*
   REALMS FIELD — Stages 1 to 3 (single-file App.jsx + supabaseClient.js + data.js)
@@ -281,43 +281,142 @@ function SearchBox({ value, onChange, placeholder }) { return <input className="
 function matchQ(v, q) { if (!q) return true; const s = q.toLowerCase(); return ((v.facility_name || v.name || '') + ' ' + (v.area || '') + ' ' + (v.category || '') + ' ' + (v.address || '')).toLowerCase().includes(s) }
 
 /* ---------- public pages ---------- */
+// A lightweight living-network backdrop rendered in canvas 2D (no heavy 3D dependency):
+// drifting facility nodes on the light ground, a web of links that breathes as they move,
+// and gold pulses travelling the connections. Respects reduced-motion and pauses off-screen.
+function HeroNetwork() {
+  const ref = useRef(null)
+  useEffect(() => {
+    const canvas = ref.current; if (!canvas) return
+    const ctx = canvas.getContext('2d')
+    const reduced = typeof matchMedia !== 'undefined' && matchMedia('(prefers-reduced-motion:reduce)').matches
+    let W = 0, H = 0, dpr = Math.min(window.devicePixelRatio || 1, 2), raf = 0, running = true
+    const NODE_COUNT = window.innerWidth < 700 ? 34 : 64
+    const LINK_DIST = 150
+    let nodes = [], pulses = [], mx = 0, my = 0, tmx = 0, tmy = 0
+    function seedNodes() {
+      nodes = []
+      for (let i = 0; i < NODE_COUNT; i++) nodes.push({
+        x: Math.random() * W, y: Math.random() * H,
+        vx: (Math.random() * 2 - 1) * (reduced ? 0 : 0.22), vy: (Math.random() * 2 - 1) * (reduced ? 0 : 0.22),
+        r: 1.5 + Math.random() * 2.2
+      })
+    }
+    function seedPulse() {
+      if (nodes.length < 2) return null
+      const a = (Math.random() * nodes.length) | 0; let b = (Math.random() * nodes.length) | 0; if (b === a) b = (b + 1) % nodes.length
+      return { a, b, t: Math.random(), sp: 0.004 + Math.random() * 0.01 }
+    }
+    function resize() {
+      const rect = canvas.getBoundingClientRect(); W = rect.width; H = rect.height
+      canvas.width = W * dpr; canvas.height = H * dpr; ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+      seedNodes()
+    }
+    const PULSES = reduced ? 0 : (window.innerWidth < 700 ? 5 : 10)
+    function draw() {
+      if (!running) return
+      ctx.clearRect(0, 0, W, H)
+      mx += (tmx - mx) * 0.05; my += (tmy - my) * 0.05
+      const ox = mx * 22, oy = my * 14 // gentle parallax
+      // move nodes
+      for (const n of nodes) {
+        n.x += n.vx; n.y += n.vy
+        if (n.x < 0 || n.x > W) n.vx *= -1
+        if (n.y < 0 || n.y > H) n.vy *= -1
+      }
+      // links
+      for (let i = 0; i < nodes.length; i++) {
+        for (let j = i + 1; j < nodes.length; j++) {
+          const a = nodes[i], b = nodes[j]
+          const dx = a.x - b.x, dy = a.y - b.y, d = Math.hypot(dx, dy)
+          if (d < LINK_DIST) {
+            const op = (1 - d / LINK_DIST) * 0.22
+            ctx.strokeStyle = 'rgba(142,111,176,' + op.toFixed(3) + ')'
+            ctx.lineWidth = 1
+            ctx.beginPath(); ctx.moveTo(a.x + ox, a.y + oy); ctx.lineTo(b.x + ox, b.y + oy); ctx.stroke()
+          }
+        }
+      }
+      // nodes
+      for (const n of nodes) {
+        ctx.beginPath()
+        ctx.fillStyle = 'rgba(124,92,160,0.55)'
+        ctx.arc(n.x + ox, n.y + oy, n.r, 0, Math.PI * 2); ctx.fill()
+      }
+      // gold pulses
+      for (let k = 0; k < pulses.length; k++) {
+        const p = pulses[k]; if (!p) { pulses[k] = seedPulse(); continue }
+        p.t += p.sp; if (p.t >= 1) { pulses[k] = seedPulse(); continue }
+        const a = nodes[p.a], b = nodes[p.b]; if (!a || !b) { pulses[k] = seedPulse(); continue }
+        const x = a.x + (b.x - a.x) * p.t + ox, y = a.y + (b.y - a.y) * p.t + oy
+        const g = ctx.createRadialGradient(x, y, 0, x, y, 7)
+        g.addColorStop(0, 'rgba(201,166,78,0.95)'); g.addColorStop(1, 'rgba(201,166,78,0)')
+        ctx.fillStyle = g; ctx.beginPath(); ctx.arc(x, y, 7, 0, Math.PI * 2); ctx.fill()
+      }
+      raf = requestAnimationFrame(draw)
+    }
+    resize()
+    for (let k = 0; k < PULSES; k++) pulses.push(seedPulse())
+    const onMove = e => { tmx = e.clientX / window.innerWidth - 0.5; tmy = e.clientY / window.innerHeight - 0.5 }
+    const onResize = () => resize()
+    window.addEventListener('mousemove', onMove); window.addEventListener('resize', onResize)
+    // pause when the hero scrolls out of view
+    const io = new IntersectionObserver(es => es.forEach(e => { running = e.isIntersecting; if (running) { cancelAnimationFrame(raf); draw() } }), { threshold: 0 })
+    io.observe(canvas)
+    draw()
+    return () => { running = false; cancelAnimationFrame(raf); window.removeEventListener('mousemove', onMove); window.removeEventListener('resize', onResize); io.disconnect() }
+  }, [])
+  return <canvas ref={ref} className="hero-net" aria-hidden="true" />
+}
+
+// Scroll-reveal: adds .in to elements with .reveal as they enter the viewport.
+function useReveal() {
+  useEffect(() => {
+    const els = Array.from(document.querySelectorAll('.reveal:not(.in)'))
+    if (!els.length) return
+    const io = new IntersectionObserver(es => es.forEach(e => { if (e.isIntersecting) { e.target.classList.add('in'); io.unobserve(e.target) } }), { threshold: 0.14 })
+    els.forEach(el => io.observe(el))
+    return () => io.disconnect()
+  }, [])
+}
+
 function HomePage({ onSignIn, go, t }) {
+  useReveal()
   return (
-    <div className="page">
-      <section className="hero">
-        <div className="hero-copy anim">
-          <p className="eyebrow">REALMS Healthcare Services Consulting Limited</p>
-          <h1>{t('hero_title')}</h1>
-          <p className="lede">{t('hero_lede')}</p>
-          <div className="cta-row">
+    <div className="page home-elev">
+      <section className="hero hero-elev">
+        <HeroNetwork />
+        <div className="hero-inner">
+          <p className="eyebrow gold-eye reveal in"><span className="gold-seal" aria-hidden="true">&#10003;</span>Licensed HEFAMAA monitoring operator &middot; Lagos</p>
+          <h1 className="reveal in">{t('hero_title').replace(/healthcare$/i, '')}<span className="em-gold">healthcare</span></h1>
+          <p className="lede reveal">{t('hero_lede')}</p>
+          <div className="cta-row reveal">
             <button className="btn primary" onClick={() => go('contact')}>{t('cta_consult')}</button>
             <button className="btn ghost" onClick={() => go('services')}>{t('cta_services')}</button>
           </div>
-          <p className="tagline">{t('tagline')}</p>
+          <p className="tagline reveal">{t('tagline')}</p>
         </div>
-        <div className="hero-art anim" style={{ animationDelay: '120ms' }}>
-          <div className="art-panel"><img src="/rhsc-logo.png" alt="REALMS Healthcare Services Consulting Limited" /></div>
-        </div>
+        <div className="scrollcue" aria-hidden="true">scroll</div>
       </section>
 
-      <section className="home-strip anim">
-        {IMPACT_STATS.map(c => (<div className="mini-stat" key={c.l}><span className="mini-value">{c.v}</span><span className="mini-label">{c.l}</span></div>))}
+      <section className="home-strip strip-elev">
+        {IMPACT_STATS.map(c => (<div className="mini-stat reveal" key={c.l}><span className="mini-value">{c.v}</span><span className="mini-label">{c.l}</span></div>))}
       </section>
 
-      <section className="clients-band anim">
-        <p className="eyebrow center">Trusted by</p>
-        <div className="clients-row">{PARTNERS.map(c => <span className="client-chip" key={c}>{c}</span>)}</div>
-        <p className="band-note">RHSC is a licensed HEFAMAA monitoring operator, appointed to carry out routine health facility monitoring and accreditation support across Lagos State.</p>
+      <section className="clients-band">
+        <p className="eyebrow center reveal">Trusted by</p>
+        <div className="clients-row reveal">{PARTNERS.map(c => <span className="client-chip" key={c}>{c}</span>)}</div>
+        <p className="band-note reveal">RHSC is a licensed HEFAMAA monitoring operator, appointed to carry out routine health facility monitoring and accreditation support across Lagos State.</p>
       </section>
 
-      <section className="impact anim">
+      <section className="impact impact-elev">
         <div className="impact-copy">
-          <p className="eyebrow light">Why RHSC</p>
-          <h2>A partner from strategy to the ground</h2>
-          <p>Few firms combine boardroom advisory with field delivery. RHSC does both, advising on strategy, quality and financing, and operating regulatory monitoring at scale as a licensed HEFAMAA operator.</p>
-          <div className="cta-row"><button className="btn light" onClick={() => go('contact')}>{t('cta_proposal')}</button><button className="btn ghost onlight" onClick={() => go('monitoring')}>Our HEFAMAA work</button></div>
+          <p className="eyebrow light reveal">Why RHSC</p>
+          <h2 className="reveal">A partner from strategy to the ground</h2>
+          <p className="reveal">Few firms combine boardroom advisory with field delivery. RHSC does both, advising on strategy, quality and financing, and operating regulatory monitoring at scale as a licensed HEFAMAA operator.</p>
+          <div className="cta-row reveal"><button className="btn light" onClick={() => go('contact')}>{t('cta_proposal')}</button><button className="btn ghost onlight" onClick={() => go('monitoring')}>Our HEFAMAA work</button></div>
         </div>
-        <div className="impact-art"><img src="/photos/g-network.jpg" alt="Connected healthcare across the State" /></div>
+        <div className="impact-art reveal"><img src="/photos/g-network.jpg" alt="Connected healthcare across the State" /></div>
       </section>
     </div>
   )
@@ -4267,6 +4366,32 @@ const css = `
 .realms .tagline { font-style:italic; color:#8A7AA6; font-size:15px; }
 .realms .hero-art { display:flex; justify-content:center; }
 .realms .art-panel { width:min(400px,86vw); border-radius:26px; padding:clamp(24px,3.5vw,42px); background:radial-gradient(circle at 50% 30%, var(--lav1), var(--lav2)); box-shadow:0 26px 64px rgba(122,52,168,.16); border:1px solid #EBDCF8; }
+
+/* ===== Elevated landing ===== */
+.realms { --gold:#C9A64E; --gold-deep:#A6812E; --gold-soft:#E7CF8A; }
+.realms .hero-elev { position:relative; display:block; grid-template-columns:none; min-height:88vh; margin:calc(-1 * clamp(24px,4vw,48px)) calc(-1 * clamp(18px,4vw,56px)) 0; padding:clamp(90px,14vh,150px) clamp(18px,4vw,56px) clamp(60px,9vh,110px); overflow:hidden; background:linear-gradient(180deg,var(--lav1),#fff 82%); display:flex; align-items:center; }
+.realms .hero-net { position:absolute; inset:0; width:100%; height:100%; z-index:1; }
+.realms .hero-elev .hero-inner { position:relative; z-index:2; max-width:min(1160px,100%); margin:0 auto; width:100%; }
+.realms .hero-elev h1 { font-size:clamp(40px,6.4vw,78px); font-weight:500; line-height:1.0; letter-spacing:-.015em; color:var(--ink,#2E2340); max-width:15ch; margin-bottom:22px; }
+.realms .em-gold { font-style:italic; color:transparent; background:linear-gradient(100deg,var(--p),var(--gold-deep)); -webkit-background-clip:text; background-clip:text; }
+.realms .hero-elev .lede { max-width:52ch; font-size:clamp(16px,1.5vw,20px); }
+.realms .gold-eye { display:inline-flex; align-items:center; gap:10px; color:var(--p); font-weight:600; letter-spacing:.16em; text-transform:uppercase; font-size:12.5px; margin-bottom:24px; }
+.realms .gold-seal { width:22px; height:22px; border-radius:50%; background:linear-gradient(145deg,var(--gold-soft),var(--gold-deep)); display:inline-flex; align-items:center; justify-content:center; color:#fff; font-size:11px; box-shadow:0 3px 10px rgba(166,129,46,.4); }
+.realms .scrollcue { position:absolute; bottom:22px; left:50%; transform:translateX(-50%); z-index:2; font-size:10.5px; letter-spacing:.28em; text-transform:uppercase; color:#9B8BB4; }
+
+/* reveal */
+.realms .reveal { opacity:0; transform:translateY(30px); transition:opacity .8s ease, transform .8s cubic-bezier(.2,.7,.2,1); }
+.realms .reveal.in { opacity:1; transform:none; }
+
+/* elevated strip + mini-stats gold */
+.realms .strip-elev { gap:clamp(20px,4vw,40px); }
+.realms .strip-elev .mini-stat { box-shadow:0 16px 40px rgba(87,66,119,.08); transition:.3s; }
+.realms .strip-elev .mini-stat:hover { transform:translateY(-6px); box-shadow:0 26px 56px rgba(87,66,119,.14); }
+.realms .strip-elev .mini-value { color:var(--gold-deep); font-family:'Lora',Georgia,serif; font-weight:600; }
+.realms .impact-elev .impact-art img, .realms .impact-elev { }
+@media (prefers-reduced-motion:reduce){ .realms .reveal{ opacity:1; transform:none; transition:none; } }
+@media (max-width:760px){ .realms .hero-elev { min-height:auto; } .realms .scrollcue { display:none; } }
+
 .realms .home-strip { display:flex; justify-content:center; flex-wrap:wrap; gap:clamp(28px,7vw,88px); margin-top:clamp(30px,4vw,52px); text-align:center; }
 .realms .mini-stat { text-align:center; padding:20px 12px; background:var(--lav1); border:1px solid var(--line); border-radius:14px; }
 .realms .mini-value { display:block; font-size:34px; font-weight:700; color:var(--p); line-height:1; margin-bottom:8px; }
