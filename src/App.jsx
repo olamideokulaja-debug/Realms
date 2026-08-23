@@ -4,7 +4,7 @@ import 'leaflet/dist/leaflet.css'
 import { supabase, MODE } from './supabaseClient.js'
 import { facilities as FAC, assignments as ASG, visits as VIS, notifications as NOTIF, calls as CALLS, access as ACC, roles as ROLEMGR, facilitiesFromCSV, orderRoute, clusterDays, clusterDaysByDate, googleMapsDirUrl, geocode, uploadEvidence, sendNotify, askAI, seedSampleData, clearAllData } from './data.js'
 
-const BUILD = 'field-2026-07-18-av'
+const BUILD = 'field-2026-07-18-aw'
 
 /*
   REALMS FIELD — Stages 1 to 3 (single-file App.jsx + supabaseClient.js + data.js)
@@ -455,12 +455,8 @@ function GenesysPlusPage({ go }) {
         <p>It is a Realms product, built on the installed base of the Genesys Electronic Medical Records platform so that hospitals already using Genesys can connect without changing how they work.</p>
         <div className="cta-row"><button className="btn primary" onClick={() => window.open(GENESYS_PLUS_URL, '_blank')}>Visit Genesys+ &#8599;</button><button className="btn ghost" onClick={() => go('contact')}>Talk to us</button></div>
       </div>
-      <div className="mon-lead-art"><img src="/photos/g-network.jpg" alt="Connected hospitals exchanging records under consent" /></div>
+      <div className="mon-lead-art gp-shot"><img src="/photos/genesys-plus-product.png" alt="The Genesys+ platform: a patient's unified record across facilities" /></div>
     </div>
-    <figure className="product-shot reveal">
-      <div className="shot-frame"><span className="shot-dots" aria-hidden="true"><i /><i /><i /></span><img src="/photos/genesys-plus-product.png" alt="The Genesys+ platform: the patient moves, the record moves with them" /></div>
-      <figcaption>The Genesys+ platform at genesysplus.net</figcaption>
-    </figure>
     <div className="pillars">{features.map((p, i) => (<article className="pillar reveal" key={p.t} style={{ transitionDelay: (i % 2 * 70) + 'ms' }}><span className="pillar-rule" aria-hidden="true" /><h3>{p.t}</h3><p>{p.d}</p></article>))}</div>
     <div className="own-note reveal">
       <h3>How Genesys+ and Genesys relate</h3>
@@ -4989,13 +4985,8 @@ const css = `
 
 /* pillar photos + about lead */
 
-.realms .product-shot { margin:clamp(30px,5vw,60px) auto; max-width:1000px; text-align:center; }
-.realms .shot-frame { position:relative; border-radius:16px; overflow:hidden; border:1px solid var(--line); box-shadow:0 30px 70px rgba(87,66,119,.18); background:#0A1A24; }
-.realms .shot-frame img { display:block; width:100%; height:auto; }
-.realms .shot-dots { position:absolute; top:12px; left:14px; z-index:2; display:flex; gap:7px; }
-.realms .shot-dots i { width:11px; height:11px; border-radius:50%; background:rgba(255,255,255,.35); }
-.realms .shot-dots i:first-child { background:#FF5F57; } .realms .shot-dots i:nth-child(2){ background:#FEBC2E; } .realms .shot-dots i:nth-child(3){ background:#28C840; }
-.realms .product-shot figcaption { margin-top:14px; font-size:13.5px; color:#8A7AA6; font-style:italic; }
+.realms .gp-shot { border-radius:14px; overflow:hidden; border:1px solid var(--line); box-shadow:0 26px 60px rgba(87,66,119,.18); background:#0A1A24; align-self:stretch; }
+.realms .gp-shot img { display:block; width:100%; height:100%; object-fit:cover; object-position:top left; }
 
 .realms .pillar.photo { padding-top:0; overflow:hidden; }
 .realms .pillar-img { margin:-1px -28px 20px; height:300px; overflow:hidden; }
