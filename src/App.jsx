@@ -4,7 +4,7 @@ import 'leaflet/dist/leaflet.css'
 import { supabase, MODE } from './supabaseClient.js'
 import { facilities as FAC, assignments as ASG, visits as VIS, notifications as NOTIF, calls as CALLS, access as ACC, roles as ROLEMGR, facilitiesFromCSV, orderRoute, clusterDays, clusterDaysByDate, googleMapsDirUrl, geocode, uploadEvidence, sendNotify, askAI, seedSampleData, clearAllData } from './data.js'
 
-const BUILD = 'field-2026-07-18-aw'
+const BUILD = 'field-2026-07-18-ay'
 
 /*
   REALMS FIELD — Stages 1 to 3 (single-file App.jsx + supabaseClient.js + data.js)
@@ -2201,6 +2201,49 @@ function deriveDebrief(v) {
 
 const DOC_CSS = "@import url('https://fonts.googleapis.com/css2?family=Lora:ital,wght@0,400;0,600;1,400&display=swap');*{font-family:'Lora',Georgia,serif;color:#241536;box-sizing:border-box}body{max-width:760px;margin:36px auto;padding:0 24px;line-height:1.6}h1{color:#574277;font-size:23px;margin:14px 0 6px}h2{color:#574277;font-size:15px;margin:22px 0 8px}p{margin:0 0 10px}table{width:100%;border-collapse:collapse;margin:8px 0 14px}th,td{border:1px solid #E4DCEE;padding:8px 10px;text-align:left;font-size:12.5px;vertical-align:top}th{background:#F6F3FA;color:#574277}ul,ol{margin:6px 0 14px;padding-left:20px}li{font-size:13px;margin-bottom:4px}.head{display:flex;align-items:center;gap:12px;border-bottom:2px solid #EDE7F4;padding-bottom:12px;margin-bottom:8px}.chip{display:inline-block;padding:2px 10px;border-radius:12px;font-size:12px;border:1px solid #ccc}.g{background:#E6F4EA;color:#2E7D46;border-color:#BFE3CB}.a{background:#FBF3E6;color:#9A5B12;border-color:#F0D9B5}.r{background:#FBE9E6;color:#B4442E;border-color:#F0C9BF}.muted{color:#7A6A93;font-size:12px}.sig{height:80px;margin:6px 0}.right{text-align:right}@media print{body{margin:0}}"
 function chipCls(r) { return r === 'green' ? 'g' : r === 'amber' ? 'a' : r === 'red' ? 'r' : '' }
+// Word export. Word opens an HTML document served as application/msword natively, so we can
+// produce a fully editable .doc in the browser with no dependency. To keep the integrity
+// notice and the scores unchangeable while everything else stays editable, the whole document
+// is protected read-only and every region EXCEPT the locked ones is wrapped in an "editable
+// everywhere" range (Word's permStart/permEnd model). The report builders mark the regions to
+// lock by wrapping them in LOCK_OPEN ... LOCK_CLOSE sentinels.
+const LOCK_OPEN = '<!--RHSC_LOCK_OPEN-->'
+const LOCK_CLOSE = '<!--RHSC_LOCK_CLOSE-->'
+function buildReportDoc(innerHtml) {
+  const editStart = '<w:permStart w:id="__ID__" w:edGrp="everyone"/>'
+  const editEnd = '<w:permEnd w:id="__ID__"/>'
+  let id = 100, out = '', rest = innerHtml, inLock = false
+  function openEdit() { return editStart.replace('__ID__', id) }
+  function closeEdit() { const e = editEnd.replace('__ID__', id); id++; return e }
+  out += openEdit()
+  while (rest.length) {
+    const marker = inLock ? LOCK_CLOSE : LOCK_OPEN
+    const at = rest.indexOf(marker)
+    if (at === -1) { out += rest; rest = ''; break }
+    out += rest.slice(0, at)
+    rest = rest.slice(at + marker.length)
+    if (!inLock) { out += closeEdit(); inLock = true } else { out += openEdit(); inLock = false }
+  }
+  if (!inLock) out += closeEdit()
+  const head = '<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w="urn:schemas-microsoft-com:office:word" xmlns="http://www.w3.org/TR/REC-html40">'
+    + '<head><meta charset="utf-8">'
+    + '<xml><w:WordDocument><w:View>Print</w:View><w:DocumentProtection>ReadOnly</w:DocumentProtection><w:UnprotectPassword>00000000</w:UnprotectPassword></w:WordDocument></xml>'
+    + '<style>' + DOC_CSS + '</style></head><body>'
+  return head + out + '</body></html>'
+}
+function downloadReportDoc(filename, build) {
+  let html
+  try { html = build() } catch (e) { try { toast('Could not build the document: ' + ((e && e.message) || e), 'warn') } catch (_) {} return }
+  try {
+    const doc = buildReportDoc(html)
+    const blob = new Blob(['\ufeff', doc], { type: 'application/msword' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a'); a.href = url; a.download = filename.replace(/[^\w.-]+/g, '_') + '.doc'
+    document.body.appendChild(a); a.click(); document.body.removeChild(a)
+    setTimeout(() => URL.revokeObjectURL(url), 4000)
+    try { toast('Word document downloaded. The integrity notice and scores stay locked; everything else is editable.') } catch (_) {}
+  } catch (e) { try { toast('Could not create the Word file.', 'warn') } catch (_) {} }
+}
 function printDoc(title, inner) {
   const w = window.open('', '_blank'); if (!w) { window.alert('Please allow pop-ups to open the document, then try again.'); return }
   w.document.write('<html><head><title>' + title + '</title><meta charset="utf-8"><style>' + DOC_CSS + '</style></head><body>' + inner + '</body></html>')
@@ -2249,7 +2292,7 @@ function buildInspectionReport(v, d, origin) {
   const esc = s => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/\n/g, '<br>')
   const body = rows.map(r => r[1] === '' && (r[0] === 'General' || r[0] === 'Findings') ? '<tr><th colspan="2" style="font-size:13px">' + r[0] + '</th></tr>' : '<tr><td style="width:34%;font-weight:600;color:#574277">' + r[0] + '</td><td>' + esc(r[1]) + '</td></tr>').join('')
   const stamp = (v.approval && v.approval.status === 'approved') ? '<p class="muted" style="border:1px solid #BFE3CB;background:#E6F4EA;color:#2E7D46;border-radius:6px;padding:6px 10px;display:inline-block">Approved for submission by ' + esc(v.approval.by || 'Team Lead') + ' on ' + String(v.approval.at || '').slice(0, 10) + '</p>' : ''
-  return inspHead(origin) + '<table style="margin-top:10px">' + body + '</table>' + stamp + (d && d.signature ? '<p class="muted">Proprietor sign-off:</p><img class="sig" src="' + d.signature + '">' : '') + '<p class="muted" style="border:1px solid #E4DCEE;border-radius:6px;padding:8px 10px"><strong>Integrity notice.</strong> ' + INTEGRITY_NOTICE + '</p><p class="muted">Prepared by REALMS Healthcare Services Consulting Limited for HEFAMAA, Lagos State.</p>'
+  return inspHead(origin) + '<table style="margin-top:10px">' + body + '</table>' + stamp + (d && d.signature ? '<p class="muted">Proprietor sign-off:</p><img class="sig" src="' + d.signature + '">' : '') + LOCK_OPEN + '<p class="muted" style="border:1px solid #E4DCEE;border-radius:6px;padding:8px 10px"><strong>Integrity notice.</strong> ' + INTEGRITY_NOTICE + '</p>' + LOCK_CLOSE + '<p class="muted">Prepared by REALMS Healthcare Services Consulting Limited for HEFAMAA, Lagos State.</p>'
 }
 function hasFirstAssessment(v) {
   const a = v && v.assessment
@@ -2285,9 +2328,9 @@ function buildMonitoringReport(v, origin) {
   const inspBy = firstVal(a.inspected_by) ? '<p class="muted"><strong>Inspected by:</strong> ' + esc(a.inspected_by) + '</p>' : ''
   const estNote = (a.pct_estimated || a.visited_unscored) && a.score_basis ? '<p class="muted">' + esc(a.score_basis) + '</p>' : ''
   return inspHead(origin) + '<h1 style="font-size:18px;margin-top:10px">First Assessment \u2014 Monitoring Report</h1>'
-    + '<table style="margin-top:6px">' + sec('General') + gen.map(row).join('') + sec('Findings') + find.map(row).join('') + sec('Scores') + scoreRows.map(row).join('') + '</table>'
+    + '<table style="margin-top:6px">' + sec('General') + gen.map(row).join('') + sec('Findings') + find.map(row).join('') + LOCK_OPEN + sec('Scores') + scoreRows.map(row).join('') + LOCK_CLOSE + '</table>'
     + recs + estNote + inspBy
-    + '<p class="muted" style="border:1px solid #E4DCEE;border-radius:6px;padding:8px 10px"><strong>Integrity notice.</strong> ' + INTEGRITY_NOTICE + '</p>'
+    + LOCK_OPEN + '<p class="muted" style="border:1px solid #E4DCEE;border-radius:6px;padding:8px 10px"><strong>Integrity notice.</strong> ' + INTEGRITY_NOTICE + '</p>' + LOCK_CLOSE
     + '<p class="muted">Prepared by REALMS Healthcare Services Consulting Limited for HEFAMAA, Lagos State.</p>'
 }
 function isSecondVisit(v) { return !!(v && (v.status === 'second' || v.round === 2 || (v.debrief && v.debrief.second_visit) || (v.assessment && v.assessment.source === 'second_assessment'))) }
@@ -2334,9 +2377,9 @@ function buildSecondReport(v, origin, allVisits) {
   const inspBy = a.inspected_by ? '<p class="muted"><strong>Inspected by:</strong> ' + esc(a.inspected_by) + '</p>' : ''
   const scoreRows = [['Total Score', a.total_score != null && a.total_score !== '' ? String(a.total_score) : ''], ['Percentage', np != null ? np + '%' : '']]
   return inspHead(origin) + '<h1 style="font-size:18px;margin-top:10px">Second Assessment \u2014 Monitoring Report</h1>'
-    + '<table style="margin-top:6px">' + sec('General') + gen.map(row).join('') + sec('Findings') + find.map(row).join('') + sec('Scores') + scoreRows.map(row).join('') + '</table>'
+    + '<table style="margin-top:6px">' + sec('General') + gen.map(row).join('') + sec('Findings') + find.map(row).join('') + LOCK_OPEN + sec('Scores') + scoreRows.map(row).join('') + LOCK_CLOSE + '</table>'
     + cmp + recTable + newRecs + notes + inspBy
-    + '<p class="muted" style="border:1px solid #E4DCEE;border-radius:6px;padding:8px 10px"><strong>Integrity notice.</strong> ' + INTEGRITY_NOTICE + '</p>'
+    + LOCK_OPEN + '<p class="muted" style="border:1px solid #E4DCEE;border-radius:6px;padding:8px 10px"><strong>Integrity notice.</strong> ' + INTEGRITY_NOTICE + '</p>' + LOCK_CLOSE
     + '<p class="muted">Prepared by REALMS Healthcare Services Consulting Limited for HEFAMAA, Lagos State.</p>'
 }
 function buildMonitoringBatch(visits, origin) {
@@ -2384,7 +2427,7 @@ function buildReport(v, d, origin) {
     digital +
     '<h2>Debrief and sign-off</h2><p>Person in charge: ' + (d.proprietor_name || '\u2014') + '. Acknowledged: ' + (d.proprietor_ack ? 'Yes' : 'No') + '.</p>' + sig + (d.signed_at ? '<p class="muted">Signed ' + d.signed_at.slice(0, 16).replace('T', ' ') + '</p>' : '') +
     hefSection +
-    '<p class="muted"><strong>Integrity notice.</strong> ' + INTEGRITY_NOTICE + '</p><p class="muted">Prepared by REALMS Healthcare Services Consulting Limited in support of the HEFAMAA regulatory mandate. This report is not legal advice.</p>'
+    LOCK_OPEN + '<p class="muted"><strong>Integrity notice.</strong> ' + INTEGRITY_NOTICE + '</p>' + LOCK_CLOSE + '<p class="muted">Prepared by REALMS Healthcare Services Consulting Limited in support of the HEFAMAA regulatory mandate. This report is not legal advice.</p>'
 }
 function buildClosure(v, d, origin) {
   const date = (v.arrival_time || v.created_at || '').slice(0, 10)
@@ -3527,14 +3570,17 @@ function ReportsPage({ facilities, userId, scope, role }) {
             {isSecondVisit(v) ? <>
               <button className="mini primary" onClick={() => safePrint('Inspection Report', () => buildInspectionReport(v, v.debrief || deriveDebrief(v), origin))}>Inspection (HEFAMAA)</button>
               <button className="mini" onClick={() => safePrint('Second Assessment Report', () => buildSecondReport(v, origin, visits))}>Comparison</button>
+              <button className="mini word" onClick={() => downloadReportDoc('Inspection Report ' + (v.facility_name || ''), () => buildInspectionReport(v, v.debrief || deriveDebrief(v), origin))}>Word</button>
             </> : hasFirstAssessment(v) ? <>
               <button className="mini primary" onClick={() => safePrint('Monitoring Report', () => buildMonitoringReport(v, origin))}>Monitoring report</button>
               <button className="mini" onClick={() => safePrint('Inspection Report', () => buildInspectionReport(v, v.debrief || deriveDebrief(v), origin))}>Inspection</button>
+              <button className="mini word" onClick={() => downloadReportDoc('Monitoring Report ' + (v.facility_name || ''), () => buildMonitoringReport(v, origin))}>Word</button>
             </> : <>
               <button className="mini" onClick={() => safePrint('Monitoring Report', () => buildReport(v, v.debrief || deriveDebrief(v), origin))}>Report</button>
               <button className="mini" onClick={() => safePrint('Compliance Letter', () => buildLetter(v, v.debrief || deriveDebrief(v), origin))}>Letter</button>
               <button className="mini" onClick={() => safePrint('Inspection Report', () => buildInspectionReport(v, v.debrief || deriveDebrief(v), origin))}>Inspection</button>
               <button className="mini" onClick={() => safePrint('HEFAMAA Form', () => buildHefamaaDoc(v, origin))}>HEFAMAA</button>
+              <button className="mini word" onClick={() => downloadReportDoc('Inspection Report ' + (v.facility_name || ''), () => buildInspectionReport(v, v.debrief || deriveDebrief(v), origin))}>Word</button>
             </>}
             {!readOnly && <button className="mini" onClick={() => setNotifyId(notifyId === v.id ? null : v.id)}>Notify</button>}
           </div>
@@ -4344,9 +4390,10 @@ const css = `
 .realms .int-rev-ta { width:100%; border:1.5px solid var(--line); border-radius:10px; padding:8px 10px; font:inherit; resize:vertical; }
 .realms .int-rev-actions { display:flex; gap:8px; justify-content:flex-end; }
 .realms .btn.sm { padding:7px 14px; font-size:13.5px; }
+.realms .mini.word { border-color:#2B579A; color:#2B579A; } .realms .mini.word:hover { background:#2B579A; color:#fff; }
 .realms .own-note { margin:26px 0 8px; padding:22px 26px; background:var(--lav1, #F4F1F8); border:1px solid var(--line); border-radius:16px; }
 .realms .own-note h3 { margin:0 0 8px; color:var(--p-deep); }
-.realms .own-note p { margin:0; color:#4A3D5E; max-width:70ch; }
+.realms .own-note p { margin:0; color:#4A3D5E; }
 .realms .field.edit-wide { display:block; }
 @media (max-width:560px){ .realms .edit-grid { grid-template-columns:1fr; } }
 @media (max-width:640px){ .realms .tb-pw-lab { display:none; } .realms .tb-pw { padding:8px; } }
