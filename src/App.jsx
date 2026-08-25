@@ -4,7 +4,7 @@ import 'leaflet/dist/leaflet.css'
 import { supabase, MODE } from './supabaseClient.js'
 import { facilities as FAC, assignments as ASG, visits as VIS, notifications as NOTIF, calls as CALLS, access as ACC, roles as ROLEMGR, facilitiesFromCSV, orderRoute, clusterDays, clusterDaysByDate, googleMapsDirUrl, geocode, uploadEvidence, sendNotify, askAI, seedSampleData, clearAllData } from './data.js'
 
-const BUILD = 'field-2026-07-18-ay'
+const BUILD = 'field-2026-07-18-az'
 
 /*
   REALMS FIELD — Stages 1 to 3 (single-file App.jsx + supabaseClient.js + data.js)
@@ -2263,31 +2263,43 @@ function inspHead(origin) {
 function firstVal() { for (let i = 0; i < arguments.length; i++) { const v = arguments[i]; if (v != null && String(v).trim() !== '') return String(v) } return '' }
 function buildInspectionReport(v, d, origin) {
   const hef = (v.monitoring && v.monitoring.hefamaa) || {}
-  // On a second visit the team also fills the summary fields, which are stored on the
-  // assessment under their own key names. Fall back to those so the report reflects what
-  // was entered, rather than only the (often sparse) carried-over HEFAMAA form.
-  const sa = (v.assessment && (v.assessment.source === 'second_assessment')) ? v.assessment
-    : (v.monitoring && v.monitoring.second_assessment) || {}
-  const fv = (a, b, c) => firstVal(a, b, c)
-  const date = firstVal(hef.assess_date, sa.date, (v.visit_date || v.arrival_time || v.created_at || '').slice(0, 10))
+  const second = isSecondVisit(v)
+  // Resolve the second-visit summary ("this visit") data. It may be stored as the assessment
+  // itself (source second_assessment), under monitoring.second_assessment, or, when the source
+  // flag was never set, simply as v.assessment carrying the SA-shaped keys. Try all three.
+  const saExplicit = (v.assessment && v.assessment.source === 'second_assessment') ? v.assessment
+    : (v.monitoring && v.monitoring.second_assessment) || null
+  const saShaped = v.assessment && (v.assessment.reg_status != null || v.assessment.services != null || v.assessment.staff_strength != null || v.assessment.notes != null || v.assessment.environment != null) ? v.assessment : null
+  const sa = saExplicit || saShaped || {}
+  // Priority order per field. On a SECOND visit the data captured on THIS visit (sa) must win
+  // over the carried-over first-visit HEFAMAA form (hef); on a first visit, hef wins. Reading
+  // hef first on a second visit was showing first-visit figures (and, where hef was empty,
+  // producing a blank report even though the second-visit data was present).
+  const pick = (hv, sv) => second ? firstVal(sv, hv) : firstVal(hv, sv)
+  const date = second
+    ? firstVal(sa.date, (v.visit_date || v.arrival_time || v.created_at || '').slice(0, 10), hef.assess_date)
+    : firstVal(hef.assess_date, sa.date, (v.visit_date || v.arrival_time || v.created_at || '').slice(0, 10))
   const svcList = [].concat(Array.isArray(hef.svc_primary) ? hef.svc_primary : [], Array.isArray(hef.svc_support) ? hef.svc_support : []).join(', ')
   const staffAuto = [hef.doctors_ft && (hef.doctors_ft + ' doctor(s)'), hef.nurses_ft && (hef.nurses_ft + ' nurse(s)'), hef.others_ft && (hef.others_ft + ' other staff')].filter(Boolean).join(', ')
-  const renewal = firstVal(hef.hefamaa_renewal ? (hef.hefamaa_renewal + (hef.hefamaa_last_renewal ? ' (' + hef.hefamaa_last_renewal + ')' : '')) : '', sa.renewal_status)
+  const hefRenewal = hef.hefamaa_renewal ? (hef.hefamaa_renewal + (hef.hefamaa_last_renewal ? ' (' + hef.hefamaa_last_renewal + ')' : '')) : ''
+  const renewal = pick(hefRenewal, sa.renewal_status)
   const gapsText = (d && d.gaps && d.gaps.length) ? d.gaps.map(g => (g.category ? g.category + ': ' : '') + g.label).join('; ') : ''
   // The observation should reflect what the team actually found. Prefer their typed note;
   // otherwise, if they logged recommendations this visit, summarise those (real gaps beat a
   // generic "no change"); only fall back to the auto narrative when nothing was recorded.
   const newRecs = Array.isArray(sa.new_recommendations) ? sa.new_recommendations.filter(Boolean) : []
   const recsText = newRecs.length ? newRecs.join('; ') : ''
-  const observation = firstVal(hef.observation, sa.notes, recsText, gapsText, d && d.narrative)
+  const observation = second
+    ? firstVal(sa.notes, recsText, hef.observation, gapsText, d && d.narrative)
+    : firstVal(hef.observation, sa.notes, recsText, gapsText, d && d.narrative)
   const rows = [
     ['General', ''],
-    ['Date', date], ['Facility Name', v.facility_name || ''], ['Facility Address', firstVal(hef.address, sa.address, v.address)],
-    ['LGA', v.area || ''], ['Facility Schedule', firstVal(hef.schedule, sa.schedule, v.category)], ['Opening Schedule', firstVal(hef.opening, hef.hours)], ['Registration Status', firstVal(hef.registration, hef.hefamaa_reg, sa.reg_status)],
+    ['Date', date], ['Facility Name', v.facility_name || ''], ['Facility Address', pick(hef.address, sa.address) || v.address],
+    ['LGA', v.area || ''], ['Facility Schedule', pick(hef.schedule, sa.schedule) || v.category], ['Opening Schedule', firstVal(hef.opening, hef.hours)], ['Registration Status', pick(firstVal(hef.registration, hef.hefamaa_reg), sa.reg_status)],
     ['Findings', ''],
-    ['Renewal Status', renewal], ['Services Rendered', firstVal(hef.services_rendered, svcList, sa.services)], ['Total Staff Strength and Breakdown', firstVal(hef.total_staff, staffAuto, sa.staff_strength)], ['Staff met on duty', firstVal(hef.staff_on_duty, sa.staff_on_duty)],
-    ['Basic Equipment Available', firstVal(hef.basic_equipment, sa.basic_equipment)], ['# of Wards', firstVal(hef.wards_no, sa.wards)], ['# of Beds', firstVal(hef.beds_no, sa.beds)], ['# of Toilets', firstVal(hef.toilets_available, sa.toilets)],
-    ['Observation (Gaps)', observation], ['Environment', firstVal(hef.environment, hef.gen_ventilation, sa.environment)], ['Waste Management', firstVal(hef.waste_mgmt, hef.medical_waste, sa.waste_mgmt)], ['Treatment Room', firstVal(hef.treatment_room, sa.clinical_area)], ['Others', firstVal(hef.other_notes, sa.others)]
+    ['Renewal Status', renewal], ['Services Rendered', pick(firstVal(hef.services_rendered, svcList), sa.services)], ['Total Staff Strength and Breakdown', pick(firstVal(hef.total_staff, staffAuto), sa.staff_strength)], ['Staff met on duty', pick(hef.staff_on_duty, sa.staff_on_duty)],
+    ['Basic Equipment Available', pick(hef.basic_equipment, sa.basic_equipment)], ['# of Wards', pick(hef.wards_no, sa.wards)], ['# of Beds', pick(hef.beds_no, sa.beds)], ['# of Toilets', pick(hef.toilets_available, sa.toilets)],
+    ['Observation (Gaps)', observation], ['Environment', pick(firstVal(hef.environment, hef.gen_ventilation), sa.environment)], ['Waste Management', pick(firstVal(hef.waste_mgmt, hef.medical_waste), sa.waste_mgmt)], ['Treatment Room', pick(hef.treatment_room, sa.clinical_area)], ['Others', pick(hef.other_notes, sa.others)]
   ]
   const esc = s => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/\n/g, '<br>')
   const body = rows.map(r => r[1] === '' && (r[0] === 'General' || r[0] === 'Findings') ? '<tr><th colspan="2" style="font-size:13px">' + r[0] + '</th></tr>' : '<tr><td style="width:34%;font-weight:600;color:#574277">' + r[0] + '</td><td>' + esc(r[1]) + '</td></tr>').join('')
