@@ -4,7 +4,7 @@ import 'leaflet/dist/leaflet.css'
 import { supabase, MODE } from './supabaseClient.js'
 import { facilities as FAC, assignments as ASG, visits as VIS, notifications as NOTIF, calls as CALLS, access as ACC, roles as ROLEMGR, facilitiesFromCSV, orderRoute, clusterDays, clusterDaysByDate, googleMapsDirUrl, geocode, uploadEvidence, sendNotify, askAI, seedSampleData, clearAllData } from './data.js'
 
-const BUILD = 'field-2026-07-18-az'
+const BUILD = 'field-2026-07-18-ba'
 
 /*
   REALMS FIELD — Stages 1 to 3 (single-file App.jsx + supabaseClient.js + data.js)
@@ -2952,11 +2952,19 @@ function IntegrityPage({ facilities, userId, identity }) {
   // state (escalated / de-escalated) and the reason.
   const reviewByVisit = {}
   notes.filter(n => n.type === 'integrity_review').forEach(n => { if (!n.visit_id) return; if (!reviewByVisit[n.visit_id]) reviewByVisit[n.visit_id] = n })
+  // Recover the reviewer's comment. New records keep it inside message ("Reason: <comment>.");
+  // older demo-mode records may still carry a review_comment field.
+  function reviewComment(n) {
+    if (!n) return ''
+    if (n.review_comment) return n.review_comment
+    const m = /Reason:\s*([\s\S]*?)\.(?:\s+(?:Escalated to the MD|By )|$)/.exec(n.message || '')
+    return m ? m[1].trim() : ''
+  }
   function startReview(v) {
     const cur = reviewByVisit[v.id]
     setOpenReview(v.id)
     setRDecision((cur && cur.status) || '')
-    setRComment((cur && cur.review_comment) || '')
+    setRComment(reviewComment(cur))
   }
   async function saveReview(v) {
     if (!rDecision) { toast('Choose escalate or de-escalate first.', 'warn'); return }
@@ -2967,7 +2975,10 @@ function IntegrityPage({ facilities, userId, identity }) {
       (rDecision === 'escalated' ? ' Escalated to the MD and Chairman.' : '') +
       ' By ' + ((identity && identity.name) || 'RHSC HQ') + '.'
     try {
-      await NOTIF.add({ type: 'integrity_review', visit_id: v.id, facility_name: v.facility_name, area: v.area || '', channel: 'in_app', status: rDecision, review_comment: rComment.trim(), message: msg }, userId)
+      // The notifications table has no review_comment column, so the comment travels inside
+      // message (Reason: ...). Writing an unknown column made the whole insert fail
+      // ("Could not save the review"). Keep the insert to columns that exist.
+      await NOTIF.add({ type: 'integrity_review', visit_id: v.id, facility_name: v.facility_name, area: v.area || '', channel: 'in_app', status: rDecision, message: msg }, userId)
       if (rDecision === 'escalated') {
         // In-app alert to the executive office (stands in for MD + Chairman for now).
         try { await NOTIF.add({ type: 'integrity_escalation', visit_id: v.id, facility_name: v.facility_name, area: v.area || '', channel: 'in_app', status: 'sent', message: 'ESCALATION to MD and Chairman \u2014 ' + v.facility_name + (v.area ? ' (' + v.area + ')' : '') + '.' + (rComment.trim() ? ' Reason: ' + rComment.trim() + '.' : '') }, userId) } catch (e) {}
@@ -3063,7 +3074,7 @@ function IntegrityPage({ facilities, userId, identity }) {
               {rev && <span className={'int-rev-tag ' + rev.status}>{rev.status === 'escalated' ? 'Escalated' : 'De-escalated'}</span>}
               <button className="mini" onClick={() => (openReview === c.v.id ? setOpenReview(null) : startReview(c.v))}>{openReview === c.v.id ? 'Close' : rev ? 'Update review' : 'Review'}</button>
             </div>
-            {rev && rev.review_comment && openReview !== c.v.id && <div className="int-rev-note">{rev.review_comment}</div>}
+            {rev && reviewComment(rev) && openReview !== c.v.id && <div className="int-rev-note">{reviewComment(rev)}</div>}
             {openReview === c.v.id && (<div className="int-rev-form">
               <div className="int-rev-choice">
                 <button type="button" className={'seg' + (rDecision === 'escalated' ? ' on esc' : '')} onClick={() => setRDecision('escalated')}>Escalate</button>
