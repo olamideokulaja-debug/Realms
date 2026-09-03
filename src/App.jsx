@@ -4,7 +4,7 @@ import 'leaflet/dist/leaflet.css'
 import { supabase, MODE } from './supabaseClient.js'
 import { facilities as FAC, assignments as ASG, visits as VIS, notifications as NOTIF, calls as CALLS, access as ACC, roles as ROLEMGR, facilitiesFromCSV, orderRoute, clusterDays, clusterDaysByDate, googleMapsDirUrl, geocode, uploadEvidence, sendNotify, askAI, seedSampleData, clearAllData } from './data.js'
 
-const BUILD = 'field-2026-07-18-ba'
+const BUILD = 'field-2026-07-18-bb'
 
 /*
   REALMS FIELD — Stages 1 to 3 (single-file App.jsx + supabaseClient.js + data.js)
@@ -132,17 +132,17 @@ const LEADERS = [
 ]
 const STAFF = [
   {
-    name: 'Ojuma Joy', role: 'Team Lead (interim), Registered Nurse', unit: 'Field Monitoring Team',
+    name: 'Ojuma Joy', role: 'Team Lead (interim), Registered Nurse', unit: 'Field Monitoring Team', photo: '/photos/joy.jpg',
     purpose: 'Leads and supervises daily monitoring across assigned Lagos State local government areas, combining accurate field documentation with professional nursing oversight and regulatory guidance.',
     duties: ['Plans routes, assigns daily rounds and briefs the team', 'Supervises checklist-based inspections and photographic evidence', 'Documents staffing, duty rosters, equipment, wards, beds and services', 'Facility debriefing and practical corrective guidance', 'Assesses nursing quality, uniforms, practising licences and staffing', 'Reviews and signs off reports before HEFAMAA submission', 'Upholds professional ethics, integrity and accountability in the field']
   },
   {
-    name: 'Anele Goodnews', role: 'Medical Laboratory Scientist, Monitoring Agent', unit: 'Field Monitoring Team',
+    name: 'Anele Goodnews', role: 'Medical Laboratory Scientist, Monitoring Agent', unit: 'Field Monitoring Team', photo: '/photos/anele.jpg',
     purpose: 'Evaluates laboratory services, personnel, infrastructure, documentation and biosafety practices during routine monitoring, ensuring findings are objective and aligned with HEFAMAA requirements.',
     duties: ['Assesses medical laboratory services against licensed scope', 'Verifies laboratory personnel qualifications and licences', 'Inspects equipment, infrastructure and infection control', 'Reviews test registers, QC records and reagent inventories', 'Evaluates biosafety, PPE and specimen handling', 'Documents findings on the HEFAMAA checklist', 'Debriefs facilities and compiles reports in Word and Excel']
   },
   {
-    name: 'Registered Nurse, Monitoring Officer', role: 'Role profile', unit: 'Iyana-Ipaja & Ifako-Ijaiye Monitoring Areas', roleOnly: true,
+    name: 'Uchenna Okparaocha', role: 'Registered Nurse, Monitoring Officer', unit: 'Iyana-Ipaja & Ifako-Ijaiye Monitoring Areas', photo: '/photos/uchenna.jpg',
     purpose: 'Supports HEFAMAA-aligned facility monitoring across Iyana-Ipaja and Ifako-Ijaiye, promoting safe, compliant and high-quality healthcare delivery.',
     duties: ['Monitoring planning, scheduling and efficient daily routes', 'Facility mapping and routine inspections to HEFAMAA requirements', 'Daily monitoring reports and team updates', 'Compliance assessment: closure notices and reports of findings', 'Stakeholder engagement, commendation and corrective recommendations', 'Clinical quality, infection prevention, medication safety and records', 'Promotes the Genesys Electronic Medical Records system', 'Monthly OKRs and performance management']
   }
@@ -499,24 +499,25 @@ function LeaderCard({ l }) {
   const [imgOk, setImgOk] = useState(true)
   const initials = (l.name.replace(/[^A-Za-z ]/g, '').split(' ').filter(Boolean).map(w => w[0]).slice(0, 2).join('') || 'R').toUpperCase()
   return (<article className="staff lead">
-    <div className="staff-top">
-      <div className="staff-photo">{imgOk ? <img src={l.photo} alt={l.name} onError={() => setImgOk(false)} /> : <span>{initials}</span>}</div>
-      <div className="staff-id"><h3>{l.name}</h3><p className="staff-role">{l.role}</p></div>
+    <div className="staff-portrait">{imgOk && l.photo ? <img src={l.photo} alt={l.name} onError={() => setImgOk(false)} /> : <span className="portrait-initials">{initials}</span>}</div>
+    <div className="staff-body">
+      <h3>{l.name}</h3><p className="staff-role">{l.role}</p>
+      <p className="staff-purpose">{l.bio}</p>
     </div>
-    <p className="staff-purpose">{l.bio}</p>
   </article>)
 }
 function StaffCard({ s }) {
   const [open, setOpen] = useState(false)
+  const [imgOk, setImgOk] = useState(true)
   const initials = (s.name.replace(/[^A-Za-z ]/g, '').split(' ').filter(Boolean).map(w => w[0]).slice(0, 2).join('') || 'R').toUpperCase()
   return (<article className="staff">
-    <div className="staff-top">
-      <div className="staff-photo" aria-hidden="true"><span>{initials}</span></div>
-      <div className="staff-id"><h3>{s.name}</h3><p className="staff-role">{s.role}</p><p className="staff-unit">{s.unit}</p></div>
+    <div className="staff-portrait">{imgOk && s.photo ? <img src={s.photo} alt={s.name} onError={() => setImgOk(false)} /> : <span className="portrait-initials">{initials}</span>}</div>
+    <div className="staff-body">
+      <h3>{s.name}</h3><p className="staff-role">{s.role}</p><p className="staff-unit">{s.unit}</p>
+      <p className="staff-purpose">{s.purpose}</p>
+      <button className="linkbtn" onClick={() => setOpen(o => !o)}>{open ? 'Hide role profile' : 'View role profile'}</button>
+      {open && <ul className="staff-duties">{s.duties.map((d, i) => <li key={i}>{d}</li>)}</ul>}
     </div>
-    <p className="staff-purpose">{s.purpose}</p>
-    <button className="linkbtn" onClick={() => setOpen(o => !o)}>{open ? 'Hide role profile' : 'View role profile'}</button>
-    {open && <ul className="staff-duties">{s.duties.map((d, i) => <li key={i}>{d}</li>)}</ul>}
   </article>)
 }
 function LeadershipPage({ go }) {
@@ -5161,18 +5162,20 @@ const css = `
 .realms .cert-chip { background:var(--lav1); border:1px dashed var(--line); border-radius:10px; padding:8px 14px; font-size:13px; color:#5A4C74; }
 .realms .leaders { display:grid; grid-template-columns:repeat(3,1fr); gap:18px; margin-bottom:34px; }
 .realms .staff-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:18px; margin-bottom:30px; }
-.realms .lead-grid { grid-template-columns:1fr 1fr; max-width:860px; margin:0 auto; }
-.realms .staff.lead .staff-photo { width:72px; height:72px; }
-.realms .staff-photo img { width:100%; height:100%; object-fit:cover; border-radius:50%; }
-.realms .staff { background:#fff; border:1px solid var(--line); border-radius:16px; padding:22px; }
-.realms .staff.lead { border-color:var(--v); box-shadow:0 12px 30px rgba(58,21,96,.12); background:linear-gradient(180deg,#fff,var(--lav1)); }
-.realms .staff-top { display:flex; align-items:center; gap:14px; margin-bottom:12px; }
-.realms .staff-photo { width:60px; height:60px; flex-shrink:0; border-radius:50%; background:linear-gradient(135deg,var(--p),var(--v)); display:grid; place-items:center; }
-.realms .staff-photo span { color:#fff; font-size:20px; font-weight:700; letter-spacing:.03em; }
-.realms .staff-id h3 { color:var(--p-deep); font-size:17px; line-height:1.2; }
-.realms .staff-role { color:var(--p); font-size:13.5px; margin-top:3px; }
-.realms .staff-unit { color:#8A7AA6; font-size:12.5px; }
-.realms .staff-purpose { color:#5A4C74; font-size:14px; line-height:1.55; margin-bottom:8px; }
+.realms .lead-grid { display:flex; flex-wrap:wrap; justify-content:center; gap:24px; }
+.realms .lead-grid .staff { width:320px; max-width:100%; }
+.realms .staff { background:#fff; border:1px solid var(--line); border-radius:18px; padding:0; overflow:hidden; box-shadow:0 12px 32px rgba(87,66,119,.08); transition:.3s cubic-bezier(.2,.7,.2,1); display:flex; flex-direction:column; }
+.realms .staff:hover { transform:translateY(-7px); box-shadow:0 26px 60px rgba(122,52,168,.16); border-color:var(--gold-soft); }
+.realms .staff.lead { border-color:var(--gold-soft); box-shadow:0 16px 40px rgba(58,21,96,.12); }
+/* prominent portrait spanning the full card width */
+.realms .staff-portrait { position:relative; width:100%; aspect-ratio:3/4; background:linear-gradient(135deg,var(--p),var(--p-deep)); display:grid; place-items:center; overflow:hidden; }
+.realms .staff-portrait img { width:100%; height:100%; object-fit:cover; object-position:center 22%; display:block; }
+.realms .staff-portrait .portrait-initials { color:#fff; font-family:'Lora',Georgia,serif; font-size:56px; font-weight:600; letter-spacing:.02em; }
+.realms .staff-body { padding:22px 24px 26px; display:flex; flex-direction:column; }
+.realms .staff-body h3 { color:var(--p-deep); font-family:'Lora',Georgia,serif; font-weight:600; font-size:20px; line-height:1.15; }
+.realms .staff-role { color:var(--p); font-size:14px; margin-top:5px; font-weight:600; }
+.realms .staff-unit { color:var(--gold-deep); font-size:12.5px; margin-top:2px; letter-spacing:.02em; }
+.realms .staff-purpose { color:#5A4C74; font-size:14px; line-height:1.6; margin:12px 0 8px; }
 .realms .staff-duties { margin:10px 0 0; padding-left:18px; display:grid; gap:5px; }
 .realms .staff-duties li { font-size:13.5px; color:#3A2B54; }
 @media (max-width:900px){ .realms .staff-grid { grid-template-columns:1fr 1fr; } }
