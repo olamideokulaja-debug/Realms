@@ -4,7 +4,7 @@ import 'leaflet/dist/leaflet.css'
 import { supabase, MODE } from './supabaseClient.js'
 import { facilities as FAC, assignments as ASG, visits as VIS, notifications as NOTIF, calls as CALLS, access as ACC, roles as ROLEMGR, facilitiesFromCSV, orderRoute, clusterDays, clusterDaysByDate, googleMapsDirUrl, geocode, uploadEvidence, sendNotify, askAI, seedSampleData, clearAllData } from './data.js'
 
-const BUILD = 'field-2026-07-18-bb'
+const BUILD = 'field-2026-07-18-bd'
 
 /*
   REALMS FIELD — Stages 1 to 3 (single-file App.jsx + supabaseClient.js + data.js)
@@ -2018,6 +2018,11 @@ function MonitorPage({ userId, onOpen }) {
   const [q, setQ] = useState('')
   const [lightbox, setLightbox] = useState(null)
   const [hefCheck, setHefCheck] = useState('')
+  const [outcome, setOutcome] = useState('assessed')      // structured visit outcome
+  const [regStatus, setRegStatus] = useState('')          // structured registration status
+  const [renewalStatus, setRenewalStatus] = useState('')  // structured renewal status
+  const [renewalDate, setRenewalDate] = useState('')      // renewal expiry date
+  const openedAt = useRef(null)                            // stage timestamp: assessment start
 
   useEffect(() => { VIS.list().then(setVisits).catch(() => {}) }, [])
   useEffect(() => { const on = () => setOnline(true), off = () => setOnline(false); window.addEventListener('online', on); window.addEventListener('offline', off); return () => { window.removeEventListener('online', on); window.removeEventListener('offline', off) } }, [])
@@ -2042,6 +2047,13 @@ function MonitorPage({ userId, onOpen }) {
       }
     } catch (e) {}
     setActive(v); setData(d); setProfile(pf); setHef(hf); setSaveState(restored ? 'draft' : '')
+    // structured fields: hydrate from existing monitoring data if present
+    const mon = v.monitoring || {}
+    setOutcome(mon.outcome || 'assessed')
+    setRegStatus(mon.reg_status || '')
+    setRenewalStatus(mon.renewal_status || '')
+    setRenewalDate(mon.renewal_date || '')
+    openedAt.current = (mon.stage_times && mon.stage_times.assess_start) || new Date().toISOString()
     if (restored) toast('Unsaved work restored on this device.')
   }
   function setProfileField(k, val) { setProfile(p => ({ ...p, [k]: val })); setSaveState('draft') }
@@ -2063,9 +2075,50 @@ function MonitorPage({ userId, onOpen }) {
     })
     return { noPhoto, noVoice: [] }
   }
+  // Completeness gate: which checklist items are still unrated (blank).
+  function unratedItems() {
+    const missing = []
+    CHECKLIST.forEach(cat => {
+      cat.items.forEach((label, i) => {
+        const it = data[cat.id + '_' + i]
+        if (!it || !it.rating) missing.push(cat.label)
+      })
+    })
+    // collapse to distinct category names with counts
+    const by = {}
+    missing.forEach(c => { by[c] = (by[c] || 0) + 1 })
+    return Object.keys(by).map(c => c + ' (' + by[c] + ')')
+  }
 
   async function save() {
     if (!active) return
+    const nowISO = new Date().toISOString()
+    const meta = outcomeMeta(outcome)
+    // Branch: a non-operational outcome is a short, valid visit with nothing to assess.
+    if (meta && !meta.assessable) {
+      setBusy(true); setMsg('')
+      const payload = {
+        outcome, non_operational: true,
+        note: (profile && profile.outcome_note) || '',
+        reg_status: regStatus, renewal_status: renewalStatus, renewal_date: renewalDate,
+        stage_times: { assess_start: openedAt.current, assess_end: nowISO },
+        updatedAt: nowISO
+      }
+      try {
+        await VIS.update(active.id, { monitoring: payload, score: null, overall_rating: null, status: 'monitored' })
+        try { localStorage.removeItem(draftKey) } catch (e) {}
+        setSaveState('saved'); setMsg(meta.label + ' recorded. This is a complete visit; there is nothing further to assess.'); toast(meta.label + ' recorded.')
+        setVisits(vs => vs.map(v => v.id === active.id ? { ...v, monitoring: payload, score: null, overall_rating: null, status: 'monitored' } : v))
+      } catch (e) { setSaveState('pending'); setMsg('Saved locally; will sync when back online.') }
+      finally { setBusy(false) }
+      return
+    }
+    // Assessed outcome: enforce completeness, then the existing photo gate.
+    const missing = unratedItems()
+    if (missing.length) {
+      setMsg('This assessment is not complete. Please rate every item before saving. Still to rate: ' + missing.join(', ') + '. If the facility is not operational, change the visit outcome above instead.')
+      return
+    }
     const req = requirements()
     if (req.noPhoto.length || req.noVoice.length) {
       const parts = []
@@ -2075,7 +2128,13 @@ function MonitorPage({ userId, onOpen }) {
       return
     }
     setBusy(true); setMsg('')
-    const payload = { items: data, profile, hefamaa: hef, score: score.pct, overallRating: score.rag, updatedAt: new Date().toISOString() }
+    const payload = {
+      items: data, profile, hefamaa: hef, score: score.pct, overallRating: score.rag,
+      outcome: 'assessed',
+      reg_status: regStatus, renewal_status: renewalStatus, renewal_date: renewalDate,
+      stage_times: { assess_start: openedAt.current, assess_end: nowISO },
+      updatedAt: nowISO
+    }
     try {
       await VIS.update(active.id, { monitoring: payload, score: score.pct, overall_rating: score.rag, status: 'monitored' })
       try { localStorage.removeItem(draftKey) } catch (e) {}
@@ -2127,6 +2186,37 @@ function MonitorPage({ userId, onOpen }) {
         <span className="rated">{score.rated}/{totalItems} rated</span>
       </div>
     </div>
+    {msg && <p className="auth-msg block">{msg}</p>}
+
+    <div className="outcome-box">
+      <div className="outcome-head"><span className="outcome-lab">Visit outcome</span><span className="outcome-hint">Set this first. It decides whether this is an assessment or a documented closure.</span></div>
+      <div className="outcome-opts">
+        {VISIT_OUTCOMES.map(o => (
+          <button key={o.id} type="button" className={'outcome-chip' + (outcome === o.id ? ' on' : '') + (o.assessable ? ' ok' : ' nf')} onClick={() => { setOutcome(o.id); setSaveState('draft') }} title={o.desc}>{o.label}</button>
+        ))}
+      </div>
+      <div className="reg-fields">
+        <label className="reg-f"><span>Registration status</span>
+          <select value={regStatus} onChange={e => { setRegStatus(e.target.value); setSaveState('draft') }}>
+            <option value="">Select</option><option>Registered</option><option>Registration in progress</option><option>Not registered</option><option>Unknown</option>
+          </select></label>
+        <label className="reg-f"><span>Renewal status</span>
+          <select value={renewalStatus} onChange={e => { setRenewalStatus(e.target.value); setSaveState('draft') }}>
+            <option value="">Select</option><option>Up to date</option><option>Not up to date</option><option>Not applicable</option>
+          </select></label>
+        <label className="reg-f"><span>Renewal / licence expiry</span>
+          <input type="date" value={renewalDate} onChange={e => { setRenewalDate(e.target.value); setSaveState('draft') }} /></label>
+      </div>
+      {isNonOperational({ monitoring: { outcome } }) && (
+        <div className="outcome-note">
+          <p className="hintline">This facility is recorded as <strong>{outcomeMeta(outcome).label.toLowerCase()}</strong>. There is nothing to assess, so the checklist below is not required. Add a short note if useful, then save, this is a complete, valid visit.</p>
+          <textarea className="outcome-ta" placeholder="Optional note (e.g. met locked; neighbour confirmed relocation to unknown address)" value={(profile && profile.outcome_note) || ''} onChange={e => setProfileField('outcome_note', e.target.value)} />
+          <button className="btn primary" onClick={save} disabled={busy}>{busy ? 'Saving\u2026' : 'Save ' + outcomeMeta(outcome).label.toLowerCase() + ' visit'}</button>
+        </div>
+      )}
+    </div>
+
+    {!isNonOperational({ monitoring: { outcome } }) && (<>
     {(() => { const hefTotal = HEFAMAA_FORM.reduce((n, s) => n + s.fields.length, 0); const hefDone = HEFAMAA_FORM.reduce((n, s) => n + hefAnswered(s, hef), 0); const ragPct = Math.round((score.rated / totalItems) * 100); const hefPct = Math.round((hefDone / hefTotal) * 100); return (
       <div className="mon-meter">
         <div className="meter-row"><span className="meter-lab">Ratings</span><div className="meter-track"><div className="meter-fill" style={{ width: ragPct + '%' }} /></div><span className="meter-val">{score.rated}/{totalItems}</span></div>
@@ -2174,9 +2264,10 @@ function MonitorPage({ userId, onOpen }) {
         })}</div>
       </div>)
     })}
+    </>)}
 
     <div className="mon-actions">
-      <button className="btn primary" onClick={save} disabled={busy}>{busy ? 'Saving\u2026' : 'Save assessment'}</button>
+      {!isNonOperational({ monitoring: { outcome } }) && <button className="btn primary" onClick={save} disabled={busy}>{busy ? 'Saving\u2026' : 'Save assessment'}</button>}
       {saveState === 'pending' && <button className="btn ghost" onClick={save}>Sync now</button>}
       <span className="save-note">{saveState === 'saved' ? 'Saved' : saveState === 'pending' ? 'Pending sync' : 'Draft saved on this device'}</span>
     </div>
@@ -2264,6 +2355,22 @@ function inspHead(origin) {
 function firstVal() { for (let i = 0; i < arguments.length; i++) { const v = arguments[i]; if (v != null && String(v).trim() !== '') return String(v) } return '' }
 function buildInspectionReport(v, d, origin) {
   const hef = (v.monitoring && v.monitoring.hefamaa) || {}
+  // If the visit recorded a non-operational outcome, the report states that plainly rather
+  // than presenting an empty assessment.
+  const oc = outcomeMeta(outcomeOf(v))
+  if (oc && !oc.assessable) {
+    const escv = s => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/\n/g, '<br>')
+    const note = (v.monitoring && v.monitoring.note) || (v.monitoring && v.monitoring.profile && v.monitoring.profile.outcome_note) || ''
+    const dt = ((v.monitoring && v.monitoring.stage_times && v.monitoring.stage_times.assess_end) || v.visit_date || v.arrival_time || '').slice(0, 10)
+    return inspHead(origin) + '<h2>Visit outcome</h2>' +
+      '<table class="kv"><tr><td style="width:34%">Date</td><td>' + dt + '</td></tr>' +
+      '<tr><td>Facility Name</td><td>' + escv(v.facility_name || '') + '</td></tr>' +
+      '<tr><td>LGA</td><td>' + escv(v.area || '') + '</td></tr>' +
+      '<tr><td>Outcome</td><td><strong>' + oc.label + '</strong></td></tr>' +
+      (note ? '<tr><td>Officer note</td><td>' + escv(note) + '</td></tr>' : '') + '</table>' +
+      LOCK_OPEN + '<p class="muted" style="border:1px solid #E4DCEE;border-radius:6px;padding:8px 10px"><strong>Integrity notice.</strong> ' + INTEGRITY_NOTICE + '</p>' + LOCK_CLOSE +
+      '<p class="muted">This facility was found ' + oc.label.toLowerCase() + ' at the registered address. No assessment was possible; this record documents the facility\u2019s status for the Agency. Prepared by REALMS Healthcare Services Consulting Limited for HEFAMAA, Lagos State.</p>'
+  }
   const second = isSecondVisit(v)
   // Resolve the second-visit summary ("this visit") data. It may be stored as the assessment
   // itself (source second_assessment), under monitoring.second_assessment, or, when the source
@@ -2500,6 +2607,7 @@ function SignaturePad({ value, onChange }) {
 function DebriefPage({ userId, facilities }) {
   const [visits, setVisits] = useState([])
   const [active, setActive] = useState(null)
+  const debriefStart = useRef(null)
   const [strengths, setStrengths] = useState([])
   const [gaps, setGaps] = useState([])
   const [deadline, setDeadline] = useState('')
@@ -2528,6 +2636,7 @@ function DebriefPage({ userId, facilities }) {
 
   function open(v) {
     setActive(v); setMsg(''); setSaveState('')
+    debriefStart.current = (v.debrief && v.debrief.debrief_start) || new Date().toISOString()
     const existing = v.debrief
     if (existing) {
       setStrengths(existing.strengths || []); setGaps(existing.gaps || []); setDeadline(existing.remediation_deadline || '')
@@ -2565,7 +2674,7 @@ function DebriefPage({ userId, facilities }) {
   }
   function setGap(i, patch) { setGaps(gs => gs.map((g, x) => x === i ? { ...g, ...patch } : g)); setSaveState('draft') }
 
-  function payload() { return { strengths, gaps, remediation_deadline: deadline, reinspection, letter_issued: letterIssued, proprietor_name: propName.trim(), proprietor_ack: ack, signature, signed_at: signature ? new Date().toISOString() : '', genesys_interest: genesys, genesys_note: genesysNote.trim(), closure_recommended: closure, escalated: escalate, narrative: narrative.trim(), updatedAt: new Date().toISOString() } }
+  function payload() { return { strengths, gaps, remediation_deadline: deadline, reinspection, letter_issued: letterIssued, proprietor_name: propName.trim(), proprietor_ack: ack, signature, signed_at: signature ? new Date().toISOString() : '', genesys_interest: genesys, genesys_note: genesysNote.trim(), closure_recommended: closure, escalated: escalate, narrative: narrative.trim(), debrief_start: debriefStart.current, debrief_end: new Date().toISOString(), updatedAt: new Date().toISOString() } }
   function findingsText() {
     const g = gaps.map(x => '- ' + (x.category ? x.category + ': ' : '') + (x.label || '')).join('\n')
     const s = strengths.map(x => '- ' + (x.label || x)).join('\n')
@@ -2914,6 +3023,46 @@ async function runReminders(visits, facilities, userId, opts) {
    leaves behind, and leans on the two checks that sit outside the team: what the
    facility says, and a random re-inspection. */
 function monitorOf(v) { return (v.team && v.team[0] && v.team[0].name) || 'Unknown' }
+// ---- Structured visit outcome (the single most valuable dataset upgrade) ----
+// Stored on the visit's monitoring jsonb as monitoring.outcome so no new DB column is needed.
+const VISIT_OUTCOMES = [
+  { id: 'assessed', label: 'Assessed', assessable: true, desc: 'Facility open and functional; full assessment carried out' },
+  { id: 'closed', label: 'Closed / not operational', assessable: false, desc: 'Facility met locked or confirmed no longer operating' },
+  { id: 'relocated', label: 'Relocated', assessable: false, desc: 'Facility has moved from the registered address' },
+  { id: 'not_found', label: 'Not found', assessable: false, desc: 'No facility at the registered address' },
+  { id: 'renovation', label: 'Under renovation', assessable: false, desc: 'Temporarily closed for works' },
+  { id: 'not_yet', label: 'Not yet operational', assessable: false, desc: 'Registered but not yet open for services' },
+  { id: 'refused', label: 'Access refused', assessable: false, desc: 'Entry or assessment declined by the facility' }
+]
+function outcomeOf(v) {
+  const o = (v && v.monitoring && v.monitoring.outcome) || (v && v.debrief && v.debrief.outcome) || null
+  return o || (v && (v.status === 'monitored' || v.status === 'debriefed' || v.status === 'second') ? 'assessed' : null)
+}
+function outcomeMeta(id) { return VISIT_OUTCOMES.find(o => o.id === id) || null }
+function isAssessedOutcome(v) { const m = outcomeMeta(outcomeOf(v)); return m ? m.assessable : true }
+function isNonOperational(v) { const m = outcomeMeta(outcomeOf(v)); return m ? !m.assessable : false }
+
+// ---- Per-type expected time on site (minutes), for the soft anti-rush anomaly flag ----
+// These are the review thresholds, not hard limits: a functional visit below the floor for its
+// type is flagged for HQ review, never blocked. Closure visits are exempt (nothing to assess).
+function facilityTypeKey(v) {
+  const s = ((v && (v.category || v.facility_schedule)) || '').toLowerCase()
+  if (/diagnostic|dialysis|imaging|scan/.test(s)) return 'diagnostic'
+  if (/laborator|\blab\b/.test(s)) return 'laboratory'
+  if (/hospital/.test(s)) return 'hospital'
+  if (/maternity|nursing|convalesc/.test(s)) return 'nursing'
+  if (/eye|dental|fertility|ivf|physio|beauty|spa|clinic|medical/.test(s)) return 'clinic'
+  return 'clinic'
+}
+const TYPE_TIME = {
+  hospital: { label: 'Hospital', floor: 24, lo: 28, hi: 45 },
+  nursing: { label: 'Nursing / maternity home', floor: 16, lo: 20, hi: 32 },
+  diagnostic: { label: 'Diagnostic centre', floor: 12, lo: 16, hi: 26 },
+  laboratory: { label: 'Laboratory', floor: 10, lo: 14, hi: 22 },
+  clinic: { label: 'Clinic / specialist', floor: 11, lo: 15, hi: 24 }
+}
+function expectedTime(v) { return TYPE_TIME[facilityTypeKey(v)] || TYPE_TIME.clinic }
+
 function minutesOnSite(v) {
   const a = v.arrival_time ? new Date(v.arrival_time).getTime() : 0
   const d = (v.debrief && v.debrief.updatedAt) ? new Date(v.debrief.updatedAt).getTime() : ((v.monitoring && v.monitoring.updatedAt) ? new Date(v.monitoring.updatedAt).getTime() : 0)
@@ -2939,6 +3088,8 @@ function IntegrityPage({ facilities, userId, identity }) {
   const [calls, setCalls] = useState([])
   const [loading, setLoading] = useState(true)
   const [sample, setSample] = useState(null)
+  const [reinspecting, setReinspecting] = useState(null)   // visit id being re-inspected
+  const [reinspectBusy, setReinspectBusy] = useState(false)
   const [notes, setNotes] = useState([])
   const [openReview, setOpenReview] = useState(null)
   const [rDecision, setRDecision] = useState('')
@@ -2997,7 +3148,16 @@ function IntegrityPage({ facilities, userId, identity }) {
     const flags = []
     const mins = minutesOnSite(v)
     const ev = evidenceCount(v)
-    if (mins != null && mins < 20) flags.push('In and out in ' + mins + ' min')
+    const nonOp = isNonOperational(v)
+    if (nonOp) {
+      // Non-operational visits are exempt from assessment-quality flags: there is nothing to
+      // assess. We only check the visit was located, since that proves the officer attended.
+      if (typeof v.lat !== 'number' || typeof v.lng !== 'number') flags.push('No GPS at check-in')
+      return { v, mins, ev, flags, nonOp: true }
+    }
+    // Assessed visits: flag time below the review floor for THIS facility type (soft anti-rush).
+    const exp = expectedTime(v)
+    if (mins != null && mins < exp.floor) flags.push('Fast for a ' + exp.label.toLowerCase() + ': ' + mins + ' min (expected ' + exp.lo + '\u2013' + exp.hi + ')')
     if (!ev) flags.push('No photo evidence')
     if (typeof v.lat !== 'number' || typeof v.lng !== 'number') flags.push('No GPS at check-in')
     else if (f && hasCoords(f) && f.geo_confirmed !== false) {
@@ -3006,7 +3166,7 @@ function IntegrityPage({ facilities, userId, identity }) {
     }
     const gaps = (v.debrief && v.debrief.gaps) || []
     if (v.overall_rating === 'green' && !gaps.length && !ev) flags.push('Passed with nothing recorded')
-    return { v, mins, ev, flags }
+    return { v, mins, ev, flags, nonOp: false }
   }
   const checked = scored.map(checkVisit)
   const flagged = checked.filter(c => c.flags.length).sort((a, b) => b.flags.length - a.flags.length)
@@ -3025,6 +3185,46 @@ function IntegrityPage({ facilities, userId, identity }) {
   const askedCount = calls.filter(c => c.integrity && c.integrity !== 'Not asked').length
   const approved = scored.filter(v => v.approval && v.approval.status === 'approved')
 
+  // ---- Functional vs non-operational split (from the structured outcome) ----
+  const nonOpVisits = scored.filter(v => isNonOperational(v))
+  const assessedVisits = scored.filter(v => !isNonOperational(v))
+  const funcPct = scored.length ? Math.round(assessedVisits.length / scored.length * 100) : null
+
+  // ---- Median time on site, per facility type (assessed visits only) ----
+  const byType = {}
+  assessedVisits.forEach(v => {
+    const k = facilityTypeKey(v); const m = minutesOnSite(v)
+    if (m == null) return
+    ;(byType[k] = byType[k] || []).push(m)
+  })
+  const typeRows = Object.keys(TYPE_TIME).map(k => {
+    const arr = (byType[k] || []).sort((a, b) => a - b)
+    const med = arr.length ? arr[Math.floor(arr.length / 2)] : null
+    return { key: k, label: TYPE_TIME[k].label, n: arr.length, med, exp: TYPE_TIME[k] }
+  }).filter(r => r.n > 0)
+
+  // ---- Re-inspection concordance: compare a re-inspection score to the original ----
+  // A re-inspection visit carries reinspect_of = original visit id (set when the sample is
+  // actioned). Concordance = share of re-inspections whose RAG band matches the original.
+  const origById = {}; scored.forEach(v => { origById[v.id] = v })
+  const reinspections = visits.filter(v => v.monitoring && v.monitoring.reinspect_of && origById[v.monitoring.reinspect_of])
+  let concordN = 0, concordMatch = 0
+  reinspections.forEach(v => {
+    const orig = origById[v.monitoring.reinspect_of]
+    if (v.overall_rating && orig.overall_rating) { concordN++; if (v.overall_rating === orig.overall_rating) concordMatch++ }
+  })
+  const concordance = concordN ? Math.round(concordMatch / concordN * 100) : null
+
+  // ---- Corrective-action closure rate: across second visits, share of original
+  // recommendations marked resolved. This is the strongest single proof monitoring changes
+  // facility behaviour. Data comes from second_assessment.recommendation_status.
+  let recTotal = 0, recResolved = 0
+  visits.forEach(v => {
+    const rs = (v.assessment && v.assessment.recommendation_status) || (v.monitoring && v.monitoring.second_assessment && v.monitoring.second_assessment.recommendation_status)
+    if (Array.isArray(rs)) { rs.forEach(r => { recTotal++; if (r && r.status === 'resolved') recResolved++ }) }
+  })
+  const closureRate = recTotal ? Math.round(recResolved / recTotal * 100) : null
+
   function drawSample() {
     const pool = approved.length ? approved : scored
     if (!pool.length) { toast('No completed visits to sample yet.', 'warn'); return }
@@ -3032,6 +3232,25 @@ function IntegrityPage({ facilities, userId, identity }) {
     const picked = pool.slice().sort(() => Math.random() - 0.5).slice(0, n)
     setSample(picked)
     toast(n + ' visit' + (n === 1 ? '' : 's') + ' drawn for re-inspection.')
+  }
+
+  // Record a re-inspection outcome against an original visit. Creates a lightweight visit row
+  // tagged monitoring.reinspect_of = original id, so the concordance metric can compare the two.
+  async function recordReinspection(orig, rag) {
+    setReinspectBusy(true)
+    const now = new Date().toISOString()
+    try {
+      await VIS.add({
+        facility_id: orig.facility_id, facility_name: orig.facility_name, area: orig.area || '',
+        category: orig.category || '', status: 'monitored', overall_rating: rag,
+        arrival_time: now,
+        monitoring: { reinspect_of: orig.id, reinspection: true, outcome: 'assessed', overallRating: rag, updatedAt: now }
+      }, userId)
+      toast('Re-inspection recorded. It now counts towards the match rate.')
+      setReinspecting(null)
+      VIS.list().then(setVisits).catch(() => {})
+    } catch (e) { toast('Could not save the re-inspection.', 'warn') }
+    finally { setReinspectBusy(false) }
   }
 
   return (<div className="page">
@@ -3046,19 +3265,51 @@ function IntegrityPage({ facilities, userId, identity }) {
     </div>)}
 
     <div className="mr-stats" style={{ gridTemplateColumns: 'repeat(6,1fr)', marginBottom: 16 }}>
-      <div className="mr-stat"><span className="v">{scored.length}</span><span className="l">Monitored</span></div>
-      <div className="mr-stat"><span className="v">{passRate == null ? '\u2013' : passRate + '%'}</span><span className="l">Pass rate</span></div>
+      <div className="mr-stat"><span className="v">{scored.length}</span><span className="l">Visits</span></div>
+      <div className="mr-stat"><span className="v">{funcPct == null ? '\u2013' : funcPct + '%'}</span><span className="l">Functional</span></div>
+      <div className="mr-stat"><span className="v">{nonOpVisits.length}</span><span className="l">Closed/moved</span></div>
       <div className="mr-stat"><span className="v">{medMins == null ? '\u2013' : medMins}</span><span className="l">Median min</span></div>
-      <div className="mr-stat"><span className="v">{noEv}%</span><span className="l">No photos</span></div>
-      <div className="mr-stat"><span className="v">{askedCount}</span><span className="l">Asked</span></div>
-      <div className="mr-stat"><span className="v">{reported.length}</span><span className="l">Reported</span></div>
+      <div className="mr-stat"><span className="v">{passRate == null ? '\u2013' : passRate + '%'}</span><span className="l">Pass rate</span></div>
+      <div className="mr-stat"><span className="v">{concordance == null ? '\u2013' : concordance + '%'}</span><span className="l">Re-inspect match</span></div>
     </div>
+
+    <div className="mr-stats" style={{ gridTemplateColumns: 'repeat(4,1fr)', marginBottom: 16 }}>
+      <div className="mr-stat"><span className="v">{closureRate == null ? '\u2013' : closureRate + '%'}</span><span className="l">Corrective actions closed</span></div>
+      <div className="mr-stat"><span className="v">{noEv}%</span><span className="l">No photos</span></div>
+      <div className="mr-stat"><span className="v">{askedCount}</span><span className="l">Integrity asked</span></div>
+      <div className="mr-stat"><span className="v">{reported.length}</span><span className="l">Payment reported</span></div>
+    </div>
+
+    {typeRows.length > 0 && (<div className="settings-card" style={{ marginBottom: 16 }}>
+      <h3>Median time on site, by facility type</h3>
+      <p className="hintline">Measured from GPS check-in to assessment completion, assessed facilities only. The expected range is the review threshold: a visit below it is flagged, not blocked.</p>
+      <div className="typetime">
+        {typeRows.map(r => (
+          <div className="tt-row" key={r.key}>
+            <span className="tt-lab">{r.label}<span className="tt-n"> &middot; {r.n}</span></span>
+            <span className="tt-bar"><span className="tt-fill" style={{ width: Math.min(100, (r.med / 48) * 100) + '%' }} /></span>
+            <span className="tt-val">{r.med} min<span className="tt-exp"> (exp {r.exp.lo}\u2013{r.exp.hi})</span></span>
+          </div>
+        ))}
+      </div>
+    </div>)}
 
     {sample && (<div className="settings-card" style={{ marginBottom: 16 }}>
       <h3>Re-inspect these {sample.length}</h3>
       <p className="hintline">Drawn at random. Send someone who was not on the original visit, ideally from outside the team, and compare what they find.</p>
       <div className="frows">{sample.map(v => (<div className="frow" key={v.id}>
         <div className="fmain"><span className="fname">{v.facility_name}</span><span className="fmeta">{v.area} &middot; visited {(v.arrival_time || '').slice(0, 10)} &middot; rated {ragText(v.overall_rating)}</span></div>
+        {reinspecting === v.id ? (
+          <div className="reinspect-rec">
+            <span className="ri-lab">Re-inspector rated:</span>
+            <button className="mini ri-g" disabled={reinspectBusy} onClick={() => recordReinspection(v, 'green')}>Green</button>
+            <button className="mini ri-a" disabled={reinspectBusy} onClick={() => recordReinspection(v, 'amber')}>Amber</button>
+            <button className="mini ri-r" disabled={reinspectBusy} onClick={() => recordReinspection(v, 'red')}>Red</button>
+            <button className="linkbtn subtle" onClick={() => setReinspecting(null)}>Cancel</button>
+          </div>
+        ) : (
+          <button className="mini" onClick={() => setReinspecting(v.id)}>Record re-inspection</button>
+        )}
       </div>))}</div>
       <button className="linkbtn subtle" onClick={() => setSample(null)}>Clear</button>
     </div>)}
@@ -5199,6 +5450,35 @@ const css = `
 }
 @media (max-width:560px){ .realms .svc-grid, .realms .leaders, .realms .team-dir, .realms .insights { grid-template-columns:1fr; } }
 
+.realms .reinspect-rec { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+.realms .ri-lab { font-size:12.5px; color:#6E6188; }
+.realms .mini.ri-g { border-color:#5B8C6E; color:#5B8C6E; } .realms .mini.ri-g:hover { background:#5B8C6E; color:#fff; }
+.realms .mini.ri-a { border-color:#C9A64E; color:#A6812E; } .realms .mini.ri-a:hover { background:#C9A64E; color:#fff; }
+.realms .mini.ri-r { border-color:#C05B5B; color:#C05B5B; } .realms .mini.ri-r:hover { background:#C05B5B; color:#fff; }
+.realms .typetime { display:flex; flex-direction:column; gap:8px; }
+.realms .tt-row { display:grid; grid-template-columns:190px 1fr 150px; align-items:center; gap:12px; }
+.realms .tt-lab { font-size:13px; color:#2E2340; font-weight:600; }
+.realms .tt-n { color:#8A7AA6; font-weight:400; }
+.realms .tt-bar { height:10px; background:#EFE9F6; border-radius:6px; overflow:hidden; }
+.realms .tt-fill { display:block; height:100%; background:linear-gradient(90deg,#6D4B8E,#A6812E); border-radius:6px; }
+.realms .tt-val { font-size:12.5px; color:#574277; font-weight:600; text-align:right; }
+.realms .tt-exp { color:#8A7AA6; font-weight:400; }
+@media (max-width:640px){ .realms .tt-row { grid-template-columns:1fr; gap:3px; } .realms .tt-val { text-align:left; } }
+.realms .outcome-box { border:1px solid #E7E0F0; border-radius:14px; padding:16px 18px; margin-bottom:16px; background:linear-gradient(180deg,#FCFBFE,#F7F4FB); }
+.realms .outcome-head { display:flex; align-items:baseline; gap:12px; flex-wrap:wrap; margin-bottom:12px; }
+.realms .outcome-lab { font-weight:700; color:#574277; font-size:15px; }
+.realms .outcome-hint { font-size:12px; color:#8A7AA6; }
+.realms .outcome-opts { display:flex; flex-wrap:wrap; gap:8px; margin-bottom:14px; }
+.realms .outcome-chip { border:1.5px solid #E4DCEE; background:#fff; color:#574277; border-radius:22px; padding:8px 15px; font-size:13.5px; cursor:pointer; transition:.15s; }
+.realms .outcome-chip:hover { border-color:#6D4B8E; }
+.realms .outcome-chip.on.ok { background:#6D4B8E; border-color:#6D4B8E; color:#fff; }
+.realms .outcome-chip.on.nf { background:#B4603A; border-color:#B4603A; color:#fff; }
+.realms .reg-fields { display:grid; grid-template-columns:1fr 1fr 1fr; gap:12px; }
+.realms .reg-f { display:flex; flex-direction:column; gap:4px; font-size:12px; color:#6E6188; }
+.realms .reg-f select, .realms .reg-f input { padding:8px 10px; border:1px solid #E4DCEE; border-radius:8px; font-size:13.5px; color:#2E2340; background:#fff; }
+.realms .outcome-note { margin-top:14px; border-top:1px dashed #E4DCEE; padding-top:14px; }
+.realms .outcome-ta { width:100%; min-height:64px; border:1px solid #E4DCEE; border-radius:10px; padding:10px 12px; font-size:14px; font-family:inherit; margin-bottom:12px; resize:vertical; }
+@media (max-width:640px){ .realms .reg-fields { grid-template-columns:1fr; } }
 .realms .mon-rules { font-size:12.5px; color:#8A5A12; background:#FBF3E6; border:1px solid #F0D9B5; border-radius:10px; padding:8px 12px; margin-bottom:14px; }
 .realms .mcat-r { display:flex; align-items:center; gap:8px; }
 .realms .need { font-size:11.5px; color:#B4442E; background:#FBE9E6; border:1px solid #F0C9BF; border-radius:12px; padding:3px 9px; white-space:nowrap; }
