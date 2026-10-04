@@ -4,7 +4,7 @@ import 'leaflet/dist/leaflet.css'
 import { supabase, MODE } from './supabaseClient.js'
 import { facilities as FAC, assignments as ASG, visits as VIS, notifications as NOTIF, calls as CALLS, access as ACC, roles as ROLEMGR, facilitiesFromCSV, orderRoute, clusterDays, clusterDaysByDate, googleMapsDirUrl, geocode, uploadEvidence, sendNotify, askAI, seedSampleData, clearAllData } from './data.js'
 
-const BUILD = 'field-2026-07-18-bd'
+const BUILD = 'field-2026-07-18-be'
 
 /*
   REALMS FIELD — Stages 1 to 3 (single-file App.jsx + supabaseClient.js + data.js)
@@ -1679,7 +1679,7 @@ function EngagePage({ list, identity, role, userId }) {
             <div className="frows">{hits.slice(0, 60).map(f => (<button className="frow pickable" key={f.id} onClick={() => chooseFacility(f)}>
               <div className="fmain"><span className="fname">{f.name}</span><span className="fmeta">{[f.category, f.area, f.address].filter(Boolean).join(' \u00b7 ') || 'No details'}{visitedToday[f.id] ? ' \u00b7 checked in' : ''}</span></div>
               <span className="mini">Select</span></button>))}</div>
-            {hits.length > 60 && <p className="hintline">Showing 60 of {hits.length} \u2014 keep typing to narrow.</p>}
+            {hits.length > 60 && <p className="hintline">Showing 60 of {hits.length} &mdash; keep typing to narrow.</p>}
           </div>)
       })() : (<>
       {myDay.length > 0 && (<div className="myday">
@@ -3288,7 +3288,7 @@ function IntegrityPage({ facilities, userId, identity }) {
           <div className="tt-row" key={r.key}>
             <span className="tt-lab">{r.label}<span className="tt-n"> &middot; {r.n}</span></span>
             <span className="tt-bar"><span className="tt-fill" style={{ width: Math.min(100, (r.med / 48) * 100) + '%' }} /></span>
-            <span className="tt-val">{r.med} min<span className="tt-exp"> (exp {r.exp.lo}\u2013{r.exp.hi})</span></span>
+            <span className="tt-val">{r.med} min<span className="tt-exp"> (exp {r.exp.lo}&ndash;{r.exp.hi})</span></span>
           </div>
         ))}
       </div>
